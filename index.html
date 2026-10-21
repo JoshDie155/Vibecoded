@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PartJoin</title>
+    <meta name="description" content="Mehrere 3D-Modelle über markierte Punkte automatisch passgenau zusammenfügen." />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="panel">
+        <header>
+          <h1>PartJoin</h1>
+          <p class="sub">Einzelteile über markierte Punkte automatisch passgenau verbinden – fertig zum Drucken.</p>
+        </header>
+
+        <section>
+          <h2><span class="step">1</span> Modelle laden</h2>
+          <label class="drop" id="drop">
+            <input type="file" id="file" multiple />
+            <strong>Dateien hierher ziehen</strong> oder klicken
+            <small>STL · OBJ · 3MF · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK</small>
+          </label>
+          <ul id="parts" class="parts"></ul>
+          <button id="demo" class="ghost">Beispiel laden</button>
+        </section>
+
+        <section>
+          <h2><span class="step">2</span> Verbindungen</h2>
+          <p class="help">
+            Setze auf beiden Teilen die gleichen markanten Punkte (Ecken, Kanten, Zapfen …) per Klick.
+            Die Reihenfolge ist egal – PartJoin erkennt selbst, welche Markierungen zusammengehören.
+          </p>
+          <div id="joints"></div>
+          <button id="addJoint" class="ghost">+ Neue Verbindung</button>
+        </section>
+
+        <section>
+          <h2><span class="step">3</span> Exportieren</h2>
+          <div class="row wrap">
+            <button data-export="stl">STL</button>
+            <button data-export="3mf">3MF (ein Objekt)</button>
+            <button data-export="3mf-parts">3MF (Teile einzeln)</button>
+            <button data-export="obj">OBJ</button>
+          </div>
+          <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage.</p>
+        </section>
+      </aside>
+
+      <main id="view">
+        <div id="toolbar">
+          <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
+          <label class="check small"><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
+        </div>
+        <div id="hint"></div>
+        <div id="toast"></div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
