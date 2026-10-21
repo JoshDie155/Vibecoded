@@ -110,6 +110,7 @@ function applyTheme() {
 }
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 function resize() {
   const w = view.clientWidth;
@@ -917,9 +918,11 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
       .map((p) => ({ name: p.name, geometry: p.geom.clone().applyMatrix4(p.mesh.matrixWorld) }));
     if (!list.length) { toast('Keine sichtbaren Teile zum Exportieren.'); return; }
     const kind = b.dataset.export;
-    if (kind === 'stl') download(toSTL(list), 'zusammengefuegt.stl');
-    else if (kind === 'obj') download(toOBJ(list), 'zusammengefuegt.obj');
-    else download(to3MF(list, kind === '3mf-parts'), 'zusammengefuegt.3mf');
+    const saved =
+      kind === 'stl' ? download(toSTL(list), 'zusammengefuegt.stl')
+      : kind === 'obj' ? download(toOBJ(list), 'zusammengefuegt.obj')
+      : download(to3MF(list, kind === '3mf-parts'), 'zusammengefuegt.3mf');
+    saved.catch((e) => toast(`Speichern nicht möglich: ${(e as Error).message ?? e}`));
   }),
 );
 

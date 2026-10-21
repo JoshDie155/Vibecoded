@@ -48,7 +48,7 @@ body {
   color: var(--text);
   font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
-#app { display: flex; height: 100vh; }
+#app { display: flex; height: 100%; }
 #panel {
   width: 360px;
   flex: none;
@@ -61,7 +61,7 @@ body {
 #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
 @media (max-width: 760px) {
-  #app { flex-direction: column-reverse; height: auto; min-height: 100vh; }
+  #app { flex-direction: column-reverse; height: auto; min-height: 100%; }
   #panel { width: 100%; border-right: none; border-top: 1px solid var(--line); }
   #view { height: 60vh; flex: none; }
 }

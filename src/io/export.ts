@@ -127,7 +127,36 @@ export function to3MF(parts: ExportPart[], separate: boolean): Blob {
   return new Blob([zip], { type: 'model/3mf' });
 }
 
-export function download(blob: Blob, name: string) {
+interface ViewerDownloads {
+  save(req: { filename: string; data: Uint8Array }): Promise<unknown>;
+}
+
+/**
+ * Als veröffentlichtes claude.ai-Artefakt sind direkte Downloads gesperrt; dort bietet der Viewer
+ * eine Speichern-Funktion an, die aber nur bestimmte Endungen erlaubt – daher als ZIP.
+ */
+const viewerDownloads: Promise<ViewerDownloads | null> = (async () => {
+  const claude = (window as unknown as { claude?: { use(name: string): Promise<unknown> } }).claude;
+  if (!claude?.use) return null;
+  try {
+    return (await claude.use('downloads')) as ViewerDownloads | null;
+  } catch {
+    return null;
+  }
+})();
+
+/** Speichert die Datei. Wirft, wenn das Speichern fehlschlägt (außer der Nutzer bricht ab). */
+export async function download(blob: Blob, name: string) {
+  const viewer = await viewerDownloads;
+  if (viewer) {
+    const zip = zipSync({ [name]: new Uint8Array(await blob.arrayBuffer()) });
+    try {
+      await viewer.save({ filename: `${name}.zip`, data: zip });
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'declined') throw e;
+    }
+    return;
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
