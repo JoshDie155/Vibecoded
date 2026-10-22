@@ -165,7 +165,7 @@ button.icon:hover { color: var(--err); }
 }
 #hint:empty { display: none; }
 #toast {
-  position: absolute; top: 12px; right: 12px; max-width: 320px;
+  position: absolute; bottom: 64px; right: 12px; max-width: 340px;
   background: var(--text); color: var(--panel); padding: 8px 12px; border-radius: 8px; font-size: 13px;
   opacity: 0; transform: translateY(-6px); transition: opacity 0.2s, transform 0.2s; pointer-events: none;
 }

@@ -9,6 +9,8 @@ import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
 import { type Feature, type Topology, buildTopology, detectFeature } from './math/features';
 import { solveConstraints } from './math/constraints';
 import { type ScanTarget, autoSeat } from './math/scan';
+import { settleContact } from './math/settle';
+import { alignOutlines } from './math/outline';
 import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag, planMate } from './math/mate';
 import { loadModel, SUPPORTED } from './io/load';
@@ -244,6 +246,17 @@ function featureCenter(f: Feature): Vec3 {
   if (f.kind === 'cylinder') return f.center;
   if (f.kind === 'plane' && f.circle) return f.circle.center;
   return f.centroid;
+}
+
+/** Stelle auf der Oberfläche für die Beschriftung (lokal): bei Zylindern das angeklickte Dreieck. */
+function featureAnchor(part: Part, f: Feature): [Vec3, Vec3] {
+  if (f.kind !== 'cylinder') return [featureCenter(f), f.normal];
+  const p = positionsOf(part);
+  const i = f.tris[0] * 9;
+  const c: Vec3 = [(p[i] + p[i + 3] + p[i + 6]) / 3, (p[i + 1] + p[i + 4] + p[i + 7]) / 3, (p[i + 2] + p[i + 5] + p[i + 8]) / 3];
+  const t = part.topo?.normals;
+  const n: Vec3 = t ? [t[f.tris[0] * 3], t[f.tris[0] * 3 + 1], t[f.tris[0] * 3 + 2]] : [0, 0, 0];
+  return [c, n];
 }
 
 /** Ungefähre Größe einer Fläche (Radius des umschließenden Bereichs). */
@@ -570,6 +583,21 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigi
       rel = seat.T;
       info = seat.info;
       flatRotation = seat.flatRotation;
+      // Das Abtasten ist nur so fein wie seine Schrittweite – Kontaktflächen danach genau anlegen
+      const settled = settleContact(samples, rel, target, sol.free, { maxPairDist: s * 0.012 });
+      if (settled) rel = settled.T;
+      // Fläche auf Fläche mit gleichem Umriss (z. B. Schnittflächen): Umrisse exakt übereinanderlegen
+      const only = plan.constraints.length === 1 ? plan.pairs[0] : undefined;
+      const sF = only?.kind === 'plane' ? srcF[only.src] : undefined;
+      const dF = only?.kind === 'plane' ? dstF[only.dst] : undefined;
+      if (sF?.kind === 'plane' && dF?.kind === 'plane') {
+        const size = Math.max(...dF.axes.size);
+        const aligned = alignOutlines(sF.outline, dF.outline, rel, dF.normal, Math.max(0.05, size * 0.02));
+        if (aligned) {
+          rel = aligned.T;
+          info += `${info ? ' · ' : ''}Umrisse deckungsgleich (Rest ${fmt(aligned.rms)} mm)`;
+        }
+      }
     }
     if (j.overlap && plan.contactNormal) {
       const n = plan.contactNormal;
@@ -946,9 +974,10 @@ function rebuildMarkers() {
         counters[group] = (counters[group] ?? 0) + 1;
         const label = labelSprite(`${tag}${counters[group]}`, j.color);
         label.material.opacity = active ? 1 : 0.5;
-        const c = new THREE.Vector3(...featureCenter(f)).applyMatrix4(part.mesh.matrixWorld);
-        const n = f.kind === 'cylinder' ? new THREE.Vector3() : new THREE.Vector3(...f.normal).transformDirection(part.mesh.matrixWorld);
-        label.userData = { joint: j.id, side, index: i, kind: 'face', px: 24, anchor: c, normal: n, lift: 14 };
+        const [ca, na] = featureAnchor(part, f);
+        const c = new THREE.Vector3(...ca).applyMatrix4(part.mesh.matrixWorld);
+        const n = new THREE.Vector3(...na).transformDirection(part.mesh.matrixWorld);
+        label.userData = { joint: j.id, side, index: i, kind: 'face', px: 24, anchor: c, normal: n, lift: side === 'a' ? 14 : 34 };
         markerGroup.add(label);
       });
     }
