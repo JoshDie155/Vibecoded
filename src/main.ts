@@ -17,6 +17,8 @@ import { describeFeature, featureTag, planMate } from './math/mate';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
 import { write3MF } from './io/threemf';
+import { unionParts } from './io/union';
+import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -1784,25 +1786,50 @@ document.getElementById('demoRound')!.addEventListener('click', () =>
 );
 
 document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
-  b.addEventListener('click', () => {
-    const list: ExportPart[] = parts
-      .filter((p) => p.visible)
-      .map((p) => ({ name: p.name, geometry: p.geom.clone().applyMatrix4(p.mesh.matrixWorld) }));
-    if (!list.length) { toast('Keine sichtbaren Teile zum Exportieren.'); return; }
-    const kind = b.dataset.export;
-    const colored = () =>
-      parts.filter((p) => p.visible).map((p, i) => ({
-        name: p.name,
-        positions: list[i].geometry.getAttribute('position').array as Float32Array,
-        color: `#${p.color.getHexString()}`,
-      }));
-    const saved =
-      kind === 'stl' ? download(toSTL(list), 'zusammengefuegt.stl')
-      : kind === 'obj' ? download(toOBJ(list), 'zusammengefuegt.obj')
-      : download(new Blob([write3MF(colored(), kind === '3mf-color' ? 'multicolor' : 'single') as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
-    saved.catch((e) => toast(`Speichern nicht möglich: ${(e as Error).message ?? e}`));
-  }),
+  b.addEventListener('click', () => void exportAs(b.dataset.export ?? 'stl')),
 );
+
+/** Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. */
+async function exportAs(kind: string) {
+  const visible = parts.filter((p) => p.visible);
+  if (!visible.length) { toast('Keine sichtbaren Teile zum Exportieren.'); return; }
+  const world = visible.map((p) => ({
+    name: p.name,
+    color: `#${p.color.getHexString()}`,
+    positions: p.geom.clone().applyMatrix4(p.mesh.matrixWorld).getAttribute('position').array as Float32Array,
+  }));
+  try {
+    if (kind === '3mf-color') {
+      await download(new Blob([write3MF(world, 'multicolor') as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
+      return;
+    }
+    let body: { name: string; positions: Float32Array }[] = world;
+    if ((document.getElementById('unionExport') as HTMLInputElement).checked && world.length > 1) {
+      toast('Vereinige die Teile zu einem Körper …', 20000);
+      await new Promise((r) => setTimeout(r, 30));
+      try {
+        const res = await unionParts(world, manifoldWasm);
+        body = [{ name: 'PartJoin', positions: res.positions }];
+        toast(res.notClosed.length
+          ? `Vereinigt. Nicht geschlossen und deshalb nur angehängt: ${res.notClosed.join(', ')}`
+          : 'Zu einem Körper vereinigt.', 6000);
+      } catch (e) {
+        toast(`Vereinigen nicht möglich (${(e as Error).message ?? e}) – Export ohne Vereinigung.`, 6000);
+      }
+    }
+    const geomOf = (p: { positions: Float32Array }) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(p.positions, 3));
+      return g;
+    };
+    const list: ExportPart[] = body.map((p) => ({ name: p.name, geometry: geomOf(p) }));
+    if (kind === 'stl') await download(toSTL(list), 'zusammengefuegt.stl');
+    else if (kind === 'obj') await download(toOBJ(list), 'zusammengefuegt.obj');
+    else await download(new Blob([write3MF(body.map((p) => ({ ...p, color: '#cccccc' })), 'single') as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
+  } catch (e) {
+    toast(`Speichern nicht möglich: ${(e as Error).message ?? e}`);
+  }
+}
 
 // Für automatisierte Tests / Debugging
 Object.assign(window as unknown as Record<string, unknown>, {

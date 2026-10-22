@@ -58,6 +58,9 @@
             <button data-export="3mf" title="Alle Teile als ein Körper, ohne Farben.">3MF (ein Körper)</button>
             <button data-export="obj">OBJ</button>
           </div>
+          <label class="check small" title="Boolesche Vereinigung: Überlappungen und innenliegende Flächen verschwinden, der Slicer bekommt ein einziges geschlossenes Netz. Gilt für STL, OBJ und 3MF (ein Körper).">
+            <input type="checkbox" id="unionExport" checked /> Zu einem Körper vereinigen (STL, OBJ, 3MF ein Körper)
+          </label>
           <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. „3MF mehrfarbig" behält Teile und Farben: Jede Farbe bekommt einen eigenen Extruder, den du im Slicer einem Filament zuordnest.</p>
         </section>
       </aside>
