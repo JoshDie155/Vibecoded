@@ -104,6 +104,8 @@ let nextPartId = 1;
 let nextJointId = 1;
 const history: { joint: number; side: Side; kind: 'point' | 'face' }[] = [];
 const SNAP_PX = 14;
+/** Auch sehr fein aufgelöste Flächen (Millionen Dreiecke) vollständig erfassen. */
+const FEATURE_OPTS = { maxTris: 4_000_000 };
 let pickMode: 'point' | 'face' = 'point';
 /** Welches Teil wird von welcher Verbindung bewegt (nach dem letzten solveAll). */
 const movedBy = new Map<number, number>();
@@ -622,7 +624,7 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigi
   if (bad && !j.adjust) {
     j.status = { kind: 'warn', text: `Flächen passen nicht genau zusammen (Abweichung ${fmt(c.distError)} mm / ${c.angleError.toFixed(1)}°). ${bits.join(' · ')}` };
   } else if (c.flatRotation && !j.adjust) {
-    j.status = { kind: 'warn', text: `✓ Verbunden · ${bits.join(' · ')} – Drehung um die Achse ist frei: bei Bedarf „Von Hand anpassen".` };
+    j.status = { kind: 'warn', text: `✓ Verbunden · ${bits.join(' · ')}. Zum Drehen: „Von Hand anpassen".` };
   } else {
     j.status = { kind: 'ok', text: `✓ Verbunden · ${bits.join(' · ')}` };
   }
@@ -1052,7 +1054,7 @@ function updateHover(h: Hit | null) {
   }
   const key = `${h.part.id}`;
   if (key === hoverKey && hoverTris?.has(h.tri)) return;
-  const f = detectFeature(topologyOf(h.part), h.tri);
+  const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
   hoverKey = key;
   hoverTris = new Set(f.tris);
   hoverMesh.geometry.dispose();
@@ -1130,7 +1132,7 @@ function toggleFace(j: Joint, side: Side, part: Part, tri: number) {
   const existing = list.findIndex((f) => f.tris.includes(tri));
   if (existing >= 0) list.splice(existing, 1);
   else {
-    list.push(detectFeature(topologyOf(part), tri));
+    list.push(detectFeature(topologyOf(part), tri, FEATURE_OPTS));
     history.push({ joint: j.id, side, kind: 'face' });
   }
   markersChanged(j);
