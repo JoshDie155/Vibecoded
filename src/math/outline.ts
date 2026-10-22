@@ -64,16 +64,19 @@ export function alignOutlines(
   T: Rigid,
   normal: Vec3,
   tol: number,
+  /** Für schnelle Bewertungen: weniger Punkte und Iterationen. */
+  opts: { samples?: number; maxDst?: number; iterations?: number } = {},
 ): { T: Rigid; rms: number } | null {
   if (srcLoop.length < 3 || dstLoop.length < 3) return null;
   const n = normalize(normal);
   const u = normalize(Math.abs(n[0]) < 0.9 ? cross(n, [1, 0, 0]) : cross(n, [0, 1, 0]));
   const v = cross(n, u);
-  const src = resampleLoop(srcLoop, 240);
-  const dst = dstLoop.length > 4000 ? resampleLoop(dstLoop, 4000) : dstLoop;
+  const src = resampleLoop(srcLoop, opts.samples ?? 240);
+  const maxDst = opts.maxDst ?? 4000;
+  const dst = dstLoop.length > maxDst ? resampleLoop(dstLoop, maxDst) : dstLoop;
   let cur = T;
   let rms = Infinity;
-  for (let it = 0; it < 40; it++) {
+  for (let it = 0; it < (opts.iterations ?? 40); it++) {
     const P = src.map((p) => apply(cur, p));
     const Q = P.map((p) => closestOnLoop(p, dst));
     // 2D-Procrustes in der Ebene (u, v): Drehung um die Normale und Verschiebung

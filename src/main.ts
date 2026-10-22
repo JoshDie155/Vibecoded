@@ -6,12 +6,15 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } fro
 import { type Rigid, type Vec3, IDENTITY, compose, rotate } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
-import { type Feature, type Topology, buildTopology, detectFeature } from './math/features';
+import { type Feature, type PlaneFeature, type Topology, buildTopology, detectFeature } from './math/features';
 import { solveConstraints } from './math/constraints';
 import { type ScanTarget, autoSeat } from './math/scan';
 import { settleContact } from './math/settle';
 import { alignOutlines } from './math/outline';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
+import { findCandidateFaces } from './math/segment';
+import { candidatePairs, placePlanePair, shapeSimilarity } from './math/suggest';
+import { contactScore } from './math/scan';
 import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag, planMate } from './math/mate';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
@@ -44,6 +47,17 @@ interface Part {
   topo?: Topology;
   /** Teile derselben Gruppe (z. B. ein Objekt aus einer 3MF-Datei) bewegen sich gemeinsam. */
   group?: string;
+  /** Markante Flächen für automatische Vorschläge (wird erst bei Bedarf berechnet). */
+  candidates?: Feature[];
+}
+
+/** Vorschlag für eine Verbindung: diese Fläche am einen Teil passt zu jener am anderen. */
+interface Suggestion {
+  a: Part;
+  b: Part;
+  fa: Feature;
+  fb: Feature;
+  score: number;
 }
 
 type Side = 'a' | 'b';
@@ -97,6 +111,9 @@ interface Joint {
   free?: FreeMotion[];
   fixedSide?: Side;
   status?: { kind: 'ok' | 'warn' | 'err' | 'info'; text: string };
+  /** Automatische Vorschläge für diese Verbindung und der gerade gewählte. */
+  suggestions?: Suggestion[];
+  suggestIdx?: number;
 }
 
 const PART_COLORS = ['#8fa7c9', '#d9a066', '#88b98a', '#c58fb8', '#d7c46a', '#7fbfbf', '#c98f8f', '#a3a3d6'];
@@ -630,7 +647,17 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigi
     let rel = sol.T;
     let info = '';
     let flatRotation = false;
-    if (j.seat && sol.free.length) {
+    // Zwei deckungsgleiche ebene Flächen (typisch: Schnittflächen) direkt über Hauptachsen und Umriss
+    // aufeinanderlegen – exakt und unabhängig davon, wie verdreht das Teil anfangs liegt
+    const only = plan.constraints.length === 1 ? plan.pairs[0] : undefined;
+    const sP = only?.kind === 'plane' ? srcF[only.src] : undefined;
+    const dP = only?.kind === 'plane' ? dstF[only.dst] : undefined;
+    const congruent = sP?.kind === 'plane' && dP?.kind === 'plane' && j.alt === 0 && shapeSimilarity(dP, sP) >= 0.95
+      ? placePlanePair(dP, sP) : null;
+    if (congruent && congruent.rms <= Math.max(0.05, Math.max(...(dP as PlaneFeature).axes.size) * 0.01)) {
+      rel = congruent.T;
+      info = `Umrisse deckungsgleich (Rest ${fmt(congruent.rms)} mm)`;
+    } else if (j.seat && sol.free.length) {
       const s = sceneScale();
       const samples = regionSamples(moving, srcF, srcM);
       const target: ScanTarget = { bvh: fixed.geom.boundsTree as MeshBVH, positions: positionsOf(fixed), matrix: IDENTITY };
@@ -759,6 +786,147 @@ function refine(j: Joint) {
   j.adjustInfo = `fein ausgerichtet (${res.pairs} Flächenpunkte, Rest ${fmt(res.rmsd)} mm)`;
   solveAll();
   renderAll();
+}
+
+// ---------------------------------------------------------------- Automatische Vorschläge
+
+function candidatesOf(p: Part): Feature[] {
+  p.candidates ??= findCandidateFaces(topologyOf(p));
+  return p.candidates;
+}
+
+/**
+ * Bewertet, welche Flächen von a und b zusammenpassen. Ebene Flächenpaare werden wirklich
+ * aufeinandergelegt (Umriss-Abgleich) und auf Durchdringung geprüft.
+ */
+function suggestPair(a: Part, b: Part, max = 6): Suggestion[] {
+  const s = sceneScale();
+  const out: Suggestion[] = [];
+  const upA = new THREE.Vector3();
+  for (const pr of candidatePairs(candidatesOf(a), candidatesOf(b), { max })) {
+    let score = pr.shape;
+    if (pr.fixed.kind === 'plane' && pr.moving.kind === 'plane') {
+      const placed = placePlanePair(pr.fixed, pr.moving, true);
+      if (!placed) continue;
+      const size = Math.max(...pr.fixed.axes.size);
+      score *= Math.exp(-placed.rms / (0.01 * size + 0.02));
+      // Durchdringt das Teil in dieser Lage das andere, passt es so nicht
+      const step = Math.max(1, Math.floor(b.samples.length / 400));
+      const pen = contactScore(b.samples.filter((_, i) => i % step === 0), placed.T,
+        { bvh: a.geom.boundsTree as MeshBVH, positions: positionsOf(a), matrix: IDENTITY },
+        { contactDist: s * 0.01, maxDepth: s * 0.05 }).penetration;
+      score *= Math.exp(-30 * pen);
+      // Bei gleich guten Lagen bevorzugen: aufeinandersetzen (feste Fläche zeigt nach oben)
+      upA.set(...pr.fixed.normal).transformDirection(a.mesh.matrixWorld);
+      score *= 1 + 0.02 * upA.z;
+    }
+    if (score >= 0.5) out.push({ a, b, fa: pr.fixed, fb: pr.moving, score });
+  }
+  return out.sort((x, y) => y.score - x.score);
+}
+
+function applySuggestion(j: Joint, sg: Suggestion) {
+  j.a = sg.a.id;
+  j.b = sg.b.id;
+  j.fa = [sg.fa];
+  j.fb = [sg.fb];
+  j.ma = [];
+  j.mb = [];
+  markersChanged(j);
+  j.applied = true;
+}
+
+function suggestJoint(j: Joint) {
+  const a = getPart(j.a);
+  const b = getPart(j.b);
+  if (!a || !b) { toast('Wähle zuerst zwei Teile aus.'); return; }
+  toast('Suche passende Flächen …', 20000);
+  setTimeout(() => {
+    const list = suggestPair(a, b);
+    if (!list.length) {
+      toast('Keine passenden Flächen gefunden – bitte von Hand auswählen.', 5000);
+      return;
+    }
+    j.suggestions = list;
+    j.suggestIdx = 0;
+    applySuggestion(j, list[0]);
+    solveAll();
+    fitView();
+    renderAll();
+    toast(list.length > 1 ? `${list.length} Vorschläge gefunden – der beste ist angewendet.` : 'Passende Flächen gefunden und verbunden.', 4000);
+  }, 30);
+}
+
+/**
+ * Verbindet alle Teile automatisch: Für jedes Paar von Einheiten (Gruppen bzw. einzelne Teile) wird
+ * der beste Vorschlag gesucht, dann ab dem Basisteil ein Baum aus den besten Verbindungen gebildet.
+ */
+async function connectAll() {
+  const unitOf = new Map<number, number>();
+  // Einheiten: Gruppen und bereits über Verbindungen zusammengesetzte Teile (Union-Find)
+  const parent = new Map(parts.map((p) => [p.id, p.id]));
+  const find = (x: number): number => (parent.get(x) === x ? x : (parent.set(x, find(parent.get(x)!)), parent.get(x)!));
+  const join = (x: number, y: number) => parent.set(find(x), find(y));
+  for (const p of parts) for (const q of groupOf(p)) join(p.id, q.id);
+  for (const j of joints) if (j.applied && j.a !== null && j.b !== null && j.status?.kind !== 'err') join(j.a, j.b);
+  for (const p of parts) unitOf.set(p.id, find(p.id));
+  const units = [...new Set(unitOf.values())];
+  if (units.length < 2) { toast('Alle Teile hängen schon zusammen.'); return; }
+  const members = (u: number) => parts.filter((p) => unitOf.get(p.id) === u && p.visible);
+
+  const btn = document.getElementById('connectAll') as HTMLButtonElement;
+  btn.disabled = true;
+  const edges: { u: number; v: number; sg: Suggestion }[] = [];
+  // Je Paar von Einheiten mehrere Kandidaten, falls die beste Fläche schon anderweitig vergeben wird
+  const pairCount = (units.length * (units.length - 1)) / 2;
+  let done = 0;
+  try {
+    for (let i = 0; i < units.length; i++) {
+      for (let k = i + 1; k < units.length; k++) {
+        for (const pa of members(units[i])) for (const pb of members(units[k]))
+          for (const sg of suggestPair(pa, pb, 4).slice(0, 3)) if (sg.score >= 0.6) edges.push({ u: units[i], v: units[k], sg });
+        done++;
+        toast(`Suche passende Flächen … ${Math.round((100 * done) / pairCount)} %`, 20000);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+  } finally {
+    btn.disabled = false;
+  }
+  // Baum der besten Verbindungen ab der Einheit des Basisteils (Prim)
+  const start = unitOf.get(baseId ?? parts[0].id)!;
+  const inTree = new Set([start]);
+  const chosen: { sg: Suggestion; fixedIsA: boolean }[] = [];
+  // Jede Fläche nur einmal verwenden: zwei Teile auf derselben Schnittfläche wären übereinander
+  const used = new Set<Feature>();
+  for (;;) {
+    let pick: (typeof edges)[number] | undefined;
+    for (const e of edges)
+      if (inTree.has(e.u) !== inTree.has(e.v) && !used.has(e.sg.fa) && !used.has(e.sg.fb) && (!pick || e.sg.score > pick.sg.score)) pick = e;
+    if (!pick) break;
+    used.add(pick.sg.fa);
+    used.add(pick.sg.fb);
+    chosen.push({ sg: pick.sg, fixedIsA: inTree.has(unitOf.get(pick.sg.a.id)!) });
+    inTree.add(pick.u);
+    inTree.add(pick.v);
+  }
+  // Leere, noch nicht verbundene Verbindungen ersetzen
+  for (const j of [...joints]) if (!j.applied && j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) joints.splice(joints.indexOf(j), 1);
+  for (const { sg, fixedIsA } of chosen) {
+    const j = addJoint();
+    // Teil 1 ist das Teil, das schon (über die Basis) festliegt
+    applySuggestion(j, fixedIsA ? sg : { a: sg.b, b: sg.a, fa: sg.fb, fb: sg.fa, score: sg.score });
+    j.suggestions = [sg];
+    j.suggestIdx = 0;
+  }
+  solveAll();
+  fitView();
+  renderAll();
+  const missing = units.filter((u) => !inTree.has(u)).flatMap((u) => members(u).map((p) => p.name));
+  toast(
+    `${chosen.length} Verbindung(en) angelegt.` + (missing.length ? ` Ohne passenden Partner: ${missing.join(', ')}.` : ''),
+    8000,
+  );
 }
 
 // ---------------------------------------------------------------- Gizmo (von Hand bewegen/drehen)
@@ -1455,6 +1623,11 @@ function renderJoints() {
           <input type="number" step="0.05" min="-5" max="5" value="${j.overlap}" data-act="overlap" data-id="${j.id}"/></label>
         ${sol?.freeAxis ? `<label class="field" title="Bei wenigen Punkten ist die Drehung um die Kontaktachse nicht festgelegt.">Drehung <span class="row"><input type="range" min="-180" max="180" step="1" value="${j.spin}" data-act="spin" data-id="${j.id}"/><span data-spinval="${j.id}" style="width:38px;text-align:right">${j.spin}°</span></span></label>` : ''}
         <div class="row wrap">
+          ${j.a !== null && j.b !== null
+            ? j.suggestions && j.suggestions.length > 1
+              ? `<button class="ghost" data-act="next-suggest" data-id="${j.id}" title="Nächsten automatischen Vorschlag ausprobieren">Nächster Vorschlag ${(j.suggestIdx ?? 0) + 1}/${j.suggestions.length}</button>`
+              : `<button class="ghost" data-act="suggest" data-id="${j.id}" title="Sucht passende Flächen auf beiden Teilen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und verbindet sie.">Vorschlagen</button>`
+            : ''}
           ${j.applied
             ? `<button class="ghost" data-act="disconnect" data-id="${j.id}">Lösen</button>
                <button class="${isGizmo ? '' : 'ghost'}" data-act="gizmo" data-id="${j.id}" title="Mit Pfeilen und Drehring nachjustieren – standardmäßig nur in den Richtungen, die die Verbindung offen lässt.">${isGizmo ? 'Anpassen beenden' : 'Von Hand anpassen'}</button>
@@ -1606,6 +1779,17 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
     case 'refine':
       if (j) refine(j);
       break;
+    case 'suggest':
+      if (j) suggestJoint(j);
+      break;
+    case 'next-suggest': {
+      if (!j?.suggestions?.length) break;
+      j.suggestIdx = ((j.suggestIdx ?? 0) + 1) % j.suggestions.length;
+      applySuggestion(j, j.suggestions[j.suggestIdx]);
+      solveAll();
+      renderAll();
+      break;
+    }
     case 'alt': {
       if (!j) break;
       const n = alternativesOf(j);
@@ -1667,6 +1851,7 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
       const v = t.value ? Number(t.value) : null;
       if (t.dataset.act === 'sel-a') { j.a = v; j.ma = []; j.fa = []; } else { j.b = v; j.mb = []; j.fb = []; }
       j.applied = false;
+      j.suggestions = undefined;
       markersChanged(j);
       solveAll();
       renderAll();
@@ -1701,6 +1886,10 @@ document.getElementById('addJoint')!.addEventListener('click', () => {
 });
 
 document.getElementById('fit')!.addEventListener('click', fitView);
+document.getElementById('connectAll')!.addEventListener('click', () => {
+  if (parts.length < 2) { toast('Lade zuerst mindestens zwei Teile.'); return; }
+  void connectAll();
+});
 document.getElementById('checkBtn')!.addEventListener('click', () => {
   checkOn = !checkOn;
   document.getElementById('checkBtn')!.classList.toggle('ghost', !checkOn);
@@ -1836,6 +2025,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
     parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor,
     checkCount: () => checkGroup.children.length,
+    suggestPair: (a: number, b: number) => suggestPair(getPart(a)!, getPart(b)!).map((s) => ({ score: s.score, fa: s.fa.kind + ':' + Math.round(s.fa.area), fb: s.fb.kind + ':' + Math.round(s.fb.area) })),
     /** Fläche wie per Klick auswählen (für automatisierte Tests). */
     selectFace: (partId: number, tri: number) => {
       const j = activeJoint();
