@@ -47,7 +47,11 @@
         </section>
 
         <section>
-          <h2><span class="step">3</span> Exportieren</h2>
+          <h2><span class="step">3</span> Prüfen &amp; exportieren</h2>
+          <div class="row wrap">
+            <button id="checkBtn" class="ghost" title="Zeigt, wo sich die Teile berühren, wo ein Spalt bleibt und wo sie ineinander eindringen.">Passung prüfen</button>
+          </div>
+          <div id="checkResult"></div>
           <div class="row wrap">
             <button data-export="stl">STL</button>
             <button data-export="3mf-color" title="Ein Objekt aus mehreren Teilen, jedes mit eigener Farbe und eigenem Extruder – für Mehrfarbdruck (PrusaSlicer, Bambu Studio, OrcaSlicer).">3MF mehrfarbig</button>

@@ -22,7 +22,7 @@ describe('settleContact', () => {
       { kind: 'rotate', point: [0, 0, 0], axis: [0, 0, 1] },
     ];
     for (const z0 of [6.12, 5.9, 6.03]) {
-      const res = settleContact(samples, shift(z0), { bvh, positions: base }, free, { maxPairDist: 0.3 });
+      const res = settleContact(samples, shift(z0), { bvh }, free, { maxPairDist: 0.3 });
       expect(res).not.toBeNull();
       expect(res!.T.t[2]).toBeCloseTo(6, 5);
       // Drehung um die Achse hat keinen Einfluss und bleibt unverändert
@@ -40,11 +40,11 @@ describe('settleContact', () => {
       { kind: 'translate', axis: [0, 0, 1] },
       { kind: 'rotate', point: [0, 0, 6], axis: [1, 0, 0] },
     ];
-    const res = settleContact(samples, tilt, { bvh, positions: base }, free, { maxPairDist: 0.3, maxRotation: 0.01 });
+    const res = settleContact(samples, tilt, { bvh }, free, { maxPairDist: 0.3, maxRotation: 0.01 });
     expect(res).not.toBeNull();
     for (const p of [[10, 10, 0], [-10, -10, 0], [10, -10, 0]] as [number, number, number][]) expect(apply(res!.T, p)[2]).toBeCloseTo(6, 4);
     // Ohne erlaubte Drehung bleibt die Neigung, nur die Höhe wird angepasst
-    const flat = settleContact(samples, tilt, { bvh, positions: base }, free, { maxPairDist: 0.3 });
+    const flat = settleContact(samples, tilt, { bvh }, free, { maxPairDist: 0.3 });
     expect(flat!.T.R).toEqual(tilt.R);
   });
 
@@ -54,7 +54,7 @@ describe('settleContact', () => {
     const peg = sampleSurface(geometryFrom(dPeg(5, 3, 8)), 3000);
     const free: FreeMotion[] = [{ kind: 'rotate', point: [0, 0, 0], axis: [0, 0, 1] }];
     const T0 = shift(0);
-    const res = settleContact(peg, T0, { bvh, positions: hole }, free, { maxPairDist: 0.3 });
+    const res = settleContact(peg, T0, { bvh }, free, { maxPairDist: 0.3 });
     expect(res!.T.R).toEqual(T0.R);
   });
 
@@ -62,7 +62,7 @@ describe('settleContact', () => {
     const base = box(40, 40, 6);
     const bvh = new MeshBVH(geometryFrom(base));
     const samples = sampleSurface(geometryFrom(cylinder(5, 5)), 500);
-    expect(settleContact(samples, shift(20), { bvh, positions: base }, [{ kind: 'translate', axis: [0, 0, 1] }], { maxPairDist: 0.3 })).toBeNull();
+    expect(settleContact(samples, shift(20), { bvh }, [{ kind: 'translate', axis: [0, 0, 1] }], { maxPairDist: 0.3 })).toBeNull();
   });
 });
 

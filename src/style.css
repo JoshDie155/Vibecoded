@@ -143,6 +143,16 @@ button.icon:hover { color: var(--err); }
 #toolbar { top: 10px; }
 #gizmoBar { top: 58px; font-size: 12.5px; }
 #gizmoBar[hidden] { display: none; }
+#checkResult { margin: 8px 0 12px; font-size: 12.5px; display: grid; gap: 6px; }
+#checkResult:empty { display: none; }
+#checkResult .legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); }
+#checkResult .legend span::before {
+  content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px;
+  background: var(--c);
+}
+#checkResult ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+#checkResult li { padding: 4px 6px; border-radius: 6px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+#checkResult li.bad { background: color-mix(in srgb, var(--err) 12%, transparent); }
 #gizmoBar select {
   font: inherit; color: var(--text); background: var(--panel);
   border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px;

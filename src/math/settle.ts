@@ -6,14 +6,14 @@
  */
 import { Vector3 } from 'three';
 import type { MeshBVH } from 'three-mesh-bvh';
-import { type Rigid, type Vec3, apply, compose, cross, dot, normalize, rotate, sub } from './align';
+import { type Rigid, apply, compose, cross, dot, normalize, rotate, sub } from './align';
 import type { Sample } from './icp';
 import { type FreeMotion, motionTransform } from './motion';
+import { bvhTriangleNormal } from './bvhtri';
 
 export interface SettleTarget {
+  /** BVH des festen Teils; Lage des beweglichen Teils wird im Koordinatensystem des festen Teils angegeben. */
   bvh: MeshBVH;
-  /** Nicht-indizierte Positionen des festen Teils (lokal), für die Flächennormalen. */
-  positions: Float32Array;
 }
 
 export interface SettleOptions {
@@ -43,7 +43,6 @@ export function settleContact(
 ): { T: Rigid; rms: number; pairs: number } | null {
   const k = free.length;
   if (!k || !samples.length) return null;
-  const pos = target.positions;
   const hit = { point: new Vector3(), distance: 0, faceIndex: 0 };
   const q = new Vector3();
   let cur = T;
@@ -62,7 +61,7 @@ export function settleContact(
       const w = apply(cur, s.p);
       q.set(w[0], w[1], w[2]);
       if (!target.bvh.closestPointToPoint(q, hit, 0, opts.maxPairDist) || hit.distance > opts.maxPairDist) continue;
-      const n = faceNormal(pos, hit.faceIndex);
+      const n = bvhTriangleNormal(target.bvh, hit.faceIndex);
       // Nur Flächen, die gegeneinander zeigen
       if (dot(rotate(cur.R, s.n), n) > -0.9) continue;
       const r = dot(n, sub(w, [hit.point.x, hit.point.y, hit.point.z]));
@@ -96,12 +95,6 @@ export function settleContact(
   return { T: cur, rms, pairs };
 }
 
-function faceNormal(p: Float32Array, f: number): Vec3 {
-  const i = f * 9;
-  const u: Vec3 = [p[i + 3] - p[i], p[i + 4] - p[i + 1], p[i + 5] - p[i + 2]];
-  const v: Vec3 = [p[i + 6] - p[i], p[i + 7] - p[i + 1], p[i + 8] - p[i + 2]];
-  return normalize(cross(u, v));
-}
 
 /** Kleines lineares Gleichungssystem (Gauß mit Pivotsuche). */
 function solve(A: number[][], b: number[]): number[] | null {

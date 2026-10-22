@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
+import { bvhTriangleNormal } from './bvhtri';
 import { type Rigid, type Vec3, apply, compose, dist, dot, rotate, solveRigid } from './align';
 
 export interface Sample {
@@ -44,12 +45,6 @@ export function sampleSurface(geom: THREE.BufferGeometry, count: number): Sample
   return out;
 }
 
-function faceNormal(pos: THREE.BufferAttribute | THREE.InterleavedBufferAttribute, face: number, out: THREE.Vector3) {
-  const a = new THREE.Vector3().fromBufferAttribute(pos, face * 3);
-  const b = new THREE.Vector3().fromBufferAttribute(pos, face * 3 + 1);
-  const c = new THREE.Vector3().fromBufferAttribute(pos, face * 3 + 2);
-  return out.subVectors(c, b).cross(a.sub(b)).normalize();
-}
 
 /**
  * Prüft, ob zwei Lagen desselben Teils geometrisch gleich aussehen (symmetrisches Teil):
@@ -78,7 +73,6 @@ export function sameShape(bvh: MeshBVH, samples: Sample[], A: THREE.Matrix4, B: 
 export function refineICP(
   movingSamples: Sample[],
   T: Rigid,
-  fixedGeom: THREE.BufferGeometry,
   fixedBVH: MeshBVH,
   fixedMatrix: THREE.Matrix4,
   contacts: Vec3[],
@@ -98,7 +92,6 @@ export function refineICP(
 
   const inv = fixedMatrix.clone().invert();
   const fixedRot = new THREE.Matrix3().setFromMatrix4(fixedMatrix);
-  const fixedPos = fixedGeom.getAttribute('position');
   const fn = new THREE.Vector3();
   const target = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
   const q = new THREE.Vector3();
@@ -114,7 +107,7 @@ export function refineICP(
       q.set(w[0], w[1], w[2]).applyMatrix4(inv);
       if (!fixedBVH.closestPointToPoint(q, target, 0, opts.maxPairDist)) continue;
       // Nur echte Kontaktflächen: Oberflächen müssen gegeneinander zeigen
-      faceNormal(fixedPos, target.faceIndex, fn).applyMatrix3(fixedRot).normalize();
+      fn.set(...bvhTriangleNormal(fixedBVH, target.faceIndex)).applyMatrix3(fixedRot).normalize();
       if (dot(rotate(cur.R, s.n), toV(fn)) > -0.9) continue;
       const c = target.point.clone().applyMatrix4(fixedMatrix);
       P.push(w);

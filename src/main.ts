@@ -11,6 +11,7 @@ import { solveConstraints } from './math/constraints';
 import { type ScanTarget, autoSeat } from './math/scan';
 import { settleContact } from './math/settle';
 import { alignOutlines } from './math/outline';
+import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag, planMate } from './math/mate';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
@@ -142,6 +143,10 @@ const markerGroup = new THREE.Group();
 scene.add(markerGroup);
 const faceGroup = new THREE.Group();
 scene.add(faceGroup);
+/** Einfärbung der Prüfansicht (Berührung, Spalt, Durchdringung). */
+const checkGroup = new THREE.Group();
+scene.add(checkGroup);
+let checkOn = false;
 
 const cursor = new THREE.Mesh(
   new THREE.SphereGeometry(1, 16, 12),
@@ -738,7 +743,7 @@ function refine(j: Joint) {
   const s = sceneScale();
   const current = matrixToRigid(moving.mesh.matrixWorld);
   const rmsd = j.result?.solutions[0]?.rmsd ?? 0;
-  const res = refineICP(moving.samples, current, fixed.geom, fixed.geom.boundsTree as MeshBVH, fixed.mesh.matrixWorld, contacts, {
+  const res = refineICP(moving.samples, current, fixed.geom.boundsTree as MeshBVH, fixed.mesh.matrixWorld, contacts, {
     regionRadius: Math.max(s * 0.35, ...(j.fixedSide === 'a' ? j.fa : j.fb).map((f) => featureRadius(f) * 1.3)),
     maxPairDist: Math.max(rmsd * 4, s * 0.02),
   });
@@ -1035,6 +1040,116 @@ function rebuildMarkers() {
   scaleMarkers();
 }
 
+// ---------------------------------------------------------------- Prüfansicht
+
+const CHECK_COLORS = { pen: 0xe5484d, touch: 0x30a46c, gap: 0xf5a524 };
+
+/** Laufende Prüfung; eine neue Prüfung (nach einer Änderung) bricht die alte ab. */
+let checkGen = 0;
+/** Höchstens so viele Dreiecke je Teil werden geprüft (darüber eine gleichmäßige Stichprobe). */
+const CHECK_BUDGET = 300_000;
+
+/**
+ * Prüft alle sichtbaren Teile paarweise und färbt Berührung, Spalt und Durchdringung ein. Läuft in
+ * Abschnitten, damit die Oberfläche bei großen Netzen bedienbar bleibt.
+ */
+async function runCheck() {
+  const gen = ++checkGen;
+  disposeGroup(checkGroup);
+  const el = document.getElementById('checkResult')!;
+  if (!checkOn) {
+    el.innerHTML = '';
+    return;
+  }
+  // Färbung etwa im Raster von 1–2 % der Teilgröße
+  const opts = { contactTol: 0.03, gapTol: 0.6, maxEdge: Math.min(3, Math.max(0.4, sceneScale() * 0.015)) };
+  const visible = parts.filter((p) => p.visible);
+  const boxes = new Map(visible.map((p) => [p.id, new THREE.Box3().setFromObject(p.mesh)]));
+  const target = (p: Part) => {
+    const b = boxes.get(p.id)!;
+    return { bvh: p.geom.boundsTree as MeshBVH, matrix: matrixToRigid(p.mesh.matrixWorld), box: { min: v3(b.min), max: v3(b.max) } };
+  };
+  const show = (p: Part, kind: keyof typeof CHECK_COLORS, tris: Float32Array) => {
+    if (!tris.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(tris, 3));
+    const overlay = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: CHECK_COLORS[kind], transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    }));
+    // Durchdringung zuletzt zeichnen, damit sie sichtbar bleibt
+    overlay.renderOrder = kind === 'pen' ? 3 : kind === 'touch' ? 2 : 1;
+    overlay.matrixAutoUpdate = false;
+    overlay.matrix.copy(p.mesh.matrixWorld);
+    checkGroup.add(overlay);
+  };
+  const pairs: [Part, Part][] = [];
+  for (let i = 0; i < visible.length; i++)
+    for (let k = i + 1; k < visible.length; k++)
+      if (boxes.get(visible[i].id)!.clone().expandByScalar(opts.gapTol).intersectsBox(boxes.get(visible[k].id)!)) pairs.push([visible[i], visible[k]]);
+  const total = pairs.reduce((s, [A, B]) => s + Math.min(CHECK_BUDGET, positionsOf(A).length / 9) + Math.min(CHECK_BUDGET, positionsOf(B).length / 9), 0) || 1;
+  let done = 0;
+  let sampled = false;
+  let last = performance.now();
+  const rows: { text: string; bad: boolean }[] = [];
+
+  /** Ein Teil gegen ein anderes, in Abschnitten. Liefert null, wenn die Prüfung abgebrochen wurde. */
+  const directed = async (P: Part, Q: Part) => {
+    const pos = positionsOf(P);
+    const n = pos.length / 9;
+    const stride = Math.max(1, Math.ceil(n / CHECK_BUDGET));
+    if (stride > 1) sampled = true;
+    const acc = newAccumulator();
+    const M = matrixToRigid(P.mesh.matrixWorld);
+    const T = target(Q);
+    const chunk = 20_000 * stride;
+    for (let from = 0; from < n; from += chunk) {
+      checkRange(pos, M, T, opts, acc, from, Math.min(n, from + chunk), stride);
+      done += Math.ceil((Math.min(n, from + chunk) - from) / stride);
+      if (performance.now() - last > 120) {
+        el.innerHTML = `<div class="help" style="margin:0">Prüfe Passung … ${Math.round((100 * done) / total)} %</div>`;
+        await new Promise((r) => setTimeout(r, 0));
+        last = performance.now();
+        if (gen !== checkGen) return null;
+      }
+    }
+    return finishCheck(acc);
+  };
+
+  for (const [A, B] of pairs) {
+    const ra = await directed(A, B);
+    const rb = ra && (await directed(B, A));
+    if (!ra || !rb) return;
+    for (const [p, r] of [[A, ra], [B, rb]] as const) {
+      show(p, 'gap', r.gap);
+      show(p, 'touch', r.touching);
+      show(p, 'pen', r.penetrating);
+    }
+    const touch = ra.touching.length + rb.touching.length > 0;
+    const pen = Math.max(ra.maxPen, rb.maxPen);
+    const gap = ra.gap.length + rb.gap.length > 0;
+    if (!touch && !pen && !gap) continue;
+    const bits: string[] = [];
+    if (touch) bits.push('liegen an');
+    if (gap) {
+      const lo = Math.min(ra.minGap, rb.minGap);
+      const hi = Math.max(ra.maxGap, rb.maxGap);
+      const typ = typicalGap([ra, rb]);
+      bits.push(hi - lo < 0.01 ? `Spalt ${mmText(typ)} mm` : `Spalt meist ${mmText(typ)} mm (${mmText(lo)}–${mmText(hi)})`);
+    }
+    if (pen) bits.push(`dringen bis ${mmText(pen)} mm ineinander ein`);
+    rows.push({ text: `${A.name} ↔ ${B.name}: ${bits.join(' · ')}`, bad: pen > 0 });
+  }
+  if (gen !== checkGen) return;
+  const legend = `<div class="legend"><span style="--c:#30a46c">liegt an</span><span style="--c:#f5a524">Spalt bis 0,6 mm</span><span style="--c:#e5484d">dringt ein</span></div>`;
+  const note = sampled ? '<div class="help" style="margin:0">Sehr feines Netz: geprüft wurde eine gleichmäßige Stichprobe der Dreiecke.</div>' : '';
+  el.innerHTML = legend + (rows.length
+    ? `<ul>${rows.map((r) => `<li class="${r.bad ? 'bad' : ''}">${esc(r.text)}</li>`).join('')}</ul>`
+    : '<div class="help" style="margin:0">Keine Teile berühren sich.</div>') + note;
+}
+
+const mmText = (x: number) => x.toFixed(x < 0.1 ? 3 : 2).replace('.', ',');
+
 // ---------------------------------------------------------------- Auswahl per Maus
 
 const raycaster = new THREE.Raycaster();
@@ -1085,7 +1200,9 @@ function pick(e: PointerEvent | MouseEvent): Hit | null {
     if (best) local.copy(best);
   }
   const world = local.clone().applyMatrix4(part.mesh.matrixWorld);
-  return { part, local: { p: v3(local), n: v3(n.normalize()) }, world, tri: hit.faceIndex };
+  // Die BVH meldet faceIndex in ihrer eigenen (umsortierten) Reihenfolge – das Dreieck im Netz ergibt
+  // sich aus den Eckpunkten, die bei nicht indizierten Netzen zu je dritt zu einem Dreieck gehören
+  return { part, local: { p: v3(local), n: v3(n.normalize()) }, world, tri: Math.floor(hit.face.a / 3) };
 }
 
 /** Darf ein Klick auf dieses Teil in der aktiven Verbindung landen? */
@@ -1371,11 +1488,21 @@ function renderHint() {
   }
 }
 
+/** Läuft gerade ein Neuaufbau? Beim Ersetzen der Seitenleiste kann ein fokussiertes Feld sein „change"-Ereignis auslösen. */
+let rendering = false;
+
 function renderAll() {
-  renderParts();
-  renderJoints();
+  if (rendering) return;
+  rendering = true;
+  try {
+    renderParts();
+    renderJoints();
+  } finally {
+    rendering = false;
+  }
   renderHint();
   rebuildMarkers();
+  void runCheck();
   if (gizmoTarget && !tc.dragging) {
     placeGizmo();
     renderGizmoBar();
@@ -1572,6 +1699,12 @@ document.getElementById('addJoint')!.addEventListener('click', () => {
 });
 
 document.getElementById('fit')!.addEventListener('click', fitView);
+document.getElementById('checkBtn')!.addEventListener('click', () => {
+  checkOn = !checkOn;
+  document.getElementById('checkBtn')!.classList.toggle('ghost', !checkOn);
+  document.getElementById('checkBtn')!.textContent = checkOn ? 'Prüfung ausblenden' : 'Passung prüfen';
+  void runCheck();
+});
 document.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) =>
   b.addEventListener('click', () => setPickMode(b.dataset.pick as 'point' | 'face')),
 );
@@ -1675,6 +1808,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
 Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
     parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor,
+    checkCount: () => checkGroup.children.length,
     /** Fläche wie per Klick auswählen (für automatisierte Tests). */
     selectFace: (partId: number, tri: number) => {
       const j = activeJoint();
