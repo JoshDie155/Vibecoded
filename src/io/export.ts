@@ -1,6 +1,6 @@
-/** Export als STL (binär), OBJ und 3MF – wahlweise als ein Objekt oder positionierte Einzelteile. */
+/** Export als STL (binär) und OBJ sowie Speichern im Browser. 3MF: siehe threemf.ts. */
 import * as THREE from 'three';
-import { zipSync, strToU8 } from 'fflate';
+import { zipSync } from 'fflate';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export interface ExportPart {
@@ -68,63 +68,6 @@ export function toOBJ(parts: ExportPart[]): Blob {
     offset += pos.count;
   }
   return new Blob([lines.join('\n')], { type: 'text/plain' });
-}
-
-function meshXML(g: THREE.BufferGeometry): string {
-  const { pos, idx } = indexed(g);
-  const v: string[] = [];
-  for (let i = 0; i < pos.count; i++) v.push(`<vertex x="${f(pos.getX(i))}" y="${f(pos.getY(i))}" z="${f(pos.getZ(i))}"/>`);
-  const t: string[] = [];
-  for (let i = 0; i < idx.count; i += 3) {
-    const a = idx.getX(i);
-    const b = idx.getX(i + 1);
-    const c = idx.getX(i + 2);
-    if (a === b || b === c || a === c) continue; // degenerierte Dreiecke weglassen
-    t.push(`<triangle v1="${a}" v2="${b}" v3="${c}"/>`);
-  }
-  return `<mesh><vertices>${v.join('')}</vertices><triangles>${t.join('')}</triangles></mesh>`;
-}
-
-const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]!);
-
-/**
- * @param separate  true: jedes Teil als eigenes Objekt (positioniert, z. B. für Mehrfarbdruck),
- *                  false: alles als ein einziges Objekt.
- */
-export function to3MF(parts: ExportPart[], separate: boolean): Blob {
-  const objects = separate
-    ? parts.map((p, i) => ({ id: i + 1, name: p.name, xml: meshXML(p.geometry) }))
-    : [{ id: 1, name: 'PartJoin', xml: meshXML(merged(parts)) }];
-  let resources = objects.map((o) => `<object id="${o.id}" name="${esc(o.name)}" type="model">${o.xml}</object>`).join('');
-  let build = objects.map((o) => `<item objectid="${o.id}"/>`).join('');
-  if (separate && objects.length > 1) {
-    // Ein Sammelobjekt mit Komponenten → Slicer behandeln es als ein Objekt aus mehreren Teilen
-    const id = objects.length + 1;
-    resources += `<object id="${id}" name="PartJoin" type="model"><components>${objects
-      .map((o) => `<component objectid="${o.id}"/>`)
-      .join('')}</components></object>`;
-    build = `<item objectid="${id}"/>`;
-  }
-  const model = `<?xml version="1.0" encoding="UTF-8"?>
-<model unit="millimeter" xml:lang="de-DE" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
-<resources>${resources}</resources>
-<build>${build}</build>
-</model>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
-</Types>`;
-  const rels = `<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
-</Relationships>`;
-  const zip = zipSync({
-    '[Content_Types].xml': strToU8(contentTypes),
-    '_rels/.rels': strToU8(rels),
-    '3D/3dmodel.model': strToU8(model),
-  });
-  return new Blob([zip], { type: 'model/3mf' });
 }
 
 interface ViewerDownloads {

@@ -149,7 +149,14 @@ button.icon:hover { color: var(--err); }
 }
 #gizmoBar .help { margin: 0; flex-basis: 100%; }
 #gizmoBar .help:empty { display: none; }
-.keep { margin-top: 10px; color: var(--muted); }
+.loadopts { display: grid; gap: 4px; margin-top: 10px; color: var(--muted); }
+.swatch {
+  width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 50%;
+  background: none; cursor: pointer; flex: none; overflow: hidden;
+}
+.swatch::-webkit-color-swatch-wrapper { padding: 0; }
+.swatch::-webkit-color-swatch { border: none; border-radius: 50%; }
+.swatch::-moz-color-swatch { border: none; border-radius: 50%; }
 .chips { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12.5px; }
 .chips li {
   display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px;

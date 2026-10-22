@@ -899,7 +899,8 @@ export function autoSeat(
   // Zapfen, die noch ganz vor der Bohrung stehen, geben beim Drehen kein Signal: zusätzlich zuerst so weit
   // einführen, dass das Teil möglichst nah an den Wänden liegt, und das bessere Ergebnis nehmen
   const pre = preInsert(samples, T, target, free, opts, slideRange);
-  if (pre) {
+  // Nur nötig, wenn das Teil nach dem ersten Durchlauf deutlich weniger nah an den Wänden liegt als eingeführt
+  if (pre && pre.nearAt(best.cur) < 0.8 * pre.near) {
     const other = run(pre.T);
     if (finalScore(other.cur) > finalScore(best.cur) + 1e-9) {
       other.total[pre.index] += pre.amount;
@@ -946,7 +947,7 @@ function preInsert(
   free: FreeMotion[],
   opts: ContactOptions,
   slideRange: (m: FreeMotion, T: Rigid) => [number, number],
-): { T: Rigid; index: number; amount: number } | undefined {
+): { T: Rigid; index: number; amount: number; near: number; nearAt: (T: Rigid) => number } | undefined {
   const index = free.findIndex(
     (m) => m.kind === 'translate' && free.some((r) => r.kind === 'rotate' && Math.abs(dot(normalize(r.axis), normalize(m.axis))) > 0.999),
   );
@@ -954,8 +955,8 @@ function preInsert(
   const m = free[index];
   const inv = invert(target.matrix);
   const stride = Math.max(1, Math.ceil(samples.length / COARSE_SAMPLES));
-  const near = (x: number) => {
-    const M = compose(inv, applyMotion(T, m, x));
+  const nearAt = (Tc: Rigid) => {
+    const M = compose(inv, Tc);
     let k = 0;
     let n = 0;
     for (let i = 0; i < samples.length; i += stride, n++) {
@@ -966,6 +967,7 @@ function preInsert(
     }
     return n ? k / n : 0;
   };
+  const near = (x: number) => nearAt(applyMotion(T, m, x));
   const [lo, hi] = slideRange(m, T);
   // Weit genug, dass ein Zapfen auch aus einer Teillänge vor der Bohrung ganz eingeführt werden kann
   const w = 2 * Math.max(Math.abs(lo), Math.abs(hi));
@@ -979,7 +981,7 @@ function preInsert(
     if (v > bv + 1e-9) { bv = v; bx = x; }
   }
   if (bv < here + Math.max(0.1, 0.2 * here) || Math.abs(bx) < opts.contactDist) return undefined;
-  return { T: applyMotion(T, m, bx), index, amount: bx };
+  return { T: applyMotion(T, m, bx), index, amount: bx, near: bv, nearAt };
 }
 
 /**

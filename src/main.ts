@@ -13,8 +13,9 @@ import { settleContact } from './math/settle';
 import { alignOutlines } from './math/outline';
 import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag, planMate } from './math/mate';
-import { loadModel, SUPPORTED } from './io/load';
-import { type ExportPart, download, to3MF, toOBJ, toSTL } from './io/export';
+import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
+import { type ExportPart, download, toOBJ, toSTL } from './io/export';
+import { write3MF } from './io/threemf';
 import { makeDemo, makeRoundDemo } from './demo';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -38,6 +39,8 @@ interface Part {
   samples: Sample[];
   /** Nachbarschaften der Dreiecke für die Flächenerkennung (wird erst bei Bedarf berechnet). */
   topo?: Topology;
+  /** Teile derselben Gruppe (z. B. ein Objekt aus einer 3MF-Datei) bewegen sich gemeinsam. */
+  group?: string;
 }
 
 type Side = 'a' | 'b';
@@ -301,61 +304,87 @@ function fitView() {
 
 // ---------------------------------------------------------------- Teile
 
-function addPart(name: string, geom: THREE.BufferGeometry) {
+/** Platz rechts neben den bereits geladenen Teilen für einen Bereich mit diesem Umriss. */
+function nextLayout(bb: THREE.Box3): THREE.Matrix4 {
+  let x = 0;
+  for (const p of parts) x = Math.max(x, new THREE.Box3().setFromObject(p.mesh).max.x);
+  const gap = parts.length ? sceneScale() * 0.3 : 0;
+  return new THREE.Matrix4().makeTranslation(
+    parts.length ? x + gap - bb.min.x : -(bb.min.x + bb.max.x) / 2,
+    -(bb.min.y + bb.max.y) / 2,
+    -bb.min.z,
+  );
+}
+
+function addPart(name: string, geom: THREE.BufferGeometry, opts: { color?: string; group?: string; layout?: THREE.Matrix4 } = {}) {
   geom.computeBoundsTree();
-  const color = new THREE.Color(PART_COLORS[(nextPartId - 1) % PART_COLORS.length]);
+  const color = new THREE.Color(opts.color ?? PART_COLORS[(nextPartId - 1) % PART_COLORS.length]);
   const mesh = new THREE.Mesh(
     geom,
     new THREE.MeshStandardMaterial({ color, roughness: 0.65, metalness: 0.05, side: THREE.DoubleSide, flatShading: false }),
   );
   mesh.matrixAutoUpdate = false;
-
-  let layout: THREE.Matrix4;
-  if ((document.getElementById('keepPos') as HTMLInputElement).checked) {
-    // Viele mehrteilige Downloads liegen in der Datei schon richtig zueinander
-    layout = new THREE.Matrix4();
-  } else {
-    // Neben die bereits geladenen Teile legen, damit man bequem markieren kann
-    const bb = geom.boundingBox!;
-    let x = 0;
-    for (const p of parts) {
-      const b = new THREE.Box3().setFromObject(p.mesh);
-      x = Math.max(x, b.max.x);
-    }
-    const gap = parts.length ? sceneScale() * 0.3 : 0;
-    layout = new THREE.Matrix4().makeTranslation(
-      parts.length ? x + gap - bb.min.x : -(bb.min.x + bb.max.x) / 2,
-      -(bb.min.y + bb.max.y) / 2,
-      -bb.min.z,
-    );
-  }
+  // Lage aus der Datei, mehrteilige Dateien gemeinsam verschoben – sonst neben die anderen Teile
+  const layout = opts.layout?.clone()
+    ?? ((document.getElementById('keepPos') as HTMLInputElement).checked ? new THREE.Matrix4() : nextLayout(geom.boundingBox!));
   mesh.matrix.copy(layout);
   mesh.matrixWorldNeedsUpdate = true;
 
-  const part: Part = { id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 6000) };
+  const part: Part = {
+    id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 6000), group: opts.group,
+  };
   mesh.userData.partId = part.id;
   parts.push(part);
   scene.add(mesh);
   if (baseId === null) baseId = part.id;
+  return part;
+}
 
-  // Ab zwei Teilen automatisch eine Verbindung anlegen, damit man direkt loslegen kann
-  const unconnected = parts.filter((p) => !joints.some((j) => j.a === p.id || j.b === p.id));
-  if (parts.length >= 2 && (joints.length === 0 || unconnected.includes(part))) {
-    const open = joints.find((j) => j.b === null);
-    if (open) open.b = part.id;
-    else addJoint();
-  }
+/** Alle Teile, die sich mit diesem gemeinsam bewegen (inklusive des Teils selbst). */
+function groupOf(p: Part): Part[] {
+  return p.group ? parts.filter((q) => q.group === p.group) : [p];
+}
+
+/**
+ * Sorgt dafür, dass es eine Verbindung zum Loslegen gibt: zwischen zwei Teilen, die noch nicht
+ * zusammenhängen (nicht derselben Gruppe angehören und nicht schon verbunden sind).
+ */
+function ensureJoint() {
+  if (parts.length < 2 || joints.some((j) => !j.applied && j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0)) return;
+  const unit = (p: Part) => p.group ?? `#${p.id}`;
+  const connected = new Set(joints.flatMap((j) => [j.a, j.b]).filter((x): x is number => x !== null).map((id) => unit(getPart(id)!)));
+  const a = joints.length ? parts.find((p) => connected.has(unit(p))) : getPart(baseId);
+  const b = parts.find((p) => a && unit(p) !== unit(a) && !connected.has(unit(p)));
+  if (!a || !b) return;
+  const j = addJoint();
+  j.a = a.id;
+  j.b = b.id;
 }
 
 async function loadFiles(files: FileList | File[]) {
-  for (const file of Array.from(files)) {
+  const list = Array.from(files);
+  const split = (document.getElementById('splitParts') as HTMLInputElement).checked;
+  const keep = (document.getElementById('keepPos') as HTMLInputElement).checked;
+  // Farben für OBJ: passende .mtl-Datei (gleicher Name oder die einzige mitgegebene)
+  const mtls = new Map<string, string>();
+  for (const f of list) if (f.name.toLowerCase().endsWith('.mtl')) mtls.set(f.name.replace(/\.[^.]+$/, '').toLowerCase(), await f.text());
+  for (const file of list) {
+    if (file.name.toLowerCase().endsWith('.mtl')) continue;
     try {
-      const geom = await loadModel(file);
-      addPart(file.name.replace(/\.[^.]+$/, ''), geom);
+      const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase();
+      const mtl = mtls.get(stem) ?? (mtls.size === 1 ? [...mtls.values()][0] : undefined);
+      const loaded: LoadedPart[] = await loadModel(file, { split, mtl });
+      // Teile einer Datei gemeinsam verschieben, damit ihre Lage zueinander erhalten bleibt
+      const bb = new THREE.Box3();
+      for (const l of loaded) bb.union(l.geom.boundingBox!);
+      const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
+      for (const l of loaded) addPart(l.name, l.geom, { color: l.color, group: l.group, layout });
+      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen.`);
     } catch (e) {
       toast(`${file.name}: ${(e as Error).message}`);
     }
   }
+  ensureJoint();
   solveAll();
   fitView();
   renderAll();
@@ -449,10 +478,22 @@ function solveAll() {
     (x): x is number => x !== null && !!getPart(x),
   );
 
+  /** Teil platzieren – die übrigen Teile seiner Gruppe mit derselben Bewegung. */
+  const place = (id: number, M: THREE.Matrix4, queue: number[], jointId?: number) => {
+    const p = getPart(id)!;
+    const delta = M.clone().multiply(p.layout.clone().invert());
+    for (const q of groupOf(p)) {
+      if (placed.has(q.id)) continue;
+      placed.set(q.id, q === p ? M.clone() : delta.clone().multiply(q.layout));
+      if (jointId !== undefined) movedBy.set(q.id, jointId);
+      queue.push(q.id);
+    }
+  };
+
   for (const seed of seeds) {
     if (placed.has(seed)) continue;
-    placed.set(seed, getPart(seed)!.layout.clone());
-    const queue = [seed];
+    const queue: number[] = [];
+    place(seed, getPart(seed)!.layout.clone(), queue);
     while (queue.length) {
       const cur = queue.shift()!;
       for (const j of joints) {
@@ -461,7 +502,14 @@ function solveAll() {
         const fixedSide: Side = j.a === cur ? 'a' : 'b';
         const other = fixedSide === 'a' ? j.b : j.a;
         if (placed.has(other)) {
-          if (!j.fixedSide) j.status = { kind: 'warn', text: 'Beide Teile sind schon über andere Verbindungen festgelegt – diese Verbindung wird ignoriert.' };
+          const same = getPart(cur)!.group && getPart(cur)!.group === getPart(other)!.group;
+          if (!j.fixedSide)
+            j.status = {
+              kind: 'warn',
+              text: same
+                ? 'Beide Teile gehören zur selben Gruppe und liegen schon richtig zueinander. Zum Verbinden ein Teil aus der Gruppe lösen (⛓ in der Teileliste).'
+                : 'Beide Teile sind schon über andere Verbindungen festgelegt – diese Verbindung wird ignoriert.',
+            };
           continue;
         }
         j.fixedSide = fixedSide;
@@ -472,9 +520,7 @@ function solveAll() {
           : solvePointJoint(j, getPart(other)!, fixedM);
         if (!coarse) continue;
         const T = j.adjust ? compose(conjugate(Mf, j.adjust), coarse) : coarse;
-        placed.set(other, rigidToMatrix(T));
-        movedBy.set(other, j.id);
-        queue.push(other);
+        place(other, rigidToMatrix(T), queue, j.id);
       }
     }
   }
@@ -721,7 +767,7 @@ let gizmoTarget: { kind: 'joint' | 'part'; id: number } | null = null;
 let gizmoMode: 'translate' | 'rotate' = 'rotate';
 let gizmoFreeOnly = true;
 let gizmoSnapDeg = 0;
-let dragStart: { anchor: THREE.Matrix4; adjust: Rigid; layout: THREE.Matrix4 } | null = null;
+let dragStart: { anchor: THREE.Matrix4; adjust: Rigid; layouts: Map<number, THREE.Matrix4> } | null = null;
 /** Klicks, die auf dem Gizmo landen, dürfen keine Markierungen setzen. */
 let suppressClick = false;
 
@@ -732,7 +778,11 @@ tc.addEventListener('dragging-changed', (e) => {
     const j = gizmoTarget?.kind === 'joint' ? joints.find((x) => x.id === gizmoTarget!.id) : undefined;
     const p = gizmoTarget?.kind === 'part' ? getPart(gizmoTarget.id) : undefined;
     gizmoAnchor.updateMatrixWorld(true);
-    dragStart = { anchor: gizmoAnchor.matrixWorld.clone(), adjust: j?.adjust ?? IDENTITY, layout: p?.layout.clone() ?? new THREE.Matrix4() };
+    dragStart = {
+      anchor: gizmoAnchor.matrixWorld.clone(),
+      adjust: j?.adjust ?? IDENTITY,
+      layouts: new Map((p ? groupOf(p) : []).map((q) => [q.id, q.layout.clone()])),
+    };
   } else {
     dragStart = null;
     renderAll();
@@ -744,9 +794,7 @@ tc.addEventListener('objectChange', () => {
   gizmoAnchor.updateMatrixWorld(true);
   const D = gizmoAnchor.matrixWorld.clone().multiply(dragStart.anchor.clone().invert());
   if (gizmoTarget.kind === 'part') {
-    const p = getPart(gizmoTarget.id);
-    if (!p) return;
-    p.layout.copy(D.multiply(dragStart.layout));
+    for (const [id, L] of dragStart.layouts) getPart(id)?.layout.copy(D.clone().multiply(L));
   } else {
     const j = joints.find((x) => x.id === gizmoTarget!.id);
     const fixed = j && getPart(j.fixedSide === 'a' ? j.a : j.b);
@@ -1200,12 +1248,13 @@ function renderParts() {
   partsEl.innerHTML = parts
     .map(
       (p) => `<li>
-        <span class="dot" style="background:#${p.color.getHexString()}"></span>
+        <input type="color" class="swatch" data-act="color" data-id="${p.id}" value="#${p.color.getHexString()}" title="Farbe (wird beim mehrfarbigen 3MF-Export übernommen)" />
         <input type="checkbox" data-act="vis" data-id="${p.id}" ${p.visible ? 'checked' : ''} title="Sichtbar" />
         <span class="name" title="${esc(p.name)}">${esc(p.name)}</span>
         <label class="base" title="Das Basisteil bleibt liegen, alle anderen werden daran angefügt.">
           <input type="radio" name="base" data-act="base" data-id="${p.id}" ${p.id === baseId ? 'checked' : ''}/> Basis
         </label>
+        ${p.group && groupOf(p).length > 1 ? `<button class="icon" data-act="ungroup" data-id="${p.id}" title="Gehört zu einer Gruppe (${groupOf(p).length} Teile, bewegen sich gemeinsam). Klicken, um dieses Teil aus der Gruppe zu lösen.">⛓</button>` : ''}
         <button class="icon" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen">✥</button>
         <button class="icon" data-act="rm-part" data-id="${p.id}" title="Entfernen">✕</button>
       </li>`,
@@ -1362,6 +1411,17 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
     case 'rm-part':
       removePart(id);
       break;
+    case 'ungroup': {
+      const p = getPart(id);
+      if (!p) break;
+      // Lage beibehalten: aktuelle Position wird die neue Ausgangslage
+      p.layout.copy(p.mesh.matrixWorld);
+      p.group = undefined;
+      solveAll();
+      renderAll();
+      toast(`„${p.name}" bewegt sich jetzt unabhängig von seiner Gruppe.`);
+      break;
+    }
     case 'move-part': {
       // Wird das Teil von einer Verbindung bewegt, wird diese angepasst
       const jid = movedBy.get(id);
@@ -1456,6 +1516,14 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
       const p = getPart(id);
       if (p) { p.visible = t.checked; p.mesh.visible = t.checked; }
       renderAll();
+      break;
+    }
+    case 'color': {
+      const p = getPart(id);
+      if (p) {
+        p.color.set(t.value);
+        (p.mesh.material as THREE.MeshStandardMaterial).color.copy(p.color);
+      }
       break;
     }
     case 'base':
@@ -1567,6 +1635,7 @@ function loadDemo(items: { name: string; geom: THREE.BufferGeometry }[], hint: s
   keep.checked = false;
   for (const { name, geom } of items) addPart(name, geom);
   keep.checked = wasChecked;
+  ensureJoint();
   setPickMode(mode);
   solveAll();
   fitView();
@@ -1588,10 +1657,16 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
       .map((p) => ({ name: p.name, geometry: p.geom.clone().applyMatrix4(p.mesh.matrixWorld) }));
     if (!list.length) { toast('Keine sichtbaren Teile zum Exportieren.'); return; }
     const kind = b.dataset.export;
+    const colored = () =>
+      parts.filter((p) => p.visible).map((p, i) => ({
+        name: p.name,
+        positions: list[i].geometry.getAttribute('position').array as Float32Array,
+        color: `#${p.color.getHexString()}`,
+      }));
     const saved =
       kind === 'stl' ? download(toSTL(list), 'zusammengefuegt.stl')
       : kind === 'obj' ? download(toOBJ(list), 'zusammengefuegt.obj')
-      : download(to3MF(list, kind === '3mf-parts'), 'zusammengefuegt.3mf');
+      : download(new Blob([write3MF(colored(), kind === '3mf-color' ? 'multicolor' : 'single') as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
     saved.catch((e) => toast(`Speichern nicht möglich: ${(e as Error).message ?? e}`));
   }),
 );
