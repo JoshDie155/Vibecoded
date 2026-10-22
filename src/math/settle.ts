@@ -20,6 +20,12 @@ export interface SettleOptions {
   /** Nur Punktpaare näher als dieser Abstand zählen als Kontakt. */
   maxPairDist: number;
   iterations?: number;
+  /**
+   * Größte Gesamtdrehung (Radiant, Standard 0: Drehungen bleiben, wie sie sind). Die Drehung hat das
+   * Abtasten schon bestimmt; mit Spiel (z. B. D-Zapfen in D-Bohrung) würde Punkt-zu-Ebene sonst einseitig
+   * „in Kontakt drehen".
+   */
+  maxRotation?: number;
 }
 
 /**
@@ -43,6 +49,9 @@ export function settleContact(
   let cur = T;
   let rms = 0;
   let pairs = 0;
+  const maxRot = opts.maxRotation ?? 0;
+  /** Bisher entlang jeder Bewegung zurückgelegt. */
+  const moved = new Array(k).fill(0);
   for (let it = 0; it < (opts.iterations ?? 12); it++) {
     // Normalgleichungen JᵀJ δ = −Jᵀr mit r = n · (w − c) je Kontaktpaar
     const A = Array.from({ length: k }, () => new Array(k).fill(0));
@@ -72,7 +81,16 @@ export function settleContact(
     for (let a = 0; a < k; a++) A[a][a] += 1e-6 * trace;
     const delta = solve(A, b);
     if (!delta) break;
-    for (let a = 0; a < k; a++) if (delta[a]) cur = compose(motionTransform(free[a], delta[a]), cur);
+    for (let a = 0; a < k; a++) {
+      // Drehungen nur im kleinen Rahmen nachführen, Verschiebungen je Schritt höchstens um maxPairDist
+      const lim = free[a].kind === 'rotate' ? maxRot : Infinity;
+      const step = free[a].kind === 'rotate'
+        ? Math.max(-lim - moved[a], Math.min(lim - moved[a], delta[a]))
+        : Math.max(-opts.maxPairDist, Math.min(opts.maxPairDist, delta[a]));
+      delta[a] = step;
+      moved[a] += step;
+      if (step) cur = compose(motionTransform(free[a], step), cur);
+    }
     if (Math.max(...delta.map(Math.abs)) < 1e-7) break;
   }
   return { T: cur, rms, pairs };

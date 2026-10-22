@@ -6,7 +6,7 @@ import { sampleSurface } from '../src/math/icp';
 import type { FreeMotion } from '../src/math/motion';
 import { settleContact } from '../src/math/settle';
 import { alignOutlines } from '../src/math/outline';
-import { box, cylinder, geometryFrom, ring } from './helpers/meshes';
+import { box, cylinder, dPeg, dRing, geometryFrom, ring } from './helpers/meshes';
 
 const shift = (z: number): Rigid => ({ R: IDENTITY.R, t: [0, 0, z] });
 
@@ -40,9 +40,22 @@ describe('settleContact', () => {
       { kind: 'translate', axis: [0, 0, 1] },
       { kind: 'rotate', point: [0, 0, 6], axis: [1, 0, 0] },
     ];
-    const res = settleContact(samples, tilt, { bvh, positions: base }, free, { maxPairDist: 0.3 });
+    const res = settleContact(samples, tilt, { bvh, positions: base }, free, { maxPairDist: 0.3, maxRotation: 0.01 });
     expect(res).not.toBeNull();
     for (const p of [[10, 10, 0], [-10, -10, 0], [10, -10, 0]] as [number, number, number][]) expect(apply(res!.T, p)[2]).toBeCloseTo(6, 4);
+    // Ohne erlaubte Drehung bleibt die Neigung, nur die Höhe wird angepasst
+    const flat = settleContact(samples, tilt, { bvh, positions: base }, free, { maxPairDist: 0.3 });
+    expect(flat!.T.R).toEqual(tilt.R);
+  });
+
+  it('dreht einen D-Zapfen mit Spiel nicht einseitig in Kontakt', () => {
+    const hole = dRing(12, 5.15, 3.15, 8);
+    const bvh = new MeshBVH(geometryFrom(hole));
+    const peg = sampleSurface(geometryFrom(dPeg(5, 3, 8)), 3000);
+    const free: FreeMotion[] = [{ kind: 'rotate', point: [0, 0, 0], axis: [0, 0, 1] }];
+    const T0 = shift(0);
+    const res = settleContact(peg, T0, { bvh, positions: hole }, free, { maxPairDist: 0.3 });
+    expect(res!.T.R).toEqual(T0.R);
   });
 
   it('meldet null ohne Kontakt', () => {

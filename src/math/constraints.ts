@@ -8,8 +8,8 @@
  *   Varianten, beide Achsrichtungen) vermeiden lokale Minima und liefern echte Alternativen.
  * - Harte Bedingungen (Flächen liegen aufeinander, Achsen fluchten) haben Vorrang. Weiche Terme mit
  *   kleinem Gewicht zentrieren die Teile nur dort, wo sonst nichts die Lage festlegt.
- * - Danach wird bestimmt, welche Bewegungen noch frei sind (Nullraum der Jacobi-Matrix der harten
- *   Bedingungen), damit die Oberfläche nur dafür einen Gizmo anbietet.
+ * - Danach wird bestimmt, welche Bewegungen noch frei sind (Bewegungen, die alle Merkmale des festen
+ *   Teils in sich überführen), damit die Oberfläche nur dafür einen Gizmo anbietet.
  */
 import {
   type Mat3, type Rigid, type Vec3, add, apply, axisAngle, compose, dist, dot, len, normalize, quatToMat3, rotate,
@@ -57,10 +57,21 @@ export interface ConstraintOptions {
 
 const MAX_STARTS = 32;
 const MAX_SOLUTIONS = 8;
-/** Achsen ohne vorgegebene Richtung, deren beide Richtungen durchprobiert werden (2^n Kombinationen). */
+/** Gruppen von Achsen ohne vorgegebene Richtung, deren beide Richtungen durchprobiert werden (2^n). */
+const MAX_FLIP_GROUPS = 4;
+/** Bis zu so vielen offenen Achsen werden auch die in sich widersprüchlichen Kombinationen versucht. */
 const MAX_FLIP_AXES = 4;
-/** Eigenwerte von JᵀJ unterhalb dieses Anteils des größten gelten als frei. */
-const NULL_TOL = 1e-9;
+/** Zwei Achsen, die in beiden Teilen um weniger als ~72° von der Senkrechten abweichen, sind gekoppelt. */
+const LINK_COS = 0.3;
+/**
+ * Richtungen, deren Eigenwert unter diesem Anteil des größten liegt, gelten als frei (Eigenwerte in
+ * mm² je mm Bewegung, Drehungen am Hebel der Merkmalsausdehnung): z. B. bleibt die Drehung eines
+ * Zapfens frei, wenn Schulterfläche und Achse bis zu ~0,2° gegeneinander verkippt erkannt wurden
+ * (Messrauschen aus tessellierten oder unsauberen Netzen); ab ~0,5° ist sie gesperrt.
+ */
+const FREE_TOL = 3e-6;
+/** Anteil des Drehteils, ab dem ein Vektor des Nullraums als Drehung (statt Verschiebung) gilt. */
+const ROT_TOL = 1e-4;
 const SAME_ANGLE = (0.5 * Math.PI) / 180;
 const SAME_DIST = 1e-3;
 const AXES: Vec3[] = [
@@ -92,16 +103,9 @@ interface Item {
 interface Evaluation {
   /** Summe der gewichteten Fehlerquadrate. */
   cost: number;
-  /** JᵀJ (6x6 zeilenweise) und Jᵀr, Parameter (L·ω, v) mit Drehung um c. */
+  /** JᵀJ (6x6 zeilenweise) und Jᵀr, Parameter (P·ω, v) mit Drehung um c. */
   A: number[];
   g: number[];
-  c: Vec3;
-}
-
-interface Analysis {
-  free: FreeMotion[];
-  /** Orthonormalbasis des Nullraums (Parameter (L·ω, v) mit Drehung um c). */
-  basis: number[][];
   c: Vec3;
 }
 
@@ -156,17 +160,6 @@ function rotationVector(R: Mat3): Vec3 {
   if (s < 1e-300) return [0, 0, 0];
   const th = 2 * Math.atan2(s, q[0]);
   return [(q[1] / s) * th, (q[2] / s) * th, (q[3] / s) * th];
-}
-
-/** Logarithmus einer starren Bewegung: Drehgeschwindigkeit w und Geschwindigkeit v des Ursprungs. */
-function logRigid(D: Rigid): { w: Vec3; v: Vec3 } {
-  const w = rotationVector(D.R);
-  const th = len(w);
-  const W1 = cross(w, D.t);
-  const W2 = cross(w, W1);
-  // V⁻¹ = I − ½[w]× + β[w]×²
-  const beta = th < 1e-4 ? 1 / 12 + (th * th) / 720 : (1 - th / 2 / Math.tan(th / 2)) / (th * th);
-  return { w, v: add(sub(D.t, scale(W1, 0.5)), scale(W2, beta)) };
 }
 
 /** Eigenwerte/-vektoren einer kleinen symmetrischen Matrix (zyklisches Jacobi-Verfahren). */
@@ -344,11 +337,11 @@ function charLength(items: Item[]): number {
 const targetDir = (it: Item, flip: boolean) => (it.kind === 'plane' || flip ? neg(it.dd) : it.dd);
 
 /**
- * Residuen und Normalgleichungen. Parameter x = (L·ω, v): kleine Drehung ω um c, danach
- * Verschiebung v. Ein Weltpunkt y bewegt sich dabei um ω × (y − c) + v, eine Richtung u um ω × u.
- * sw = Faktor der weichen Terme (0: nur harte Bedingungen).
+ * Residuen und Normalgleichungen. Winkelfehler zählen mit dem Hebel L. Parameter x = (P·ω, v):
+ * kleine Drehung ω um c, danach Verschiebung v. Ein Weltpunkt y bewegt sich dabei um
+ * ω × (y − c) + v, eine Richtung u um ω × u. sw = Faktor der weichen Terme (0: nur harte Bedingungen).
  */
-function evaluate(items: Item[], fl: boolean[], T: Rigid, L: number, sw: number): Evaluation {
+function evaluate(items: Item[], fl: boolean[], T: Rigid, L: number, sw: number, P = L): Evaluation {
   const A = new Array(36).fill(0);
   const g = new Array(6).fill(0);
   let cost = 0;
@@ -367,12 +360,12 @@ function evaluate(items: Item[], fl: boolean[], T: Rigid, L: number, sw: number)
   // Komponente m·(y − Ziel) eines Weltpunkts (Faktor f)
   const posRow = (yc: Vec3, m: Vec3, r: number, f: number) => {
     const k = cross(yc, m);
-    addRow([(f * k[0]) / L, (f * k[1]) / L, (f * k[2]) / L, f * m[0], f * m[1], f * m[2]], f * r);
+    addRow([(f * k[0]) / P, (f * k[1]) / P, (f * k[2]) / P, f * m[0], f * m[1], f * m[2]], f * r);
   };
   // Komponente L·m·(u − Ziel) einer gedrehten Richtung u
   const dirRow = (u: Vec3, m: Vec3, r: number, f: number) => {
-    const k = cross(u, m);
-    addRow([f * k[0], f * k[1], f * k[2], 0, 0, 0], f * r);
+    const k = scale(cross(u, m), (f * L) / P);
+    addRow([k[0], k[1], k[2], 0, 0, 0], f * r);
   };
 
   items.forEach((it, i) => {
@@ -403,9 +396,9 @@ function evaluate(items: Item[], fl: boolean[], T: Rigid, L: number, sw: number)
   return { cost, A, g, c };
 }
 
-/** Wendet den Parameterschritt x = (L·ω, v) mit Drehzentrum c auf T an. */
-function step(T: Rigid, x: number[], c: Vec3, L: number): Rigid {
-  const w: Vec3 = [x[0] / L, x[1] / L, x[2] / L];
+/** Wendet den Parameterschritt x = (P·ω, v) mit Drehzentrum c auf T an. */
+function step(T: Rigid, x: number[], c: Vec3, P: number): Rigid {
+  const w: Vec3 = [x[0] / P, x[1] / P, x[2] / P];
   const th = len(w);
   const R: Mat3 = th > 1e-14 ? axisAngle(w, th) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const Tn = compose({ R, t: add(sub(c, rotate(R, c)), [x[3], x[4], x[5]]) }, T);
@@ -442,10 +435,58 @@ function refine(items: Item[], fl: boolean[], T0: Rigid, L: number, sw: number, 
 }
 
 /**
+ * Nachpolieren nur mit den harten Bedingungen (Gauß–Newton): entfernt die kleine Verfälschung durch
+ * die weichen Terme. Geschritten wird nur in steifen Richtungen; (fast) freie Richtungen bleiben, wo
+ * die weichen Terme sie hingelegt haben. Sonst schöbe Messrauschen das Teil dorthin, wo leicht schiefe
+ * Achsen zufällig am besten passen – bei fast parallelen Achsen u. U. Meter weit weg.
+ * Steif heißt wie in analyse(): Winkel zählen dafür mit dem Hebel P (Merkmalsausdehnung) statt L,
+ * sonst erschienen bei großem L neben den Winkeln selbst die Abstände als „weich".
+ */
+function polish(items: Item[], fl: boolean[], T0: Rigid, L: number, P: number, maxIter: number): Rigid {
+  let T = T0;
+  let ev = evaluate(items, fl, T, L, 0, P);
+  for (let it = 0; it < maxIter && ev.cost > 1e-30 * L * L; it++) {
+    const stiff = evaluate(items, fl, T, P, 0, P).A;
+    const { values, vectors } = symEigen([0, 1, 2, 3, 4, 5].map((i) => stiff.slice(i * 6, i * 6 + 6)));
+    const maxEig = Math.max(0, ...values);
+    if (!(maxEig > 0)) break;
+    // Gauß–Newton-Schritt im Unterraum der steifen Eigenrichtungen S: (SᵀAS)·y = −Sᵀg, x = S·y
+    const S = vectors.filter((_, k) => values[k] > FREE_TOL * maxEig);
+    const k = S.length;
+    const M = new Array(k * k).fill(0);
+    const b = S.map((s) => -s.reduce((acc, v, r) => acc + v * ev.g[r], 0));
+    for (let a = 0; a < k; a++)
+      for (let c = 0; c < k; c++)
+        for (let r = 0; r < 6; r++) for (let q = 0; q < 6; q++) M[a * k + c] += S[a][r] * ev.A[r * 6 + q] * S[c][q];
+    const y = k ? solveLinear(M, b, k) : null;
+    if (!y) break;
+    const x = [0, 0, 0, 0, 0, 0];
+    S.forEach((s, a) => {
+      for (let r = 0; r < 6; r++) x[r] += y[a] * s[r];
+    });
+    if (!(Math.hypot(...x) >= 1e-12 * P)) break;
+    // Schrittweite halbieren, bis die Kosten sinken
+    let next: { T: Rigid; ev: Evaluation } | null = null;
+    for (let h = 0, f = 1; h < 8 && !next; h++, f /= 2) {
+      const Tn = step(T, x.map((v) => v * f), ev.c, P);
+      const en = evaluate(items, fl, Tn, L, 0, P);
+      if (en.cost < ev.cost) next = { T: Tn, ev: en };
+    }
+    if (!next) break;
+    const gain = ev.cost - next.ev.cost;
+    T = next.T;
+    ev = next.ev;
+    if (gain <= 1e-14 * ev.cost) break;
+  }
+  return T;
+}
+
+/**
  * Geschlossene Näherung nach Horn über Hilfspunkte: Punkte direkt, Ebenen über Mittelpunkt und
  * Mittelpunkt + L·n (gegen −n), Achsen über Achspunkt und Achspunkt + L·d (Vorzeichen nach flip).
+ * Achsen mit skip[i] tragen nur ihren Punkt bei (Richtung noch unbekannt).
  */
-function closedForm(items: Item[], fl: boolean[], L: number): Rigid {
+function closedForm(items: Item[], fl: boolean[], L: number, skip?: boolean[]): Rigid {
   const P: Vec3[] = [];
   const Q: Vec3[] = [];
   let W: number[] = [];
@@ -454,7 +495,7 @@ function closedForm(items: Item[], fl: boolean[], L: number): Rigid {
     P.push(it.ps);
     Q.push(it.pd);
     W.push(it.kind === 'plane' && !it.ok ? w2 * 1e-3 : w2);
-    if (it.kind !== 'point' && it.ok) {
+    if (it.kind !== 'point' && it.ok && !skip?.[i]) {
       P.push(add(it.ps, scale(it.ds, L)));
       Q.push(add(it.pd, scale(targetDir(it, fl[i]), L)));
       W.push(w2);
@@ -464,43 +505,113 @@ function closedForm(items: Item[], fl: boolean[], L: number): Rigid {
   return solveRigid(P, Q, W);
 }
 
-/** Alle Kombinationen der offenen Achsrichtungen (zuerst ohne Umkehr). */
-function flipCombos(items: Item[]): boolean[][] {
-  const base = items.map((it) => it.kind === 'axis' && it.flip === true);
-  const open = items
-    .map((it, i) => (it.kind === 'axis' && it.ok && it.w > 0 && it.flip === undefined ? i : -1))
-    .filter((i) => i >= 0)
-    .slice(0, MAX_FLIP_AXES);
-  const out: boolean[][] = [];
-  for (let mask = 0; mask < 1 << open.length; mask++) {
-    const fl = base.slice();
-    open.forEach((i, j) => {
-      fl[i] = ((mask >> j) & 1) === 1;
-    });
-    out.push(fl);
-  }
-  return out;
+/** Achse einer Richtungsgruppe; rel = Richtung umgekehrt zur ersten Achse der Gruppe. */
+type GroupMember = { i: number; rel: boolean };
+
+interface FlipPlan {
+  /** Richtungskombinationen; die ersten `consistent` sind in sich stimmig. */
+  combos: boolean[][];
+  consistent: number;
+  /** Gruppen jenseits der Obergrenze: Richtung wird je Start aus der Näherungslage bestimmt. */
+  late: GroupMember[][];
 }
 
 /**
- * Startwerte: Startlage und geschlossene Lösung je Richtungskombination, danach um Normalen und
- * Achsen gedrehte Varianten (falls die Drehung darum unbestimmt oder die Näherung schlecht ist).
+ * Richtungskombinationen der Achsen ohne Vorgabe. Exakt gilt R·d_s,i = s_i·d_d,i; da Drehungen Winkel
+ * erhalten, folgt s_i·s_j = sign((d_s,i·d_s,j)·(d_d,i·d_d,j)), sobald zwei Achsen nicht (fast)
+ * senkrecht stehen. Solche Achsen bilden eine Gruppe mit nur einer freien Richtung (z. B. alle Stifte
+ * eines Flanschs, auch wenn die Flächenerkennung ihre Richtungen beliebig gewählt hat). Zuerst kommen
+ * alle Kombinationen der Gruppen, bei wenigen Achsen danach die übrigen (in sich widersprüchlichen)
+ * als schlechtere Alternativen.
  */
-function buildStarts(items: Item[], combos: boolean[][], L: number, init?: Rigid): { T: Rigid; fl: boolean[] }[] {
-  const starts: { T: Rigid; fl: boolean[] }[] = [];
-  const bases = combos.map((fl) => ({ T: closedForm(items, fl, L), fl }));
-  for (const b of bases) {
-    if (init) starts.push({ T: init, fl: b.fl });
-    starts.push(b);
-  }
-  const dirs = items.filter((it) => it.kind !== 'point' && it.ok && it.w > 0);
-  for (const deg of [180, 90, 270])
-    for (const it of dirs)
-      for (const b of bases) {
-        if (starts.length >= MAX_STARTS) return starts.slice(0, MAX_STARTS);
-        starts.push({ T: compose(rotationAbout(it.pd, it.dd, (deg * Math.PI) / 180), b.T), fl: b.fl });
+function flipPlan(items: Item[]): FlipPlan {
+  const base = items.map((it) => it.kind === 'axis' && it.flip === true);
+  const open = items
+    .map((it, i) => (it.kind === 'axis' && it.ok && it.w > 0 && it.flip === undefined ? i : -1))
+    .filter((i) => i >= 0);
+  const seen = new Set<number>();
+  const groups: GroupMember[][] = [];
+  for (const i0 of open) {
+    if (seen.has(i0)) continue;
+    seen.add(i0);
+    const g: GroupMember[] = [{ i: i0, rel: false }];
+    for (let k = 0; k < g.length; k++) {
+      const a = items[g[k].i];
+      for (const j of open) {
+        if (seen.has(j)) continue;
+        const cs = dot(a.ds, items[j].ds);
+        const cd = dot(a.dd, items[j].dd);
+        if (Math.min(Math.abs(cs), Math.abs(cd)) < LINK_COS) continue;
+        seen.add(j);
+        g.push({ i: j, rel: g[k].rel !== (cs * cd < 0) });
       }
-  return starts.slice(0, MAX_STARTS);
+    }
+    groups.push(g);
+  }
+  const enumerated = groups.slice(0, MAX_FLIP_GROUPS);
+  const combos: boolean[][] = [];
+  for (let mask = 0; mask < 1 << enumerated.length; mask++) {
+    const fl = base.slice();
+    enumerated.forEach((g, k) => {
+      for (const m of g) fl[m.i] = ((mask >> k) & 1) === 1 ? !m.rel : m.rel;
+    });
+    combos.push(fl);
+  }
+  const consistent = combos.length;
+  if (open.length <= MAX_FLIP_AXES) {
+    const known = new Set(combos.map((fl) => fl.map(Number).join('')));
+    for (let mask = 0; mask < 1 << open.length; mask++) {
+      const fl = base.slice();
+      open.forEach((i, k) => {
+        fl[i] = ((mask >> k) & 1) === 1;
+      });
+      if (!known.has(fl.map(Number).join(''))) combos.push(fl);
+    }
+  }
+  return { combos, consistent, late: groups.slice(MAX_FLIP_GROUPS) };
+}
+
+/**
+ * Geschlossene Lösung einer Kombination. Die Richtung jeder Gruppe jenseits der Obergrenze folgt aus
+ * einer Näherung ohne deren Richtungen (Mehrheit der Achsen der Gruppe).
+ */
+function baseStart(items: Item[], fl0: boolean[], late: GroupMember[][], L: number): { T: Rigid; fl: boolean[] } {
+  if (late.length === 0) return { T: closedForm(items, fl0, L), fl: fl0 };
+  const skip = items.map(() => false);
+  for (const g of late) for (const m of g) skip[m.i] = true;
+  const R = closedForm(items, fl0, L, skip).R;
+  const fl = fl0.slice();
+  for (const g of late) {
+    let vote = 0;
+    for (const m of g) vote += (m.rel ? -1 : 1) * dot(rotate(R, items[m.i].ds), items[m.i].dd);
+    for (const m of g) fl[m.i] = vote < 0 ? !m.rel : m.rel;
+  }
+  return { T: closedForm(items, fl, L), fl };
+}
+
+/**
+ * Startwerte: Startlage und geschlossene Lösung je Richtungskombination (stimmige zuerst), danach um
+ * Normalen und Achsen gedrehte Varianten (falls die Drehung darum unbestimmt oder die Näherung schlecht ist).
+ */
+function buildStarts(items: Item[], plan: FlipPlan, L: number, init?: Rigid): { T: Rigid; fl: boolean[] }[] {
+  const starts: { T: Rigid; fl: boolean[] }[] = [];
+  const push = (s: { T: Rigid; fl: boolean[] }) => {
+    if (starts.length < MAX_STARTS) starts.push(s);
+  };
+  const bases = plan.combos.map((fl) => baseStart(items, fl, plan.late, L));
+  const primary = bases.slice(0, plan.consistent);
+  const secondary = bases.slice(plan.consistent);
+  for (const b of primary) {
+    if (init) push({ T: init, fl: b.fl });
+    push(b);
+  }
+  for (const b of secondary) push(b);
+  const dirs = items.filter((it) => it.kind !== 'point' && it.ok && it.w > 0);
+  for (const group of [primary, secondary])
+    for (const deg of [180, 90, 270])
+      for (const it of dirs)
+        for (const b of group) push({ T: compose(rotationAbout(it.pd, it.dd, (deg * Math.PI) / 180), b.T), fl: b.fl });
+  return starts;
 }
 
 /** Restfehler der harten Bedingungen (RMS, mm bzw. Grad). */
@@ -535,8 +646,10 @@ const preferredDirs = (items: Item[]) => items.filter((it) => it.kind !== 'point
 /**
  * Zerlegt den Nullraum in anschauliche Bewegungen: reine Verschiebungen und Drehungen um Achsen
  * durch passende Punkte (der Punkt der Achse, der dem Schwerpunkt c der Merkmale am nächsten liegt).
+ * Punkt-, Ebenen- und Achsbedingungen lassen nie eine echte Schraubung frei; ein Schubanteil entlang
+ * einer Drehachse, der keine eigene freie Verschiebung ist, ist Rauschen und wird verworfen.
  */
-function niceMotions(basis: number[][], c: Vec3, L: number, prefs: Vec3[]): FreeMotion[] {
+function niceMotions(basis: number[][], c: Vec3, P: number, prefs: Vec3[]): FreeMotion[] {
   const k = basis.length;
   if (k === 0) return [];
   // Drehanteile trennen: Singulärwertzerlegung des Drehteils der Basis über die Gram-Matrix
@@ -548,8 +661,8 @@ function niceMotions(basis: number[][], c: Vec3, L: number, prefs: Vec3[]): Free
     const x = [0, 0, 0, 0, 0, 0];
     for (let i = 0; i < k; i++) for (let r = 0; r < 6; r++) x[r] += z[i] * basis[i][r];
     const v: Vec3 = [x[3], x[4], x[5]];
-    if (values[j] < 1e-8) trans.push(v);
-    else rots.push({ a: [x[0] / L, x[1] / L, x[2] / L], v });
+    if (values[j] < ROT_TOL) trans.push(v);
+    else rots.push({ a: [x[0] / P, x[1] / P, x[2] / P], v });
   });
   const tr = gramSchmidt(trans);
 
@@ -564,52 +677,74 @@ function niceMotions(basis: number[][], c: Vec3, L: number, prefs: Vec3[]): Free
     rotV.push(v);
   }
   const free: FreeMotion[] = [];
-  const screw: Vec3[] = [];
   for (const n of niceBasis(rotAxes, prefs)) {
     let v: Vec3 = [0, 0, 0];
     rotAxes.forEach((a, j) => {
       v = add(v, scale(rotV[j], dot(n, a)));
     });
-    // Geschwindigkeit in c ist v = −n × (q − c)  ⇒  q = c + n × v
+    // Geschwindigkeit in c ist v = −n × (q − c)  ⇒  q = c + n × v (der Anteil von v entlang n fällt weg)
     let q = add(c, cross(n, v));
     // Freie Verschiebungen quer zur Achse erlauben, die Achse durch den Punkt nahe c zu legen
     for (const t of gramSchmidt(tr.map((t) => sub(t, scale(n, dot(t, n)))))) q = add(q, scale(t, dot(sub(c, q), t)));
-    // Verbleibende Schraubung: Dreh- und Schubanteil getrennt melden
-    if (Math.abs(dot(n, v)) > 1e-4 * L) screw.push(n);
     free.push({ kind: 'rotate', point: q, axis: n });
   }
-  for (const t of niceBasis([...tr, ...screw], prefs)) free.push({ kind: 'translate', axis: t });
+  for (const t of niceBasis(tr, prefs)) free.push({ kind: 'translate', axis: t });
   return free;
 }
 
-/** Freie Bewegungen an der Lage T: Nullraum von JᵀJ der harten Bedingungen. */
-function analyse(items: Item[], fl: boolean[], T: Rigid, L: number): Analysis {
-  const ev = evaluate(items, fl, T, L, 0);
-  const A = [0, 1, 2, 3, 4, 5].map((i) => ev.A.slice(i * 6, i * 6 + 6));
+/**
+ * Freie Bewegungen an der Lage T. Jede Bedingung lässt genau die Bewegungen zu, die ihr Merkmal des
+ * festen Teils in sich überführen: Drehungen um den Zielpunkt; Verschieben in der Ebene und Drehen um
+ * ihre Normale; Drehen um die Achslinie und Verschieben entlang. Frei ist der Durchschnitt dieser
+ * Räume (bis auf FREE_TOL, damit Messrauschen nichts sperrt); die Kosten ändern sich entlang dieser
+ * Bewegungen nicht, auch wenn die Bedingungen nicht ganz erfüllt sind. (Der Nullraum der
+ * Gauß–Newton-Matrix an der Lösung taugt dafür nicht: bei leicht widersprüchlichen Merkmalen dreht
+ * sich der Restfehler mit, eine freie Drehung erschiene gesperrt.) Gewichte spielen keine Rolle, jede
+ * Bedingung mit Gewicht > 0 zählt. P = Merkmalsausdehnung.
+ */
+function analyse(items: Item[], T: Rigid, P: number): FreeMotion[] {
+  const A = [0, 1, 2, 3, 4, 5].map(() => [0, 0, 0, 0, 0, 0]);
+  const addRow = (j: number[]) => {
+    for (let a = 0; a < 6; a++) for (let b = 0; b < 6; b++) A[a][b] += j[a] * j[b];
+  };
+  const ys = items.map((it) => apply(T, it.ps));
+  let c: Vec3 = [0, 0, 0];
+  for (const y of ys) c = add(c, y);
+  c = scale(c, 1 / Math.max(1, ys.length));
+  // Punkt q (Welt) bewegt sich in Richtung m nicht: m·(v + ω × (q − c)) = 0
+  const posRow = (q: Vec3, m: Vec3) => {
+    const k = scale(cross(sub(q, c), m), 1 / P);
+    addRow([k[0], k[1], k[2], m[0], m[1], m[2]]);
+  };
+  items.forEach((it, i) => {
+    if (it.w === 0) return;
+    if (it.kind === 'point' || (it.kind === 'axis' && !it.ok)) {
+      for (const m of AXES) posRow(it.pd, m);
+      return;
+    }
+    // Ebene ohne Normale zieht nur weich
+    if (!it.ok) return;
+    // Richtung bleibt erhalten: ω × dd = 0
+    for (const m of AXES) addRow([...cross(it.dd, m), 0, 0, 0]);
+    // Fußpunkt der Fläche bzw. Achse beim beweglichen Teil
+    const h = dot(it.dd, sub(ys[i], it.pd));
+    if (it.kind === 'plane') posRow(sub(ys[i], scale(it.dd, h)), it.dd);
+    else {
+      const q = add(it.pd, scale(it.dd, h));
+      posRow(q, it.t1);
+      posRow(q, it.t2);
+    }
+  });
   const { values, vectors } = symEigen(A);
   const maxEig = Math.max(0, ...values);
-  const basis = vectors.filter((_, i) => values[i] <= NULL_TOL * maxEig);
-  return { free: niceMotions(basis, ev.c, L, preferredDirs(items)), basis, c: ev.c };
+  const basis = vectors.filter((_, i) => values[i] <= FREE_TOL * maxEig);
+  return niceMotions(basis, c, P, preferredDirs(items));
 }
 
 /** Gleiche Lage innerhalb der Toleranz (Drehung < 0,5°, Merkmalsschwerpunkt < 1e-3·L). */
 function sameTransform(A: Rigid, B: Rigid, cs: Vec3, L: number): boolean {
   const D = compose(B, invert(A));
   return len(rotationVector(D.R)) < SAME_ANGLE && dist(apply(A, cs), apply(B, cs)) < SAME_DIST * L;
-}
-
-/** Lässt sich T aus der Lösung a allein durch deren freie Bewegungen erreichen? */
-function inFreeSet(a: Analysis & { T: Rigid }, T: Rigid, L: number): boolean {
-  const { w, v } = logRigid(compose(T, invert(a.T)));
-  // Geschwindigkeit des Ursprungs → Geschwindigkeit in c
-  const vc = add(v, cross(w, a.c));
-  const x = [w[0] * L, w[1] * L, w[2] * L, vc[0], vc[1], vc[2]];
-  for (const b of a.basis) {
-    let s = 0;
-    for (let r = 0; r < 6; r++) s += x[r] * b[r];
-    for (let r = 0; r < 6; r++) x[r] -= s * b[r];
-  }
-  return Math.hypot(x[0], x[1], x[2]) / L < SAME_ANGLE && Math.hypot(x[3], x[4], x[5]) < SAME_DIST * L;
 }
 
 function validRigid(T: Rigid | undefined): T is Rigid {
@@ -625,34 +760,36 @@ function scaleOf(items: Item[], s: number | undefined): number {
 
 /**
  * Sucht die starre Transformation T (lokal → Welt des beweglichen Teils), die alle Bedingungen
- * erfüllt. Liefert verschiedene Lösungen, beste zuerst (z. B. beide Richtungen einer Achse);
- * Lösungen, die sich nur durch freie Bewegungen unterscheiden, werden zusammengefasst.
+ * erfüllt. Liefert verschiedene Lösungen, beste zuerst (z. B. beide Richtungen einer Achse), höchstens
+ * eine je Richtungskombination: bei festen Richtungen bilden die Lagen, die alle Bedingungen erfüllen,
+ * genau eine Bahn der freien Bewegungen. Weitere Minima derselben Kombination sind schlechtere lokale
+ * Minima, Kopien, die nur um eine freie Achse gedreht sind, oder Scheinlösungen weit weg (fast
+ * parallele Achsen).
  * Wirft nie: bei widersprüchlichen oder entarteten Eingaben gibt es die bestmögliche Näherung.
  */
 export function solveConstraints(cons: Constraint[], opts: ConstraintOptions = {}): ConstraintSolution[] {
   const items = prepare(Array.isArray(cons) ? cons : []);
   if (items.length === 0) return [];
   const L = scaleOf(items, opts.scale);
+  const Lf = charLength(items);
   const softWeight = typeof opts.softWeight === 'number' && Number.isFinite(opts.softWeight)
     ? Math.max(0, opts.softWeight)
     : 1e-3;
   const sw = Math.sqrt(softWeight);
   const init = validRigid(opts.init) ? { R: orthonormalize(opts.init.R), t: [...opts.init.t] as Vec3 } : undefined;
 
-  const starts = buildStarts(items, flipCombos(items), L, init);
-  const cands: { T: Rigid; fl: boolean[]; hard: number; cost: number; order: number }[] = [];
+  const starts = buildStarts(items, flipPlan(items), L, init);
+  const cands: { T: Rigid; fl: boolean[]; cost: number; order: number }[] = [];
   starts.forEach((s, order) => {
     let T = refine(items, s.fl, s.T, L, sw, 100, 1e-3);
-    // Nachpolieren nur mit harten Bedingungen: entfernt die kleine Verfälschung durch die weichen
-    // Terme. Die Schritte haben keinen Anteil im Nullraum, die Zentrierung bleibt also erhalten.
-    if (sw > 0) T = refine(items, s.fl, T, L, 0, 40, 1e-6);
+    // Verfälschung durch die weichen Terme in den steifen Richtungen entfernen
+    if (sw > 0) T = polish(items, s.fl, T, L, Lf, 40);
     if (!finiteRigid(T)) return;
-    const hard = evaluate(items, s.fl, T, L, 0).cost;
-    const cost = sw > 0 ? evaluate(items, s.fl, T, L, sw).cost : hard;
-    if (Number.isFinite(cost)) cands.push({ T, fl: s.fl, hard, cost, order });
+    const cost = evaluate(items, s.fl, T, L, sw).cost;
+    if (Number.isFinite(cost)) cands.push({ T, fl: s.fl, cost, order });
   });
 
-  // Sortieren; nahezu gleiche Kosten nach Startreihenfolge (Startlage und "ohne Umkehr" zuerst)
+  // Sortieren; nahezu gleiche Kosten nach Startreihenfolge (Startlage und stimmige Richtungen zuerst)
   const floor = 1e-12 * L * L;
   cands.sort((a, b) => a.cost - b.cost);
   const ranked: typeof cands = [];
@@ -667,20 +804,11 @@ export function solveConstraints(cons: Constraint[], opts: ConstraintOptions = {
   let cs: Vec3 = [0, 0, 0];
   for (const it of items) cs = add(cs, it.ps);
   cs = scale(cs, 1 / items.length);
-  const hardTol = (SAME_DIST * L) ** 2;
-  const worse = (c: { hard: number }, ref: { hard: number }) => c.hard > 2 * ref.hard + hardTol;
-  const accepted: (Analysis & (typeof cands)[number])[] = [];
+  const accepted: typeof cands = [];
   for (const c of ranked) {
     if (accepted.length >= MAX_SOLUTIONS) break;
-    // Deutlich schlechter als die beste Lösung: höchstens eine je neuer Richtungskombination
-    const poor = accepted.length > 0 && worse(c, accepted[0]);
-    const dup = accepted.some((a) => {
-      if (sameTransform(a.T, c.T, cs, L)) return true;
-      if (a.fl.some((f, i) => f !== c.fl[i])) return false;
-      // Gleiche Richtungen: gleiche Lösung bis auf freie Bewegungen, oder deutlich schlechter
-      return poor || inFreeSet(a, c.T, L) || worse(c, a);
-    });
-    if (!dup) accepted.push({ ...c, ...analyse(items, c.fl, c.T, L) });
+    const dup = accepted.some((a) => a.fl.every((f, i) => f === c.fl[i]) || sameTransform(a.T, c.T, cs, L));
+    if (!dup) accepted.push(c);
   }
 
   return accepted.map((a) => {
@@ -688,7 +816,7 @@ export function solveConstraints(cons: Constraint[], opts: ConstraintOptions = {
     items.forEach((it, i) => {
       flips[it.index] = a.fl[i];
     });
-    return { T: a.T, ...errors(items, a.fl, a.T), free: a.free, flips, cost: a.cost };
+    return { T: a.T, ...errors(items, a.fl, a.T), free: analyse(items, a.T, Lf), flips, cost: a.cost };
   });
 }
 
@@ -700,16 +828,15 @@ export function solveConstraints(cons: Constraint[], opts: ConstraintOptions = {
 export function evaluateConstraints(
   cons: Constraint[],
   T: Rigid,
-  opts: { flips?: boolean[]; scale?: number } = {},
+  opts: { flips?: boolean[] } = {},
 ): { distError: number; angleError: number; free: FreeMotion[] } {
   const items = prepare(Array.isArray(cons) ? cons : []);
   if (items.length === 0 || !validRigid(T)) return { distError: 0, angleError: 0, free: [] };
-  const L = scaleOf(items, opts.scale);
   const Tn = { R: orthonormalize(T.R), t: [...T.t] as Vec3 };
   const fl = items.map((it) => {
     if (it.kind !== 'axis') return false;
     const f = opts.flips?.[it.index] ?? it.flip;
     return typeof f === 'boolean' ? f : dot(rotate(Tn.R, it.ds), it.dd) < 0;
   });
-  return { ...errors(items, fl, Tn), free: analyse(items, fl, Tn, L).free };
+  return { ...errors(items, fl, Tn), free: analyse(items, Tn, charLength(items)) };
 }

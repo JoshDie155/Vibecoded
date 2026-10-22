@@ -9,9 +9,11 @@ import {
   type Rigid, type Vec3, add, apply, axisAngle, compose, dist, dot, jacobiEigen4, len, normalize, rotate,
   rotationAbout, scale, sub,
 } from '../src/math/align';
-import { type Constraint, type ConstraintSolution, evaluateConstraints, solveConstraints } from '../src/math/constraints';
+import {
+  type Constraint, type ConstraintOptions, type ConstraintSolution, evaluateConstraints, solveConstraints,
+} from '../src/math/constraints';
 import { type FreeMotion, applyMotion } from '../src/math/motion';
-import { box, concat, cylinder, transformPositions } from './helpers/meshes';
+import { box, concat, cylinder, dPeg, dRing, transformPositions } from './helpers/meshes';
 
 const deg = (d: number) => (d * Math.PI) / 180;
 const neg = (a: Vec3): Vec3 => [-a[0], -a[1], -a[2]];
@@ -328,6 +330,17 @@ describe('solveConstraints – Größenordnungen und Lage im Raum', () => {
     expect(rotations(rpp[0]).length).toBe(1);
   });
 
+  it('Zapfen ⌀ 1 mm in sehr großer Szene (scale bis 30 000) mit starker Zentrierung: trotzdem exakt', () => {
+    const peg = [plane(T0, [0, 0, 0], [0, 0, -1], [0.8, 0.3, 0]), axis(T0, [0, 0, -0.5], [0, 0, 1], -0.3)];
+    for (const s of [300, 3000, 30000]) {
+      const r = solveConstraints(peg, { scale: s, softWeight: 0.1 });
+      expect(r[0].flips).toEqual([false, false]);
+      expect(violation(peg, r[0].T, r[0].flips)).toBeLessThan(1e-9);
+      expect(rotations(r[0]).length).toBe(1);
+      expect(r[0].free.length).toBe(1);
+    }
+  });
+
   it('Teile 10 m vom Ursprung entfernt: exakt und mit freien Bewegungen', () => {
     const Tfar: Rigid = { R: axisAngle([1, 2, 3], 2.5), t: [20000, -15000, 8000] };
     const o: Vec3 = [5000, 5000, 5000];
@@ -593,6 +606,31 @@ describe('solveConstraints – viele Achsen ohne Richtungsangabe', () => {
     expect(s.angleError).toBeLessThan(1e-6);
     expect(s.flips).toEqual([true, false, true, false, true, false, true, false]);
   });
+
+  it('zwei Stiftgruppen (senkrecht zueinander) mit je drei Stiften, Richtungen beliebig erkannt: exakt', () => {
+    const pins: Constraint[] = [];
+    for (let i = 0; i < 3; i++) pins.push(axis(T0, [i * 12, 0, 0], [0, 0, 1], 1, i === 1));
+    for (let i = 0; i < 3; i++) pins.push(axis(T0, [0, 5 + i * 9, 20], [1, 0, 0], -2, i !== 0));
+    const r = solveConstraints(pins);
+    expect(r[0].distError).toBeLessThan(1e-6);
+    expect(r[0].angleError).toBeLessThan(1e-6);
+    expect(r[0].flips).toEqual([false, true, false, false, true, true]);
+    expect(probeErr(r[0].T, T0, [[0, 0, 0], [30, 30, 30]])).toBeLessThan(1e-5);
+    expect(r[0].free).toEqual([]);
+  });
+
+  it('sechs Achsen, die sich paarweise widersprechen (mehr Gruppen als durchprobiert werden): kein Absturz', () => {
+    const S: Vec3[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const D: Vec3[] = [[1, 0, 0], [1, 0, 0], [1, 0, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]];
+    const cons: Constraint[] = S.map((d, i) => ({ kind: 'axis', src: { p: [i * 5, 0, 0], d }, dst: { p: [0, i * 5, 0], d: D[i] } }));
+    const r = solveConstraints(cons);
+    expect(r.length).toBeGreaterThan(0);
+    for (const s of r) {
+      expectRotation(s.T);
+      expect(s.flips.length).toBe(6);
+      expect(Number.isFinite(s.distError) && Number.isFinite(s.angleError) && Number.isFinite(s.cost)).toBe(true);
+    }
+  });
 });
 
 describe('solveConstraints – leichtes Messrauschen (Merkmale nie ganz exakt)', () => {
@@ -656,13 +694,54 @@ describe('solveConstraints – leichtes Messrauschen (Merkmale nie ganz exakt)',
       { kind: 'axis', src: { p: [25, 0, 0], d: [0, 0, 1] }, dst: { p: apply(T0, [25, 0, 0]), d: rotate(T0.R, [Math.sin(e), 0, Math.cos(e)]) } },
     ];
     const r = solveConstraints(cons);
-    expect(r[0].distError).toBeLessThan(1e-6);
+    // Die Lage entlang der Stifte legt nur das Rauschen von 0,005° fest: sie gilt als frei und wird
+    // weich zentriert (statt dorthin zu rutschen, wo die schiefen Achsen zufällig exakt passen)
+    expect(r[0].distError).toBeLessThan(1e-3);
+    expect(translations(r[0]).length).toBe(1);
+    expect(rotations(r[0])).toEqual([]);
     // Jede angebotene Lösung muss in der Nähe der Gegenstücke bleiben (die Stifte sind 25 mm auseinander)
     for (const s of fitting(r)) {
       for (const c of cons) if (c.kind === 'axis') expect(dist(apply(s.T, c.src.p), c.dst.p)).toBeLessThan(100);
     }
     // Als passend dürfen höchstens die beiden Steckrichtungen angeboten werden
     expect(fitting(r).length).toBeLessThanOrEqual(2);
+  });
+
+  it('Welle in zwei Lagern, Achsen 0,005° windschief erkannt: bleibt mittig, Drehen und Schieben frei', () => {
+    // Die Stelle, an der die beiden fast gleichen Achslinien am besten passen, liegt zufällig weit weg
+    const e = deg(0.005);
+    const cons: Constraint[] = [
+      axis(T0, [0, 0, 0], [0, 0, 1], 2),
+      {
+        kind: 'axis',
+        src: { p: [0, 0, 40], d: [0, 0, 1] },
+        dst: { p: add(apply(T0, [0, 0, 37]), rotate(T0.R, [0, 0.001, 0])), d: rotate(T0.R, [Math.sin(e), 0, Math.cos(e)]) },
+      },
+    ];
+    const r = solveConstraints(cons);
+    for (const s of fitting(r)) {
+      // Weich zentriert: Wellenmitte 0,5 mm neben der Mitte zwischen den Lagern (Versatz +2 und −3 mm)
+      expect(dist(apply(s.T, [0, 0, 20]), apply(T0, [0, 0, 20]))).toBeLessThan(1);
+      expect(s.distError).toBeLessThan(0.01);
+      expect(rotations(s).length).toBe(1);
+      expect(translations(s).length).toBe(1);
+    }
+    expect(fitting(r).map((s) => s.flips.join())).toEqual(['false,false', 'true,true']);
+  });
+
+  it('Gegenfläche 0,5° verkippt (kein Rauschen mehr): Drehung um die Achse ist gesperrt', () => {
+    // Keine starre Drehung oder Verschiebung erhält hier den (Kompromiss-)Sitz: Drehen um die Achse
+    // verkippt die Schulter gegen die Fläche, Drehen um die Winkelhalbierende hebt sie an
+    const e = deg(0.5);
+    const cons: Constraint[] = [
+      { kind: 'plane', src: { p: [-8, -5, 0], n: [0, 0, -1] }, dst: { p: apply(T0, [-8, -5, 0]), n: rotate(T0.R, [Math.sin(e), 0, Math.cos(e)]) } },
+      axis(T0, [0, 0, -4], [0, 0, 1], -6),
+    ];
+    const s = solveConstraints(cons)[0];
+    expect(s.flips).toEqual([false, false]);
+    expect(s.distError).toBeLessThan(1e-6);
+    expect(s.angleError).toBeCloseTo(0.25, 2);
+    expect(s.free).toEqual([]);
   });
 
   it('Ebene und Punkt 0,1 mm neben der Ebene: keine zweite Lösung, die nur um die freie Achse gedreht ist', () => {
@@ -718,7 +797,7 @@ describe('solveConstraints – Bedingungen aus Dreiecksnetzen', () => {
 });
 
 describe('solveConstraints – Laufzeit', () => {
-  it('viele Bedingungen und alle Startwerte: deutlich unter einer Zehntelsekunde', () => {
+  it('viele Bedingungen und alle Startwerte: unter 150 ms (gemessen etwa 20 ms)', () => {
     const worst = [
       axis(T0, [0, 0, 0], [0, 0, 1], 1, true), axis(T0, [20, 0, 0], [0, 0, 1], 2),
       axis(T0, [0, 20, 0], [0, 0, 1], -1, true), axis(T0, [20, 20, 3], [0, 0, 1], 0),
@@ -751,5 +830,197 @@ describe('evaluateConstraints – Randfälle', () => {
       expect(e.free.length).toBe(1);
       expect(e.free[0].kind).toBe('rotate');
     }
+  });
+});
+
+describe('solveConstraints – Richtungen, Umkehrungen und echte Mehrdeutigkeiten', () => {
+  it('flip ausdrücklich angegeben: genau eine Lösung mit der verlangten Achsrichtung', () => {
+    const base = axis(T0, [3, 1, -2], [0, 0, 1], 4);
+    if (base.kind !== 'axis') throw new Error();
+    for (const flip of [false, true]) {
+      const r = solveConstraints([{ ...base, flip }]);
+      expect(r.length).toBe(1);
+      expect(r[0].flips).toEqual([flip]);
+      expect(dot(rotate(r[0].T.R, base.src.d), normalize(base.dst.d))).toBeCloseTo(flip ? -1 : 1, 9);
+      expect(lineDist(apply(r[0].T, base.src.p), base.dst.p, base.dst.d)).toBeLessThan(1e-9);
+      expect(rotations(r[0]).length).toBe(1);
+      expect(translations(r[0]).length).toBe(1);
+    }
+  });
+
+  it('Achse und Punkt neben der Achse: beide Steckrichtungen exakt, jeweils eindeutig', () => {
+    const cons = [axis(T0, [0, 0, 0], [0, 0, 1], 5), point(T0, [6, 2, 3])];
+    const r = solveConstraints(cons);
+    const exact = r.filter((s) => s.distError < 1e-8 && s.angleError < 1e-6);
+    expect(exact.map((s) => s.flips[0]).sort()).toEqual([false, true]);
+    for (const s of exact) {
+      expect(violation(cons, s.T, s.flips)).toBeLessThan(1e-8);
+      expect(s.free).toEqual([]);
+    }
+    expect(probeErr(exact.find((s) => !s.flips[0])!.T, T0, [[0, 0, 0], [10, 10, 10]])).toBeLessThan(1e-6);
+  });
+
+  it('Kreuzgelenk (zwei sich schneidende, senkrechte Achsen): alle vier Richtungskombinationen exakt', () => {
+    const cons = [axis(T0, [0, 0, 0], [0, 0, 1], 2), axis(T0, [0, 0, 10], [1, 0, 0], -3)];
+    const exact = solveConstraints(cons).filter((s) => s.distError < 1e-8 && s.angleError < 1e-6);
+    expect(exact.map((s) => s.flips.map(Number).join('')).sort()).toEqual(['00', '01', '10', '11']);
+    for (const s of exact) {
+      expect(violation(cons, s.T, s.flips)).toBeLessThan(1e-8);
+      expect(s.free).toEqual([]);
+    }
+  });
+
+  it('windschiefe, senkrechte Achsen: nur beide oder keine umgekehrt sind exakt', () => {
+    const cons = [axis(T0, [0, 0, 0], [0, 0, 1], 2), axis(T0, [0, 5, 10], [1, 0, 0], -3)];
+    const r = solveConstraints(cons);
+    const exact = r.filter((s) => s.distError < 1e-8 && s.angleError < 1e-6);
+    expect(exact.map((s) => s.flips.map(Number).join('')).sort()).toEqual(['00', '11']);
+    for (const s of exact) expect(s.free).toEqual([]);
+    expect(probeErr(r[0].T, T0, [[0, 0, 0], [10, 10, 10]])).toBeLessThan(1e-6);
+  });
+
+  it('Schulter mit zwei symmetrischen Stiften: jeder Stift bleibt in seiner Bohrung, genau eine exakte Lösung', () => {
+    // Die um 180° gedrehte Lage vertauscht die Stifte und erfüllt die gegebenen Paarungen daher nicht
+    const cons = [
+      plane(T0, [12.5, 0, 0], [0, 0, -1], [3, 4, 0]),
+      axis(T0, [0, 0, 0], [0, 0, 1], -3),
+      axis(T0, [25, 0, 0], [0, 0, 1], -3),
+    ];
+    const r = solveConstraints(cons);
+    const exact = r.filter((s) => s.distError < 1e-8 && s.angleError < 1e-6);
+    expect(exact.length).toBe(1);
+    expect(r[0].flips).toEqual([false, false, false]);
+    expect(r[0].free).toEqual([]);
+    expect(probeErr(r[0].T, T0, [[0, 0, 0], [25, 0, 0], [0, 20, 0]])).toBeLessThan(1e-6);
+  });
+
+  it('Winkel an Wand (zwei senkrechte Ebenen): nur Verschieben entlang der Kante', () => {
+    const r = rng(11);
+    for (let k = 0; k < 20; k++) {
+      const T = randomRigid(r, 300);
+      const cons = [plane(T, [5, 5, 0], [0, 0, -1], [3, 2, 0]), plane(T, [0, 5, 5], [-1, 0, 0], [0, -4, 1])];
+      const s = solveConstraints(cons)[0];
+      expect(violation(cons, s.T, s.flips)).toBeLessThan(1e-8);
+      expect(rotations(s)).toEqual([]);
+      expect(translations(s).length).toBe(1);
+      expect(Math.abs(dot(translations(s)[0].axis, rotate(T.R, [0, 1, 0])))).toBeCloseTo(1, 9);
+      expectMotionsKeep(cons, s);
+    }
+  });
+
+  it('Quader in Nut mit 0,2 mm Spiel: mittig, Restfehler 0,1 mm, Bewegungen in der Nut bleiben frei', () => {
+    const nx = rotate(T0.R, [1, 0, 0]);
+    const cons: Constraint[] = [
+      { kind: 'plane', src: { p: [0, 0, 0], n: [-1, 0, 0] }, dst: { p: add(apply(T0, [0, 3, 2]), scale(nx, -0.1)), n: nx } },
+      { kind: 'plane', src: { p: [10, 0, 0], n: [1, 0, 0] }, dst: { p: add(apply(T0, [10, -4, 1]), scale(nx, 0.1)), n: neg(nx) } },
+    ];
+    const r = solveConstraints(cons);
+    expect(r.length).toBe(1);
+    const s = r[0];
+    expect(s.distError).toBeCloseTo(0.1, 6);
+    expect(s.angleError).toBeLessThan(1e-6);
+    // Mittig in der Nut
+    expect(Math.abs(dot(sub(apply(s.T, [5, 0, 0]), apply(T0, [5, 0, 0])), nx))).toBeLessThan(1e-6);
+    expect(translations(s).length).toBe(2);
+    expect(rotations(s).length).toBe(1);
+    expect(Math.abs(dot(rotations(s)[0].axis, nx))).toBeCloseTo(1, 9);
+    for (const m of s.free) {
+      const e = evaluateConstraints(cons, applyMotion(s.T, m, m.kind === 'rotate' ? 1 : 7));
+      expect(e.distError).toBeCloseTo(0.1, 6);
+      expect(e.angleError).toBeLessThan(1e-6);
+    }
+  });
+
+  it('drei Punkte auf einer Linie: Drehung um diese Linie bleibt frei', () => {
+    const cons = [point(T0, [0, 0, 0]), point(T0, [10, 5, 0]), point(T0, [30, 15, 0])];
+    const s = solveConstraints(cons)[0];
+    expect(s.free.length).toBe(1);
+    const rot = rotations(s)[0];
+    expect(Math.abs(dot(rot.axis, normalize(rotate(T0.R, [2, 1, 0]))))).toBeCloseTo(1, 9);
+    expect(lineDist(apply(T0, [0, 0, 0]), rot.point, rot.axis)).toBeLessThan(1e-6);
+    expectMotionsKeep(cons, s);
+  });
+
+  it('zwei gleiche Punkte wirken wie einer: drei orthonormale Drehachsen durch den Punkt', () => {
+    const c = point(T0, [3, 4, 5]);
+    if (c.kind !== 'point') throw new Error();
+    const r = solveConstraints([c, c]);
+    expect(r.length).toBe(1);
+    const rot = rotations(r[0]);
+    expect(rot.length).toBe(3);
+    expect(translations(r[0])).toEqual([]);
+    for (let i = 0; i < 3; i++) {
+      expect(len(rot[i].axis)).toBeCloseTo(1, 9);
+      expect(dist(rot[i].point, c.dst)).toBeLessThan(1e-6);
+      for (let j = i + 1; j < 3; j++) expect(Math.abs(dot(rot[i].axis, rot[j].axis))).toBeLessThan(1e-9);
+    }
+  });
+
+  it('ungültige Optionen werden ignoriert (scale, softWeight, init)', () => {
+    const cons = [plane(T0, [0, 0, 0], [0, 0, -1], [15, -4, 0]), point(T0, [10, 4, 0]), point(T0, [-6, 12, 0])];
+    const bad: ConstraintOptions[] = [
+      { scale: NaN }, { scale: -5 }, { scale: 0 }, { scale: Infinity }, { softWeight: NaN }, { softWeight: -1 },
+      { init: { R: [NaN, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0] } },
+      { init: { R: [2, 0, 0, 0, 2, 0, 0, 0, 2], t: [1, 2, 3] } },
+      // Spiegelung statt Drehung
+      { init: { R: [1, 0, 0, 0, 1, 0, 0, 0, -1], t: [0, 0, 0] } },
+    ];
+    for (const opts of bad) {
+      const r = solveConstraints(cons, opts);
+      expect(r.length).toBeGreaterThan(0);
+      expectRotation(r[0].T);
+      expect(probeErr(r[0].T, T0, [[0, 0, 0], [10, 10, 10]])).toBeLessThan(1e-6);
+      expect(r[0].free).toEqual([]);
+    }
+  });
+});
+
+describe('solveConstraints – D-Zapfen aus Dreiecksnetzen', () => {
+  it('D-Zapfen in D-Bohrung (Schulter, Achse, Abflachung): eindeutige, exakte Lage', () => {
+    const r = rng(31);
+    for (let k = 0; k < 5; k++) {
+      // 12 Segmente: die D-Bohrung des Hilfsnetzes wird immer so fein geteilt, Zapfen und Bohrung passen dann genau
+      const pegLocal = transformPositions(dPeg(4, 2.5, 10, 12), new THREE.Matrix4().makeTranslation(8, 5, 5));
+      const moving = concat(box(40, 30, 5), pegLocal);
+      const plateLocal = dRing(20, 4, 2.5, 6, 12);
+      const Tring = randomRigid(r, 300);
+      const nearPeg = (c: Vec3) => Math.hypot(c[0] - 8, c[1] - 5) < 4.5;
+      const nearHole = (c: Vec3) => Math.hypot(c[0], c[1]) < 4.5;
+      const shoulder = selectTris(moving, (n, c) => n[2] > 0.99 && Math.abs(c[2] - 5) < 1e-3);
+      const mantle = selectTris(moving, (n, c) => Math.abs(n[2]) < 0.1 && n[0] < 0.9 && nearPeg(c));
+      const pegFlat = selectTris(moving, (n, c) => n[0] > 0.99 && nearPeg(c));
+      const bottom = selectTris(plateLocal, (n) => n[2] < -0.99);
+      const bore = selectTris(plateLocal, (n, c) => Math.abs(n[2]) < 0.1 && n[0] > -0.9 && nearHole(c));
+      const holeFlat = selectTris(plateLocal, (n, c) => n[0] < -0.99 && nearHole(c));
+      expect(pegFlat.length).toBeGreaterThan(0);
+      expect(holeFlat.length).toBeGreaterThan(0);
+      const toWorld = (pl: { p: Vec3; n: Vec3 }) => ({ p: apply(Tring, pl.p), n: rotate(Tring.R, pl.n) });
+      const toWorldAxis = (a: { p: Vec3; d: Vec3 }) => ({ p: apply(Tring, a.p), d: rotate(Tring.R, a.d) });
+      const cons: Constraint[] = [
+        { kind: 'plane', src: planeOf(moving, shoulder), dst: toWorld(planeOf(plateLocal, bottom)) },
+        { kind: 'axis', src: axisOf(moving, mantle), dst: toWorldAxis(axisOf(plateLocal, bore)) },
+        { kind: 'plane', src: planeOf(moving, pegFlat), dst: toWorld(planeOf(plateLocal, holeFlat)) },
+      ];
+      const ok = fitting(solveConstraints(cons, { scale: 300 }));
+      expect(ok.length).toBe(1);
+      const Ttrue = compose(Tring, { R: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [-8, -5, -5] });
+      expect(probeErr(ok[0].T, Ttrue, [[8, 5, 5], [8, 5, 15], [20, 15, 0], [-20, -15, 0]])).toBeLessThan(1e-5);
+      expect(ok[0].free).toEqual([]);
+    }
+  });
+});
+
+describe('evaluateConstraints – freie Verschiebungen', () => {
+  it('nach Verschieben in der Ebene: weiterhin zwei Verschiebungen und eine Drehung, kein Fehler', () => {
+    const c = plane(T0, [4, -2, 0], [0, 0, -1], [7, 3, 0]);
+    const s = solveConstraints([c])[0];
+    let T = s.T;
+    for (const m of translations(s)) T = applyMotion(T, m, 25);
+    T = applyMotion(T, rotations(s)[0], deg(130));
+    const e = evaluateConstraints([c], T);
+    expect(e.distError).toBeLessThan(1e-9);
+    expect(e.angleError).toBeLessThan(1e-6);
+    expect(e.free.filter((m) => m.kind === 'translate').length).toBe(2);
+    expect(e.free.filter((m) => m.kind === 'rotate').length).toBe(1);
   });
 });

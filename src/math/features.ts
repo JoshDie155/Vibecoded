@@ -23,14 +23,17 @@ export interface Topology {
   areas: Float32Array;
   /** Schwerpunkt je Dreieck (3 pro Dreieck). */
   centroids: Float32Array;
-  /** Nachbar über die Kanten (v0v1, v1v2, v2v0); -1 bei offenem Rand oder mehrdeutiger Kante. */
+  /**
+   * Nachbar über die Kanten (v0v1, v1v2, v2v0); -1 bei offenem Rand oder mehrdeutiger Kante.
+   * Ein doppelt gespeichertes Dreieck zählt dabei nicht mit, es übernimmt die Nachbarn des Originals.
+   */
   neighbors: Int32Array;
   /** Nummer des verschweißten Eckpunkts je Dreiecksecke (3 pro Dreieck). */
   vertIds: Int32Array;
   /** Position je verschweißtem Eckpunkt (3 pro Punkt). */
   vertPos: Float32Array;
   vertCount: number;
-  /** Diagonale des umschließenden Quaders (Bezugsgröße für Toleranzen). */
+  /** Diagonale des umschließenden Quaders (Bezugsgröße für Toleranzen, nur endliche Koordinaten). */
   diag: number;
 }
 
@@ -67,7 +70,7 @@ export interface CylinderFeature {
   hole: boolean;
   /** Abgedeckter Winkel um die Achse in Radiant (2π = voller Zylinder). */
   arc: number;
-  /** Restabweichung der Eckpunkte vom Zylinder. */
+  /** Restabweichung der Eckpunkte vom Zylinder (flächengewichtet). */
   rms: number;
   area: number;
 }
@@ -98,6 +101,9 @@ export const FEATURE_DEFAULTS = { planeAngleDeg: 1.5, smoothAngleDeg: 35, maxTri
 
 const DEG = Math.PI / 180;
 const TWO_PI = 2 * Math.PI;
+/** Rundungsfehler von Float32-Koordinaten (großzügig), bezogen auf den größten Koordinatenbetrag. */
+const FLOAT_EPS = 4e-7;
+
 /** Zylinder: Normalen weichen höchstens um diesen Winkel von der Senkrechten zur Achse ab. */
 const CYL_AXIS_SIN = Math.sin(4 * DEG);
 /**
@@ -110,19 +116,52 @@ const CYL_MAX_TILT_SIN = Math.sin(1 * DEG);
 const CYL_RADIAL_COS = Math.cos(30 * DEG);
 /** Startregion der Zylinderschätzung: Normalen innerhalb dieses Winkels zur Klick-Normale. */
 const CYL_LOCAL_COS = Math.cos(35 * DEG);
-/** Zylinder: Toleranz beim Wachsen (relativ zum Radius), damit auch leicht verrauschte Netze zusammenhängen. */
-const CYL_GROW_TOL = 0.02;
+/** Startregion: höchstens so viele Dreiecke (nächstgelegene zuerst). */
+const LOCAL_MAX = 20000;
 /**
- * Zylinder: erlaubte Restabweichung der fertigen Region (relativ zum Radius). Eckpunkte echter
- * Zylinder liegen exakt auf dem Mantel; Streifen von Kegeln oder Kugeln, die nur bis an die
- * Wachstumstoleranz passen, liegen deutlich darüber (typisch 0,3–0,7 %).
+ * Wachstumstoleranz = Vielfaches der Restabweichung der letzten Anpassung. Bei sauber facettierten
+ * Netzen ist diese praktisch null, dann gilt nur die Rechengenauigkeit: tangential anschließende
+ * Verrundungen, Kugelkappen usw. liegen schon in der ersten Facettenreihe deutlich daneben und
+ * bleiben draußen. Bei verrauschten Netzen wächst die Toleranz mit dem Rauschen.
  */
-const CYL_MAX_RMS = 0.002;
+const CYL_GROW_K = 4;
+/** Obergrenze der Wachstumstoleranz (relativ zum Radius). */
+const CYL_GROW_MAX = 0.05;
+/** Untergrenze der Wachstumstoleranz (relativ zum Radius), zusätzlich zum Float32-Rundungsfehler. */
+const CYL_EPS_REL = 2e-5;
+const GROW_ITER = 8;
+/** Restabweichung, bis zu der ein Zylinder ohne weitere Prüfung als exakt gilt (relativ zum Radius). */
+const CYL_EXACT_RMS = 1e-4;
+/** Größte erlaubte Restabweichung verrauschter Zylinder (relativ zum Radius). */
+const CYL_MAX_RMS = 0.02;
+/**
+ * Verrauschte Zylinder: höchstens dieser Anteil der Abweichung darf sich durch einen über die
+ * Höhe veränderlichen Radius erklären lassen (Kegel, Kugel, Tonne). Zufälliges Rauschen erklärt
+ * sich so nur zu einem kleinen Teil.
+ */
+const STRUCT_MAX = 0.5;
+const STRUCT_MIN_POINTS = 24;
 const CYL_MIN_ARC = 45 * DEG;
-/** Achsvorschläge aus Kreuzprodukten: so viele nahe Dreiecke ansehen, höchstens so viele Vorschläge. */
-const CAND_NEAR = 48;
-const CAND_MAX = 8;
+/** Achsschätzung: Mindestschwelle für die Neigung einer Normalen gegen die Achse. */
+const AXIS_CUT_MIN = Math.sin(0.25 * DEG);
+/** Kanten zwischen Dreiecken mit fast gleicher Normale sagen nichts über die Achse aus. */
+const CREASE_COS = Math.cos(0.02 * DEG);
 const CAND_SAME_COS = Math.cos(3 * DEG);
+
+/** Ebene: Abstand der Schwerpunkte von der Ebene (relativ zur Diagonale des Netzes). */
+const PLANE_DIST_REL = 2e-4;
+/** Ebene: Abweichung der Eckpunkte von der Ebene, bezogen auf die kleinere Ausdehnung der Fläche. */
+const FLAT_REL = 2e-4;
+/** Übergänge in gekrümmte Nachbarflächen: so viele Randkanten werden untersucht. */
+const JUNCTION_SAMPLES = 12;
+const JUNCTION_MAX = 20000;
+/**
+ * Knick zwischen einer ebenen Region und ihrer Nachbarfacette, gemessen an dem Knick, den eine
+ * Facette derselben Krümmung hätte: Facetten liegen bei etwa 1, ebene Flächen, an die eine Rundung
+ * tangential anschließt, bei höchstens 0,5.
+ */
+const FACET_RATIO = 0.7;
+const PARALLEL_COS = Math.cos(0.05 * DEG);
 const CIRCLE_MAX_RMS = 0.01;
 const CIRCLE_MIN_POINTS = 8;
 const SURFACE_COS = Math.cos(15 * DEG);
@@ -234,12 +273,16 @@ function weld(positions: Float32Array, corners: number, tol: number) {
 
 /**
  * Baut die Nachbarschaft der Dreiecke auf (Laufzeit linear in der Dreieckszahl).
+ * Zusammengefallene Dreiecke, Dreiecke mit ungültigen Koordinaten und doppelt gespeicherte
+ * Dreiecke (gleiche Ecken im gleichen Umlaufsinn) zählen bei der Suche nach Kantennachbarn nicht mit.
  * @param weldTol Eckpunkte mit kleinerem Abstand gelten als gleich (Standard: 1e-5 · Diagonale)
  */
 export function buildTopology(positions: Float32Array, weldTol?: number): Topology {
   const triCount = Math.floor(positions.length / 9);
   const corners = triCount * 3;
 
+  // Umschließender Quader nur aus endlichen Koordinaten (ein einziger Punkt im Unendlichen
+  // würde sonst alle relativen Toleranzen verderben)
   let minX = Infinity;
   let minY = Infinity;
   let minZ = Infinity;
@@ -250,6 +293,7 @@ export function buildTopology(positions: Float32Array, weldTol?: number): Topolo
     const x = positions[i];
     const y = positions[i + 1];
     const z = positions[i + 2];
+    if (!Number.isFinite(x + y + z)) continue;
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
     if (y < minY) minY = y;
@@ -258,7 +302,7 @@ export function buildTopology(positions: Float32Array, weldTol?: number): Topolo
     if (z > maxZ) maxZ = z;
   }
   const d = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ);
-  const diag = triCount > 0 && Number.isFinite(d) ? d : 0;
+  const diag = Number.isFinite(d) ? d : 0;
   const tol = weldTol !== undefined && weldTol > 0 ? weldTol : Math.max(diag * 1e-5, 1e-9);
 
   const { vertIds, vertCount, firstCorner } = weld(positions, corners, tol);
@@ -274,15 +318,18 @@ export function buildTopology(positions: Float32Array, weldTol?: number): Topolo
   const normals = new Float32Array(corners);
   const areas = new Float32Array(triCount);
   const centroids = new Float32Array(corners);
+  // Dreiecke ohne Nachbarschaft: zusammengefallen oder mit ungültigen Koordinaten
+  const skip = new Uint8Array(triCount);
   // Dreiecke, die flacher als diese Höhe sind, haben keine verlässliche Normale
   const minHeight = Math.max(diag * 1e-7, 1e-12);
-  const collapsed = (t: number) =>
-    vertIds[3 * t] === vertIds[3 * t + 1] || vertIds[3 * t + 1] === vertIds[3 * t + 2] || vertIds[3 * t] === vertIds[3 * t + 2];
   for (let t = 0; t < triCount; t++) {
     const o = 9 * t;
     const ax = positions[o], ay = positions[o + 1], az = positions[o + 2];
     const bx = positions[o + 3], by = positions[o + 4], bz = positions[o + 5];
     const cx = positions[o + 6], cy = positions[o + 7], cz = positions[o + 8];
+    const i0 = vertIds[3 * t], i1 = vertIds[3 * t + 1], i2 = vertIds[3 * t + 2];
+    const finite = Number.isFinite(ax + ay + az + bx + by + bz + cx + cy + cz);
+    if (!finite || i0 === i1 || i1 === i2 || i0 === i2) skip[t] = 1;
     // n = (c - b) × (a - b)
     const ux = cx - bx, uy = cy - by, uz = cz - bz;
     const vx = ax - bx, vy = ay - by, vz = az - bz;
@@ -290,49 +337,69 @@ export function buildTopology(positions: Float32Array, weldTol?: number): Topolo
     const ny = uz * vx - ux * vz;
     const nz = ux * vy - uy * vx;
     const l = Math.hypot(nx, ny, nz);
-    areas[t] = Number.isFinite(l) ? l / 2 : 0;
+    areas[t] = finite ? l / 2 : 0;
     centroids[3 * t] = (ax + bx + cx) / 3;
     centroids[3 * t + 1] = (ay + by + cy) / 3;
     centroids[3 * t + 2] = (az + bz + cz) / 3;
     const wx = ax - cx, wy = ay - cy, wz = az - cz;
     const maxEdge = Math.sqrt(Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz, wx * wx + wy * wy + wz * wz));
-    if (!collapsed(t) && l > minHeight * maxEdge && Number.isFinite(l)) {
+    if (!skip[t] && l > minHeight * maxEdge) {
       normals[3 * t] = nx / l;
       normals[3 * t + 1] = ny / l;
       normals[3 * t + 2] = nz / l;
     }
   }
 
-  // Dreiecke je Eckpunkt (kompakte Listen); zusammengefallene Dreiecke bleiben außen vor
+  // Dreiecke je Eckpunkt (kompakte Listen, aufsteigend sortiert)
   const start = new Int32Array(vertCount + 1);
   for (let t = 0; t < triCount; t++) {
-    if (collapsed(t)) continue;
+    if (skip[t]) continue;
     for (let k = 0; k < 3; k++) start[vertIds[3 * t + k] + 1]++;
   }
   for (let v = 0; v < vertCount; v++) start[v + 1] += start[v];
   const fill = start.slice(0, vertCount);
   const inc = new Int32Array(start[vertCount]);
   for (let t = 0; t < triCount; t++) {
-    if (collapsed(t)) continue;
+    if (skip[t]) continue;
     for (let k = 0; k < 3; k++) inc[fill[vertIds[3 * t + k]]++] = t;
+  }
+  const degree = (v: number) => start[v + 1] - start[v];
+
+  // Doppelt gespeicherte Dreiecke: gleiche Ecken in gleicher Reihenfolge wie ein früheres Dreieck.
+  // Sie würden sonst alle drei Kanten mehrdeutig machen und die Fläche zerteilen.
+  const dupOf = new Int32Array(triCount).fill(-1);
+  for (let t = 0; t < triCount; t++) {
+    if (skip[t]) continue;
+    const a = vertIds[3 * t], b = vertIds[3 * t + 1], c = vertIds[3 * t + 2];
+    const x = degree(a) <= degree(b) ? (degree(a) <= degree(c) ? a : c) : degree(b) <= degree(c) ? b : c;
+    for (let i = start[x]; i < start[x + 1]; i++) {
+      const s = inc[i];
+      if (s >= t) break;
+      let j = 0;
+      while (j < 3 && vertIds[3 * s + j] !== a) j++;
+      if (j < 3 && vertIds[3 * s + ((j + 1) % 3)] === b && vertIds[3 * s + ((j + 2) % 3)] === c) {
+        dupOf[t] = dupOf[s] >= 0 ? dupOf[s] : s;
+        break;
+      }
+    }
   }
 
   // Nachbar über jede Kante: das einzige andere Dreieck, das beide Endpunkte enthält
   const neighbors = new Int32Array(corners).fill(-1);
   for (let t = 0; t < triCount; t++) {
-    if (collapsed(t)) continue;
+    if (skip[t] || dupOf[t] >= 0) continue;
     for (let k = 0; k < 3; k++) {
       const u = vertIds[3 * t + k];
       const w = vertIds[3 * t + (k === 2 ? 0 : k + 1)];
       // Liste des Eckpunkts mit weniger Dreiecken durchsuchen (Fächer mit vielen Dreiecken)
-      const uSmaller = start[u + 1] - start[u] <= start[w + 1] - start[w];
+      const uSmaller = degree(u) <= degree(w);
       const x = uSmaller ? u : w;
       const y = uSmaller ? w : u;
       let found = -1;
       let count = 0;
       for (let i = start[x]; i < start[x + 1]; i++) {
         const s = inc[i];
-        if (s === t) continue;
+        if (s === t || dupOf[s] >= 0) continue;
         if (vertIds[3 * s] === y || vertIds[3 * s + 1] === y || vertIds[3 * s + 2] === y) {
           count++;
           found = s;
@@ -340,6 +407,14 @@ export function buildTopology(positions: Float32Array, weldTol?: number): Topolo
       }
       if (count === 1) neighbors[3 * t + k] = found;
     }
+  }
+  // Duplikate übernehmen die Nachbarn ihres Originals (Kante für Kante)
+  for (let t = 0; t < triCount; t++) {
+    const o = dupOf[t];
+    if (o < 0) continue;
+    let j = 0;
+    while (vertIds[3 * o + j] !== vertIds[3 * t]) j++;
+    for (let k = 0; k < 3; k++) neighbors[3 * t + k] = neighbors[3 * o + ((j + k) % 3)];
   }
 
   return { triCount, positions, normals, areas, centroids, neighbors, vertIds, vertPos, vertCount, diag };
@@ -353,10 +428,17 @@ export function buildTopology(positions: Float32Array, weldTol?: number): Topolo
 interface Scratch {
   visit: Int32Array;
   ref: Int32Array;
+  /** Zugehörigkeit zur glatten Region (Zylindersuche) bzw. zur ebenen Region. */
   member: Int32Array;
+  /** Zweite Zugehörigkeit (fertige Zylinderregion, Nachbarfacetten einer Ebene). */
+  group: Int32Array;
   vmark: Int32Array;
+  /** Gewichte je Eckpunkt (Flächenanteil), nur für die Eckpunkte der aktuellen Region gültig. */
+  vw: Float64Array;
   /** Fortlaufender Zähler: jede Markierung bekommt einen neuen Wert, alte werden so ungültig. */
   stamp: number;
+  /** Größter Betrag einer Koordinate (Bezugsgröße für Float32-Rundungsfehler). */
+  coordMag: number;
 }
 
 interface Ctx {
@@ -370,12 +452,20 @@ const scratchCache = new WeakMap<Topology, Scratch>();
 function makeCtx(topo: Topology, limit: number): Ctx {
   let s = scratchCache.get(topo);
   if (!s || s.stamp > 2e9) {
+    let coordMag = 0;
+    for (let i = 0; i < topo.vertPos.length; i++) {
+      const a = Math.abs(topo.vertPos[i]);
+      if (a > coordMag && a < Infinity) coordMag = a;
+    }
     s = {
       visit: new Int32Array(topo.triCount),
       ref: new Int32Array(topo.triCount),
       member: new Int32Array(topo.triCount),
+      group: new Int32Array(topo.triCount),
       vmark: new Int32Array(topo.vertCount),
+      vw: new Float64Array(topo.vertCount),
       stamp: 0,
+      coordMag,
     };
     scratchCache.set(topo, s);
   }
@@ -393,6 +483,9 @@ const ndot = (topo: Topology, s: number, t: number) => {
 };
 const ndotv = (topo: Topology, t: number, v: Vec3) =>
   topo.normals[3 * t] * v[0] + topo.normals[3 * t + 1] * v[1] + topo.normals[3 * t + 2] * v[2];
+/** Kante k des Dreiecks t als Paar verschweißter Eckpunkte. */
+const edgeVerts = (topo: Topology, t: number, k: number): [number, number] =>
+  [topo.vertIds[3 * t + k], topo.vertIds[3 * t + (k === 2 ? 0 : k + 1)]];
 
 interface Region {
   /** Dreiecke in Reihenfolge der Breitensuche (nahe am Startdreieck zuerst). */
@@ -428,10 +521,10 @@ function flood(ctx: Ctx, seed: number, limit: number, accept: (ref: number, to: 
   return { tris, stamp };
 }
 
-/** Markiert eine Dreiecksmenge in `member` und gibt die Markierung zurück. */
-function markMembers(ctx: Ctx, tris: number[]): number {
+/** Markiert eine Dreiecksmenge im Feld `arr` (member oder group) und gibt die Markierung zurück. */
+function mark(ctx: Ctx, arr: Int32Array, tris: number[]): number {
   const stamp = ++ctx.s.stamp;
-  for (const t of tris) ctx.s.member[t] = stamp;
+  for (const t of tris) arr[t] = stamp;
   return stamp;
 }
 
@@ -453,6 +546,21 @@ function regionVertices(ctx: Ctx, tris: number[]): number[] {
   return out;
 }
 
+/** Eckpunkte einer Region mit Gewicht (ein Drittel der Fläche jedes angrenzenden Dreiecks der Region). */
+function weightedVertices(ctx: Ctx, tris: number[]): { verts: number[]; weights: Float64Array } {
+  const { vertIds, areas } = ctx.topo;
+  const { vw } = ctx.s;
+  const verts = regionVertices(ctx, tris);
+  for (const v of verts) vw[v] = 0;
+  for (const t of tris) {
+    const a = areas[t] / 3;
+    vw[vertIds[3 * t]] += a;
+    vw[vertIds[3 * t + 1]] += a;
+    vw[vertIds[3 * t + 2]] += a;
+  }
+  return { verts, weights: Float64Array.from(verts, (v) => vw[v]) };
+}
+
 function areaOf(topo: Topology, tris: number[]): number {
   let a = 0;
   for (const t of tris) a += topo.areas[t];
@@ -467,6 +575,7 @@ function regionStats(topo: Topology, tris: number[]): { area: number; centroid: 
   let nx = 0, ny = 0, nz = 0;
   for (const t of tris) {
     const a = areas[t];
+    if (!(a > 0)) continue;
     A += a;
     cx += a * centroids[3 * t];
     cy += a * centroids[3 * t + 1];
@@ -477,6 +586,18 @@ function regionStats(topo: Topology, tris: number[]): { area: number; centroid: 
   }
   const centroid: Vec3 = A > 0 ? [cx / A, cy / A, cz / A] : centroidOf(topo, tris[0]);
   return { area: A, centroid, normal: normalize([nx, ny, nz]) };
+}
+
+/** Ausdehnung einer Punktmenge entlang einer Richtung. */
+function extentAlong(topo: Topology, verts: number[], d: Vec3): number {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of verts) {
+    const x = topo.vertPos[3 * v] * d[0] + topo.vertPos[3 * v + 1] * d[1] + topo.vertPos[3 * v + 2] * d[2];
+    if (x < lo) lo = x;
+    if (x > hi) hi = x;
+  }
+  return hi > lo ? hi - lo : 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -536,19 +657,30 @@ function eigenSym3(m: number[]): { values: Vec3; vectors: [Vec3, Vec3, Vec3] } {
   };
 }
 
-/** Löst ein 3x3-Gleichungssystem (Cramersche Regel), null wenn (fast) singulär. */
-function solve3(m: number[], b: Vec3): Vec3 | null {
-  const det =
-    m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
-  const scaleRef = Math.abs(m[0] * m[4] * m[8]) + 1e-300;
-  if (!(Math.abs(det) > 1e-14 * scaleRef)) return null;
-  const x =
-    (b[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (b[1] * m[8] - m[5] * b[2]) + m[2] * (b[1] * m[7] - m[4] * b[2])) / det;
-  const y =
-    (m[0] * (b[1] * m[8] - m[5] * b[2]) - b[0] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * b[2] - b[1] * m[6])) / det;
-  const z =
-    (m[0] * (m[4] * b[2] - b[1] * m[7]) - m[1] * (m[3] * b[2] - b[1] * m[6]) + b[0] * (m[3] * m[7] - m[4] * m[6])) / det;
-  return [x, y, z];
+/** Löst A·x = b für eine n×n-Matrix (zeilenweise, wird überschrieben); null wenn singulär. */
+function solveLinear(A: Float64Array, b: Float64Array, n: number): Float64Array | null {
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(A[r * n + c]) > Math.abs(A[p * n + c])) p = r;
+    if (!(Math.abs(A[p * n + c]) > 1e-300)) return null;
+    if (p !== c) {
+      for (let k = 0; k < n; k++) [A[c * n + k], A[p * n + k]] = [A[p * n + k], A[c * n + k]];
+      [b[c], b[p]] = [b[p], b[c]];
+    }
+    for (let r = c + 1; r < n; r++) {
+      const f = A[r * n + c] / A[c * n + c];
+      if (f === 0) continue;
+      for (let k = c; k < n; k++) A[r * n + k] -= f * A[c * n + k];
+      b[r] -= f * b[c];
+    }
+  }
+  const x = new Float64Array(n);
+  for (let r = n - 1; r >= 0; r--) {
+    let s = b[r];
+    for (let k = r + 1; k < n; k++) s -= A[r * n + k] * x[k];
+    x[r] = s / A[r * n + r];
+  }
+  return x;
 }
 
 interface Circle2 {
@@ -558,43 +690,51 @@ interface Circle2 {
   rms: number;
 }
 
-function circleRms(xs: ArrayLike<number>, ys: ArrayLike<number>, cx: number, cy: number, r: number): number {
+function circleRms(xs: ArrayLike<number>, ys: ArrayLike<number>, ws: ArrayLike<number> | null, cx: number, cy: number, r: number): number {
   let s = 0;
+  let W = 0;
   for (let i = 0; i < xs.length; i++) {
+    const w = ws ? ws[i] : 1;
     const e = Math.hypot(xs[i] - cx, ys[i] - cy) - r;
-    s += e * e;
+    s += w * e * e;
+    W += w;
   }
-  return Math.sqrt(s / xs.length);
+  return W > 0 ? Math.sqrt(s / W) : 0;
 }
 
 /**
- * Kreis durch Punkte in der Ebene: algebraische Lösung (Kåsa, um den Schwerpunkt zentriert),
- * danach geometrisch verfeinert (Gauß-Newton auf die Abstände zum Kreis).
+ * Kreis durch Punkte in der Ebene, optional gewichtet: algebraische Lösung (Kåsa, um den
+ * Schwerpunkt zentriert), danach geometrisch verfeinert (Gauß-Newton auf die Abstände zum Kreis).
  */
-function fitCircle2D(xs: ArrayLike<number>, ys: ArrayLike<number>): Circle2 | null {
+function fitCircle2D(xs: ArrayLike<number>, ys: ArrayLike<number>, ws: ArrayLike<number> | null = null): Circle2 | null {
   const n = xs.length;
   if (n < 3) return null;
+  let W = 0;
   let mx = 0;
   let my = 0;
   for (let i = 0; i < n; i++) {
-    mx += xs[i];
-    my += ys[i];
+    const w = ws ? ws[i] : 1;
+    W += w;
+    mx += w * xs[i];
+    my += w * ys[i];
   }
-  mx /= n;
-  my /= n;
+  if (!(W > 0)) return null;
+  mx /= W;
+  my /= W;
   let suu = 0, suv = 0, svv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
   for (let i = 0; i < n; i++) {
+    const w = ws ? ws[i] : 1;
     const u = xs[i] - mx;
     const v = ys[i] - my;
     const uu = u * u;
     const vv = v * v;
-    suu += uu;
-    suv += u * v;
-    svv += vv;
-    suuu += uu * u;
-    svvv += vv * v;
-    suvv += u * vv;
-    svuu += v * uu;
+    suu += w * uu;
+    suv += w * u * v;
+    svv += w * vv;
+    suuu += w * uu * u;
+    svvv += w * vv * v;
+    suvv += w * u * vv;
+    svuu += w * v * uu;
   }
   const det = suu * svv - suv * suv;
   // Punkte (fast) auf einer Geraden: kein Kreis bestimmbar
@@ -605,33 +745,34 @@ function fitCircle2D(xs: ArrayLike<number>, ys: ArrayLike<number>): Circle2 | nu
   const vc = (b2 * suu - b1 * suv) / det;
   let cx = uc + mx;
   let cy = vc + my;
-  let r = Math.sqrt(uc * uc + vc * vc + (suu + svv) / n);
-  let rms = circleRms(xs, ys, cx, cy, r);
+  let r = Math.sqrt(uc * uc + vc * vc + (suu + svv) / W);
+  let rms = circleRms(xs, ys, ws, cx, cy, r);
 
   for (let it = 0; it < 10 && rms > 1e-12 * r; it++) {
-    const J = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-    const g: Vec3 = [0, 0, 0];
+    const J = new Float64Array(9);
+    const g = new Float64Array(3);
     for (let i = 0; i < n; i++) {
+      const w = ws ? ws[i] : 1;
       const dx = xs[i] - cx;
       const dy = ys[i] - cy;
       const d = Math.hypot(dx, dy);
-      if (d < 1e-12) continue;
+      if (d < 1e-12 || !(w > 0)) continue;
       const j0 = -dx / d;
       const j1 = -dy / d;
       const e = d - r;
-      J[0] += j0 * j0; J[1] += j0 * j1; J[2] -= j0;
-      J[4] += j1 * j1; J[5] -= j1;
-      J[8] += 1;
-      g[0] -= j0 * e; g[1] -= j1 * e; g[2] += e;
+      J[0] += w * j0 * j0; J[1] += w * j0 * j1; J[2] -= w * j0;
+      J[4] += w * j1 * j1; J[5] -= w * j1;
+      J[8] += w;
+      g[0] -= w * j0 * e; g[1] -= w * j1 * e; g[2] += w * e;
     }
     J[3] = J[1]; J[6] = J[2]; J[7] = J[5];
-    const step = solve3(J, g);
+    const step = solveLinear(J, g, 3);
     if (!step) break;
     const ncx = cx + step[0];
     const ncy = cy + step[1];
     const nr = r + step[2];
     if (!(nr > 0)) break;
-    const nrms = circleRms(xs, ys, ncx, ncy, nr);
+    const nrms = circleRms(xs, ys, ws, ncx, ncy, nr);
     if (!(nrms < rms)) break;
     const gain = rms - nrms;
     cx = ncx;
@@ -651,31 +792,64 @@ function median(values: Float64Array): number {
   return s.length ? s[s.length >> 1] : 0;
 }
 
-/** Kreisanpassung mit Ausreißerbehandlung: weit abliegende Punkte werden schrittweise verworfen. */
-function robustCircle(xs: Float64Array, ys: Float64Array): Circle2 | null {
-  let c = fitCircle2D(xs, ys);
+/** Gewichteter Median (bei vielen Werten aus einer gleichmäßigen Stichprobe). */
+function weightedMedian(values: Float64Array, ws: Float64Array): number {
+  const step = Math.max(1, Math.floor(values.length / 4096));
+  const idx: number[] = [];
+  let total = 0;
+  for (let i = 0; i < values.length; i += step) {
+    if (!(ws[i] > 0)) continue;
+    idx.push(i);
+    total += ws[i];
+  }
+  idx.sort((a, b) => values[a] - values[b]);
+  let acc = 0;
+  for (const i of idx) {
+    acc += ws[i];
+    if (acc >= total / 2) return values[i];
+  }
+  return 0;
+}
+
+/**
+ * Gewichtete Kreisanpassung mit Ausreißerbehandlung: Punkte, die deutlich weiter vom Kreis
+ * entfernt sind als die typische (gewichtete) Abweichung, werden schrittweise verworfen.
+ * `floor` ist die kleinste Abweichung, die überhaupt als Ausreißer gilt (Rechengenauigkeit).
+ */
+function robustCircle(xs: Float64Array, ys: Float64Array, ws: Float64Array, floor: number): Circle2 | null {
+  let c = fitCircle2D(xs, ys, ws);
   let px = xs;
   let py = ys;
-  for (let it = 0; it < 3; it++) {
-    if (!c || c.rms <= 1e-3 * c.r) break;
+  let pw = ws;
+  let total = 0;
+  for (let i = 0; i < ws.length; i++) total += ws[i];
+  for (let it = 0; it < 4 && c; it++) {
     const res = new Float64Array(px.length);
     for (let i = 0; i < px.length; i++) res[i] = Math.abs(Math.hypot(px[i] - c.cx, py[i] - c.cy) - c.r);
-    const thr = Math.max(3 * median(res), 1e-3 * c.r);
+    const thr = Math.max(3 * 1.4826 * weightedMedian(res, pw), floor + CYL_EPS_REL * c.r);
     let count = 0;
-    for (let i = 0; i < res.length; i++) if (res[i] <= thr) count++;
-    if (count < 3 || count === px.length) break;
+    let kept = 0;
+    for (let i = 0; i < res.length; i++) {
+      if (res[i] > thr) continue;
+      count++;
+      kept += pw[i];
+    }
+    if (count === px.length || count < 3 || kept < 0.3 * total) break;
     const qx = new Float64Array(count);
     const qy = new Float64Array(count);
+    const qw = new Float64Array(count);
     for (let i = 0, j = 0; i < res.length; i++) {
       if (res[i] > thr) continue;
       qx[j] = px[i];
-      qy[j++] = py[i];
+      qy[j] = py[i];
+      qw[j++] = pw[i];
     }
-    const c2 = fitCircle2D(qx, qy);
+    const c2 = fitCircle2D(qx, qy, qw);
     if (!c2) break;
     c = c2;
     px = qx;
     py = qy;
+    pw = qw;
   }
   return c;
 }
@@ -691,6 +865,7 @@ interface CylModel {
   /** Punkt auf der Achse. */
   c0: Vec3;
   r: number;
+  /** Gewichtete Restabweichung der bei der Anpassung verwendeten Eckpunkte (Maß für das Rauschen). */
   rms: number;
   hole: boolean;
   /** cos der größten erlaubten Winkelbreite eines Dreiecks um die Achse. */
@@ -701,11 +876,18 @@ interface CylModel {
   tilt2: number;
 }
 
-/** Flächengewichtete Streumatrix Σ A·n·nᵀ der Normalen (zeilenweise 3x3). */
-function normalScatter(topo: Topology, tris: number[]): number[] {
+/** Kleinste Abweichung, die bei diesem Zylinder über der Rechengenauigkeit liegt. */
+const cylEps = (ctx: Ctx, m: CylModel) => CYL_EPS_REL * m.r + FLOAT_EPS * ctx.s.coordMag;
+
+/** Toleranz für Eckpunkte beim Wachsen: aus dem Rauschen der letzten Anpassung, mindestens die Rechengenauigkeit. */
+const growTol = (ctx: Ctx, m: CylModel) => Math.min(CYL_GROW_MAX * m.r, Math.max(cylEps(ctx, m), CYL_GROW_K * m.rms));
+
+/** Flächengewichtete Streumatrix Σ A·n·nᵀ der Normalen (zeilenweise 3x3), optional nur für ausgewählte Dreiecke. */
+function normalScatter(topo: Topology, tris: number[], use?: (t: number) => boolean): number[] {
   const { normals, areas } = topo;
   let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
   for (const t of tris) {
+    if (use && !use(t)) continue;
     const a = areas[t];
     const x = normals[3 * t];
     const y = normals[3 * t + 1];
@@ -714,6 +896,55 @@ function normalScatter(topo: Topology, tris: number[]): number[] {
     yy += a * y * y; yz += a * y * z; zz += a * z * z;
   }
   return [xx, xy, xz, xy, yy, yz, xz, yz, zz];
+}
+
+/**
+ * Achse aus der Normalenstreuung (die Normalen eines Zylinders stehen senkrecht zur Achse, also
+ * Richtung mit der kleinsten Streuung). Dreiecke, deren Normale deutlich stärker gegen die Achse
+ * geneigt ist als üblich (erste Reihe einer tangential anschließenden Verrundung), werden
+ * schrittweise weggelassen. Bei zu kleiner Streuung (schmaler Streifen) bleibt der Vorschlag.
+ */
+function robustAxis(topo: Topology, tris: number[], guess: Vec3): { axis: Vec3; spread: number; tilt2: number } | null {
+  let axis = guess;
+  let spread = 0;
+  let cut = Infinity;
+  for (let it = 0; it < 4; it++) {
+    const a0 = axis;
+    const c0 = cut;
+    const M = normalScatter(topo, tris, (t) => Math.abs(ndotv(topo, t, a0)) <= c0);
+    const { values, vectors } = eigenSym3(M);
+    const trace = values[0] + values[1] + values[2];
+    if (!(trace > 0)) {
+      if (it === 0) return null;
+      break;
+    }
+    spread = values[1] / trace;
+    if (spread > 2e-3) axis = dot(vectors[0], axis) < 0 ? scale(vectors[0], -1) : vectors[0];
+    // Neue Schwelle aus der mittleren Neigung der bisher verwendeten Dreiecke
+    let s2 = 0;
+    let sw = 0;
+    for (const t of tris) {
+      const a = topo.areas[t];
+      const nd = ndotv(topo, t, a0);
+      if (!(a > 0) || Math.abs(nd) > c0) continue;
+      const na = ndotv(topo, t, axis);
+      s2 += a * na * na;
+      sw += a;
+    }
+    const next = Math.max(AXIS_CUT_MIN, 2.5 * Math.sqrt(s2 / sw));
+    if (next >= cut && dot(axis, a0) > 1 - 1e-14) break;
+    cut = next;
+  }
+  let s2 = 0;
+  let sw = 0;
+  for (const t of tris) {
+    const a = topo.areas[t];
+    if (!(a > 0)) continue;
+    const na = ndotv(topo, t, axis);
+    s2 += a * na * na;
+    sw += a;
+  }
+  return { axis, spread, tilt2: sw > 0 ? s2 / sw : 0 };
 }
 
 /** Zwischenspeicher: Lage eines Punkts im Zylindersystem (x, y senkrecht zur Achse, h entlang der Achse). */
@@ -777,34 +1008,41 @@ function onCylinder(topo: Topology, t: number, m: CylModel, tolR: number): boole
   return span >= m.spanCos;
 }
 
+/** Bohrung oder Zapfen und typische Winkelbreite der Dreiecke (für die Breitenbegrenzung). */
+function orientModel(topo: Topology, tris: number[], m: CylModel, maxSpan: number): void {
+  let s = 0;
+  const spans: number[] = [];
+  const step = Math.max(1, Math.floor(tris.length / 1000));
+  for (let i = 0; i < tris.length; i++) {
+    const t = tris[i];
+    if (isDegenerate(topo, t)) continue;
+    const nr = radialNormal(topo, t, m);
+    if (Number.isNaN(nr)) continue;
+    s += topo.areas[t] * nr;
+    if (i % step === 0) {
+      const sc = cornersOnCylinder(topo, t, m, Infinity);
+      if (sc >= -1) spans.push(Math.acos(Math.min(1, sc)));
+    }
+  }
+  m.hole = s < 0;
+  const typical = spans.length ? median(Float64Array.from(spans)) : maxSpan;
+  m.spanCos = Math.cos(Math.min(maxSpan, Math.max(4 * typical, 2 * DEG)));
+}
+
 /**
- * Passt einen Zylinder an eine Dreiecksmenge an: Achse aus der Normalenstreuung (die Normalen
- * eines Zylinders stehen senkrecht zur Achse, also Richtung mit der kleinsten Streuung), danach
- * Kreis durch die in die Ebene senkrecht zur Achse projizierten Eckpunkte.
+ * Passt einen Zylinder an eine Dreiecksmenge an: Achse aus der Normalenstreuung, danach Kreis durch
+ * die in die Ebene senkrecht zur Achse projizierten Eckpunkte (flächengewichtet, mit Ausreißerbehandlung).
  */
 function fitCylinderModel(ctx: Ctx, tris: number[], axisGuess: Vec3, maxSpan: number): CylModel | null {
   const topo = ctx.topo;
-  const M = normalScatter(topo, tris);
-  const { values, vectors } = eigenSym3(M);
-  const trace = values[0] + values[1] + values[2];
-  if (!(trace > 0)) return null;
-  const spread = values[1] / trace;
-  // Bei zu kleiner Streuung (sehr schmaler Streifen) ist die Achse unbestimmt: Vorschlag behalten
-  let axis = axisGuess;
-  if (spread > 2e-3) axis = dot(vectors[0], axisGuess) < 0 ? scale(vectors[0], -1) : vectors[0];
-  const Ma: Vec3 = [
-    M[0] * axis[0] + M[1] * axis[1] + M[2] * axis[2],
-    M[3] * axis[0] + M[4] * axis[1] + M[5] * axis[2],
-    M[6] * axis[0] + M[7] * axis[1] + M[8] * axis[2],
-  ];
+  const ax = robustAxis(topo, tris, axisGuess);
+  if (!ax) return null;
+  const { axis, spread, tilt2 } = ax;
   const [e1, e2] = basis(axis);
-
-  const verts = regionVertices(ctx, tris);
+  const { verts, weights } = weightedVertices(ctx, tris);
   if (verts.length < 3) return null;
   // Erst im Hilfssystem mit Ursprung im ersten Eckpunkt rechnen, danach den Kreismittelpunkt übernehmen
-  const model: CylModel = {
-    axis, e1, e2, c0: vertexOf(topo, verts[0]), r: 0, rms: 0, hole: false, spanCos: -1, spread, tilt2: dot(axis, Ma) / trace,
-  };
+  const model: CylModel = { axis, e1, e2, c0: vertexOf(topo, verts[0]), r: 0, rms: 0, hole: false, spanCos: -1, spread, tilt2 };
   const xs = new Float64Array(verts.length);
   const ys = new Float64Array(verts.length);
   for (let i = 0; i < verts.length; i++) {
@@ -812,82 +1050,238 @@ function fitCylinderModel(ctx: Ctx, tris: number[], axisGuess: Vec3, maxSpan: nu
     xs[i] = p[0];
     ys[i] = p[1];
   }
-  const c = robustCircle(xs, ys);
+  const c = robustCircle(xs, ys, weights, FLOAT_EPS * ctx.s.coordMag);
   if (!c || !(c.r > 0)) return null;
   model.c0 = add(model.c0, add(scale(e1, c.cx), scale(e2, c.cy)));
   model.r = c.r;
   model.rms = c.rms;
-
-  // Zapfen (Normalen nach außen) oder Bohrung (zur Achse hin); typische Winkelbreite der Dreiecke
-  let s = 0;
-  const spans: number[] = [];
-  const step = Math.max(1, Math.floor(tris.length / 1000));
-  for (let i = 0; i < tris.length; i++) {
-    const t = tris[i];
-    if (isDegenerate(topo, t)) continue;
-    const nr = radialNormal(topo, t, model);
-    if (Number.isNaN(nr)) continue;
-    s += topo.areas[t] * nr;
-    if (i % step === 0) {
-      const sc = cornersOnCylinder(topo, t, model, Infinity);
-      if (sc >= -1) spans.push(Math.acos(Math.min(1, sc)));
-    }
-  }
-  model.hole = s < 0;
-  const typical = spans.length ? median(Float64Array.from(spans)) : maxSpan;
-  model.spanCos = Math.cos(Math.min(maxSpan, Math.max(4 * typical, 2 * DEG)));
+  orientModel(topo, tris, model, maxSpan);
   return model;
 }
 
+interface AxisCandidate {
+  axis: Vec3;
+  /** Richtung einer Kante zwischen zwei Facetten: bei sauber facettierten Zylindern exakt die Achse. */
+  exact: boolean;
+}
+
 /**
- * Vorschläge für die Zylinderachse: aus der Normalenstreuung der ganzen glatten Region (sauberer
- * Zylinder) und aus Kreuzprodukten der Klick-Normale mit Normalen naher Dreiecke (lokale
- * Krümmungsrichtung, hilft wenn die glatte Region über Verrundungen in andere Flächen übergeht).
+ * Vorschläge für die Zylinderachse: Kanten des Startdreiecks zu nicht koplanaren Nachbarn (bei
+ * facettierten Zylindern laufen diese Kanten exakt parallel zur Achse), Normalenstreuung der
+ * nahen Umgebung und Normalenstreuung der ganzen glatten Region.
  */
-function axisCandidates(topo: Topology, seed: number, smooth: number[]): Vec3[] {
-  const out: Vec3[] = [];
-  const push = (v: Vec3) => {
+function axisCandidates(ctx: Ctx, seed: number, smooth: number[], inSmooth: number): AxisCandidate[] {
+  const topo = ctx.topo;
+  const out: AxisCandidate[] = [];
+  const push = (v: Vec3, exact: boolean) => {
     const l = len(v);
     if (!(l > 1e-9)) return;
     const a = scale(v, 1 / l);
-    if (out.some((b) => Math.abs(dot(a, b)) > CAND_SAME_COS)) return;
-    out.push(a);
+    if (out.some((b) => Math.abs(dot(a, b.axis)) > CAND_SAME_COS)) return;
+    out.push({ axis: a, exact });
   };
-  push(eigenSym3(normalScatter(topo, smooth)).vectors[0]);
-  const n0 = normalOf(topo, seed);
-  const cosMin = Math.cos(DEG);
-  for (let i = 1; i < smooth.length && i < CAND_NEAR && out.length < CAND_MAX; i++) {
-    const t = smooth[i];
-    if (isDegenerate(topo, t)) continue;
-    const c = ndot(topo, seed, t);
-    if (c > cosMin || c < 0.5) continue;
-    push(cross(n0, normalOf(topo, t)));
+  for (let k = 0; k < 3; k++) {
+    const nb = topo.neighbors[3 * seed + k];
+    if (nb < 0 || ctx.s.member[nb] !== inSmooth || isDegenerate(topo, nb) || ndot(topo, seed, nb) > CREASE_COS) continue;
+    const [u, w] = edgeVerts(topo, seed, k);
+    push(sub(vertexOf(topo, w), vertexOf(topo, u)), true);
+  }
+  const cosLocal = CYL_LOCAL_COS;
+  const near = flood(ctx, seed, Math.min(ctx.limit, LOCAL_MAX), (_r, to) =>
+    ctx.s.member[to] === inSmooth && (isDegenerate(topo, to) || ndot(topo, to, seed) >= cosLocal)).tris;
+  push(eigenSym3(normalScatter(topo, near)).vectors[0], false);
+  push(eigenSym3(normalScatter(topo, smooth)).vectors[0], false);
+  return out;
+}
+
+/** Startmodell aus der Umgebung des Klicks: Dreiecke mit Normale senkrecht zur Achse und nahe der Klick-Normale. */
+function localModel(ctx: Ctx, seed: number, axis: Vec3, inSmooth: number, maxSpan: number): CylModel | null {
+  const topo = ctx.topo;
+  const local = flood(ctx, seed, Math.min(ctx.limit, LOCAL_MAX), (_r, to) =>
+    ctx.s.member[to] === inSmooth &&
+    (isDegenerate(topo, to) || (Math.abs(ndotv(topo, to, axis)) <= CYL_AXIS_SIN && ndot(topo, to, seed) >= CYL_LOCAL_COS)));
+  return fitCylinderModel(ctx, local.tris, axis, maxSpan);
+}
+
+/**
+ * Startmodelle aus möglichst wenigen Punkten: Kreis durch die (in die Ebene senkrecht zur Achse
+ * projizierten) Ecken des Startdreiecks und je einen weiteren Eckpunkt naher Dreiecke. Grenzt der
+ * Klick an eine tangential anschließende Fläche, ist so wenigstens eines der Modelle exakt.
+ */
+function minimalModels(ctx: Ctx, seed: number, axis: Vec3, inSmooth: number, maxSpan: number): CylModel[] {
+  const topo = ctx.topo;
+  const [e1, e2] = basis(axis);
+  const o = vertexOf(topo, topo.vertIds[3 * seed]);
+  const proj = (v: number): [number, number] => {
+    const d = sub(vertexOf(topo, v), o);
+    return [dot(d, e1), dot(d, e2)];
+  };
+  const own = [0, 1, 2].map((k) => proj(topo.vertIds[3 * seed + k]));
+  let ext = 0;
+  for (let i = 0; i < 3; i++) ext = Math.max(ext, Math.hypot(own[i][0] - own[(i + 1) % 3][0], own[i][1] - own[(i + 1) % 3][1]));
+  if (!(ext > 0)) return [];
+  const mergeTol = 1e-3 * ext;
+  const isNew = (p: [number, number], list: [number, number][]) => list.every((q) => Math.hypot(p[0] - q[0], p[1] - q[1]) > mergeTol);
+  const distinct: [number, number][] = [];
+  for (const p of own) if (isNew(p, distinct)) distinct.push(p);
+
+  const sets: [number, number][][] = [];
+  if (distinct.length === 3) sets.push(distinct);
+  else if (distinct.length === 2) {
+    const near = flood(ctx, seed, 16, (_r, to) =>
+      ctx.s.member[to] === inSmooth && !isDegenerate(topo, to) && Math.abs(ndotv(topo, to, axis)) <= CYL_AXIS_SIN).tris;
+    const thirds: [number, number][] = [];
+    for (let i = 1; i < near.length && thirds.length < 2; i++) {
+      for (let k = 0; k < 3 && thirds.length < 2; k++) {
+        const p = proj(topo.vertIds[3 * near[i] + k]);
+        if (isNew(p, distinct) && isNew(p, thirds)) thirds.push(p);
+      }
+    }
+    for (const p of thirds) sets.push([...distinct, p]);
+  }
+
+  const out: CylModel[] = [];
+  for (const pts of sets) {
+    const c = fitCircle2D(pts.map((p) => p[0]), pts.map((p) => p[1]));
+    if (!c || !(c.r > 0)) continue;
+    const na = ndotv(topo, seed, axis);
+    const m: CylModel = {
+      axis, e1, e2, c0: add(o, add(scale(e1, c.cx), scale(e2, c.cy))), r: c.r, rms: 0, hole: false, spanCos: -1, spread: 0, tilt2: na * na,
+    };
+    orientModel(topo, [seed], m, maxSpan);
+    out.push(m);
   }
   return out;
 }
 
-const wrapAngle = (a: number) => a - TWO_PI * Math.round(a / TWO_PI);
-const mod = (i: number, n: number) => ((i % n) + n) % n;
+/** Zwei Modelle beschreiben (bis auf `rel` · Radius) denselben Zylinder. */
+function sameCylinder(a: CylModel, b: CylModel, rel = 1e-6): boolean {
+  const tol = rel * a.r;
+  const d = sub(b.c0, a.c0);
+  const off = len(sub(d, scale(a.axis, dot(d, a.axis))));
+  return Math.abs(dot(a.axis, b.axis)) > 1 - Math.max(1e-10, (rel * rel) / 2) && Math.abs(a.r - b.r) < tol && off < tol &&
+    a.hole === b.hole && Math.abs(a.spanCos - b.spanCos) < 1e-6;
+}
+
+interface Grown {
+  region: Region;
+  model: CylModel;
+}
+
+/**
+ * Lässt den Zylinder vom Startmodell aus wachsen: abwechselnd alle Dreiecke sammeln, die auf dem
+ * Zylinder liegen (Toleranz aus dem Rauschen der letzten Anpassung), und neu anpassen.
+ */
+function growCylinder(ctx: Ctx, seed: number, m0: CylModel, inSmooth: number, maxSpan: number): Grown | null {
+  const topo = ctx.topo;
+  const { member } = ctx.s;
+  // Normalen, die nicht gemeinsam senkrecht zu einer Achse stehen (z. B. Kugel), früh verwerfen
+  const tooTilted = (m: CylModel) => !(m.tilt2 <= 4 * CYL_MAX_TILT_SIN * CYL_MAX_TILT_SIN);
+  let model = m0;
+  let region: Region | null = null;
+  for (let it = 0; it < GROW_ITER; it++) {
+    const m = model;
+    const tol = growTol(ctx, m);
+    if (!onCylinder(topo, seed, m, tol)) return null;
+    const next = flood(ctx, seed, ctx.limit, (_r, to) => member[to] === inSmooth && onCylinder(topo, to, m, tol));
+    const refit = fitCylinderModel(ctx, next.tris, m.axis, maxSpan);
+    if (!refit || tooTilted(refit) || !(refit.rms <= CYL_MAX_RMS * refit.r)) return null;
+    const unchanged = region !== null && next.tris.length === region.tris.length;
+    region = next;
+    model = refit;
+    // Region unverändert oder Modell praktisch gleich geblieben: weiteres Wachsen ändert nichts mehr
+    if (unchanged || sameCylinder(m, refit)) break;
+  }
+  return region ? { region, model } : null;
+}
+
+/**
+ * Anteil der Abweichungen, der sich durch einen über die Höhe veränderlichen Radius erklären lässt
+ * (0 = gar nicht, 1 = vollständig). Verglichen werden zwei gewichtete Ausgleichsrechnungen der
+ * radialen Abweichung e(θ, s) (s = Höhe, auf −1…1 normiert): mit den Termen, die nur eine kleine
+ * Korrektur desselben Zylinders beschreiben (Radius, Lage und Neigung der Achse), und zusätzlich
+ * mit s und s² (Kegel, Kugel, Tonne).
+ */
+function radiusTrend(es: Float64Array, ths: Float64Array, ss: Float64Array, ws: Float64Array): number {
+  const P = 7;
+  const G = new Float64Array(P * P);
+  const b = new Float64Array(P);
+  const phi = new Float64Array(P);
+  let ee = 0;
+  for (let i = 0; i < es.length; i++) {
+    const w = ws[i];
+    if (!(w > 0)) continue;
+    const c = Math.cos(ths[i]);
+    const s = Math.sin(ths[i]);
+    const h = ss[i];
+    phi[0] = 1; phi[1] = c; phi[2] = s; phi[3] = h * c; phi[4] = h * s; phi[5] = h; phi[6] = h * h;
+    for (let j = 0; j < P; j++) {
+      b[j] += w * phi[j] * es[i];
+      for (let k = 0; k < P; k++) G[j * P + k] += w * phi[j] * phi[k];
+    }
+    ee += w * es[i] * es[i];
+  }
+  if (!(ee > 0)) return 0;
+  const rss = (n: number) => {
+    const A = new Float64Array(n * n);
+    const y = new Float64Array(n);
+    let tr = 0;
+    for (let j = 0; j < n; j++) tr += G[j * P + j];
+    for (let j = 0; j < n; j++) {
+      y[j] = b[j];
+      for (let k = 0; k < n; k++) A[j * n + k] = G[j * P + k];
+      // Kleine Regularisierung: abhängige Terme (z. B. s² ≡ 1 bei nur zwei Höhen) stören nicht
+      A[j * n + j] += 1e-9 * tr;
+    }
+    const x = solveLinear(A, y, n);
+    if (!x) return ee;
+    let fit = 0;
+    for (let j = 0; j < n; j++) fit += x[j] * b[j];
+    return Math.max(0, ee - fit);
+  };
+  const r0 = rss(5);
+  const r1 = rss(7);
+  return r0 > 0 ? Math.min(1, Math.max(0, (r0 - r1) / r0)) : 0;
+}
 
 /** Kennzahlen der fertigen Zylinderregion; null, wenn sie kein überzeugender Zylinder ist. */
-function finishCylinder(ctx: Ctx, region: Region, m: CylModel, inSmooth: number, planeArea: number): CylinderFeature | null {
+function finishCylinder(ctx: Ctx, g: Grown, cosSmooth: number, planeArea: number): CylinderFeature | null {
   const topo = ctx.topo;
   const { vertIds, vertPos, neighbors, areas } = topo;
-  const { tris, stamp } = region;
+  const { region, model: m } = g;
+  const { tris } = region;
+  const tol = growTol(ctx, m);
+  const eps = cylEps(ctx, m);
+  if (!(m.r > 0)) return null;
 
-  // Restabweichung und Ausdehnung entlang der Achse
-  const verts = regionVertices(ctx, tris);
+  // Restabweichung (flächengewichtet) und Ausdehnung entlang der Achse
+  const { verts, weights } = weightedVertices(ctx, tris);
+  const es = new Float64Array(verts.length);
+  const ths = new Float64Array(verts.length);
+  const hs = new Float64Array(verts.length);
   let s2 = 0;
+  let sw = 0;
   let hMin = Infinity;
   let hMax = -Infinity;
-  for (const v of verts) {
-    const p = toCyl(m, vertPos, 3 * v);
-    const e = Math.hypot(p[0], p[1]) - m.r;
-    s2 += e * e;
+  for (let i = 0; i < verts.length; i++) {
+    const p = toCyl(m, vertPos, 3 * verts[i]);
+    es[i] = Math.hypot(p[0], p[1]) - m.r;
+    ths[i] = Math.atan2(p[1], p[0]);
+    hs[i] = p[2];
+    s2 += weights[i] * es[i] * es[i];
+    sw += weights[i];
     if (p[2] < hMin) hMin = p[2];
     if (p[2] > hMax) hMax = p[2];
   }
-  const rms = Math.sqrt(s2 / verts.length);
+  const rms = sw > 0 ? Math.sqrt(s2 / sw) : 0;
+  const length = hMax - hMin;
+  if (!(rms <= CYL_EXACT_RMS * m.r + 2 * eps)) {
+    // Nicht exakt: nur als verrauschter Zylinder zulassen, wenn die Abweichung zufällig aussieht
+    if (!(rms <= CYL_MAX_RMS * m.r) || verts.length < STRUCT_MIN_POINTS) return null;
+    const half = length / 2;
+    const ss = Float64Array.from(hs, (h) => (half > 0 ? (h - hMin - half) / half : 0));
+    if (radiusTrend(es, ths, ss, weights) > STRUCT_MAX) return null;
+  }
 
   // Abgedeckter Winkel: feine Abschnitte, deren Mitte im Winkelintervall eines Dreiecks liegt
   const arcW = TWO_PI / ARC_BINS;
@@ -913,9 +1307,13 @@ function finishCylinder(ctx: Ctx, region: Region, m: CylModel, inSmooth: number,
   for (let b = 0; b < ARC_BINS; b++) covered += arcBins[b];
   const arc = covered * arcW;
 
-  // Rand der Region: Anteil, an dem die glatte Fläche weitergeht ("weich"). Für weiche Randkanten
+  if (arc < CYL_MIN_ARC || !(area > 1.5 * planeArea) || m.spread < 0.01) return null;
+  if (!(m.tilt2 <= CYL_MAX_TILT_SIN * CYL_MAX_TILT_SIN)) return null;
+
+  // Rand der Region: Anteil, an dem die Fläche glatt weitergeht ("weich"). Für weiche Randkanten
   // quer zur Achse außerdem: Abstand von den Enden des Zylinders, an welchem Ende sie liegen und
   // wie hoch (entlang der Achse) die angrenzenden Dreiecke sind.
+  const inRegion = mark(ctx, ctx.s.group, tris);
   let soft = 0;
   let edge = 0;
   let devSum = 0;
@@ -927,15 +1325,16 @@ function finishCylinder(ctx: Ctx, region: Region, m: CylModel, inSmooth: number,
   for (const t of tris) {
     for (let k = 0; k < 3; k++) {
       const nb = neighbors[3 * t + k];
-      if (nb >= 0 && ctx.s.visit[nb] === stamp) continue;
-      const u = vertIds[3 * t + k];
-      const w = vertIds[3 * t + (k === 2 ? 0 : k + 1)];
+      if (nb >= 0 && ctx.s.group[nb] === inRegion) continue;
+      // Nachbar liegt selbst auf dem Zylinder: die Region wurde nur durch maxTris abgeschnitten
+      if (nb >= 0 && onCylinder(topo, nb, m, tol)) continue;
+      const [u, w] = edgeVerts(topo, t, k);
       const ex = vertPos[3 * w] - vertPos[3 * u];
       const ey = vertPos[3 * w + 1] - vertPos[3 * u + 1];
       const ez = vertPos[3 * w + 2] - vertPos[3 * u + 2];
       const l = Math.hypot(ex, ey, ez);
       edge += l;
-      if (nb < 0 || ctx.s.member[nb] !== inSmooth) continue;
+      if (nb < 0 || !(isDegenerate(topo, nb) || isDegenerate(topo, t) || ndot(topo, t, nb) >= cosSmooth)) continue;
       soft += l;
       // Kanten entlang der Achse (z. B. tangential anschließende Flanke eines Langlochs) sind erlaubt
       if (l > 0 && Math.abs(ex * m.axis[0] + ey * m.axis[1] + ez * m.axis[2]) > 0.5 * l) continue;
@@ -959,11 +1358,6 @@ function finishCylinder(ctx: Ctx, region: Region, m: CylModel, inSmooth: number,
   }
   const softFrac = edge > 0 ? soft / edge : 0;
   const softDev = devLen > 0 ? Math.sqrt(devSum / devLen) : 0;
-  const length = hMax - hMin;
-
-  if (!(m.r > 0) || !(rms <= CYL_MAX_RMS * m.r)) return null;
-  if (arc < CYL_MIN_ARC || !(area > 1.5 * planeArea) || m.spread < 0.01) return null;
-  if (!(m.tilt2 <= CYL_MAX_TILT_SIN * CYL_MAX_TILT_SIN)) return null;
   // Geht die glatte Fläche ringsum weiter, muss sie das an den Enden tun (Verrundung, Kapsel).
   // Weiche Seitenränder in wechselnder Höhe zeigen einen Streifen einer doppelt gekrümmten
   // Fläche (z. B. Kugel), dessen Facetten nur zufällig zylinderförmig aussehen.
@@ -985,61 +1379,32 @@ function finishCylinder(ctx: Ctx, region: Region, m: CylModel, inSmooth: number,
   };
 }
 
-/** Zwei Modelle beschreiben (bis auf Rundungsfehler) denselben Zylinder. */
-function sameCylinder(a: CylModel, b: CylModel): boolean {
-  const tol = 1e-6 * a.r;
-  const d = sub(b.c0, a.c0);
-  const off = len(sub(d, scale(a.axis, dot(d, a.axis))));
-  return Math.abs(dot(a.axis, b.axis)) > 1 - 1e-10 && Math.abs(a.r - b.r) < tol && off < tol &&
-    a.hole === b.hole && Math.abs(a.spanCos - b.spanCos) < 1e-6;
-}
-
-/**
- * Zylinder zu einem Achsvorschlag: Startschätzung aus einer kleinen Region um den Klick, danach
- * abwechselnd wachsen (nur Dreiecke, die auf dem Zylinder liegen) und neu anpassen.
- */
-function growCylinder(
-  ctx: Ctx,
-  seed: number,
-  axis0: Vec3,
-  inSmooth: number,
-  planeArea: number,
-  smoothAngle: number,
-): CylinderFeature | null {
-  const topo = ctx.topo;
-  const { member } = ctx.s;
-  if (Math.abs(ndotv(topo, seed, axis0)) > CYL_AXIS_SIN) return null;
-  const maxSpan = 2 * smoothAngle;
-  const local = flood(ctx, seed, ctx.limit, (_r, to) =>
-    member[to] === inSmooth &&
-    (isDegenerate(topo, to) || (Math.abs(ndotv(topo, to, axis0)) <= CYL_AXIS_SIN && ndot(topo, to, seed) >= CYL_LOCAL_COS)));
-  // Normalen, die nicht gemeinsam senkrecht zu einer Achse stehen (z. B. Kugel), früh verwerfen
-  const tooTilted = (m: CylModel | null) => !m || !(m.tilt2 <= 4 * CYL_MAX_TILT_SIN * CYL_MAX_TILT_SIN);
-  let model = fitCylinderModel(ctx, local.tris, axis0, maxSpan);
-  if (!model || tooTilted(model)) return null;
-  let region = local;
-  for (let it = 0; it < 8; it++) {
-    const m = model;
-    const tolR = Math.min(0.05 * m.r, Math.max(CYL_GROW_TOL * m.r, 3 * m.rms)) + topo.diag * 1e-6;
-    if (!onCylinder(topo, seed, m, tolR)) return null;
-    const next = flood(ctx, seed, ctx.limit, (_r, to) => member[to] === inSmooth && onCylinder(topo, to, m, tolR));
-    const refit = fitCylinderModel(ctx, next.tris, m.axis, maxSpan);
-    const unchanged = next.tris.length === region.tris.length;
-    region = next;
-    if (!refit || tooTilted(refit)) return null;
-    model = refit;
-    // Region unverändert oder Modell praktisch gleich geblieben: weiteres Wachsen ändert nichts mehr
-    if (unchanged || sameCylinder(m, refit)) break;
-  }
-  return finishCylinder(ctx, region, model, inSmooth, planeArea);
-}
+const wrapAngle = (a: number) => a - TWO_PI * Math.round(a / TWO_PI);
+const mod = (i: number, n: number) => ((i % n) + n) % n;
 
 function detectCylinder(ctx: Ctx, seed: number, smooth: number[], planeArea: number, smoothAngle: number): CylinderFeature | null {
-  const inSmooth = markMembers(ctx, smooth);
+  const topo = ctx.topo;
+  const inSmooth = mark(ctx, ctx.s.member, smooth);
+  const maxSpan = 2 * smoothAngle;
+  const cosSmooth = Math.cos(smoothAngle);
+  const grown: CylModel[] = [];
   let best: CylinderFeature | null = null;
-  for (const axis of axisCandidates(ctx.topo, seed, smooth)) {
-    const f = growCylinder(ctx, seed, axis, inSmooth, planeArea, smoothAngle);
-    if (f && (!best || f.area > best.area)) best = f;
+  for (const cand of axisCandidates(ctx, seed, smooth, inSmooth)) {
+    if (Math.abs(ndotv(topo, seed, cand.axis)) > CYL_AXIS_SIN) continue;
+    const local = localModel(ctx, seed, cand.axis, inSmooth, maxSpan);
+    const starts = local ? [local] : [];
+    // Startmodelle aus wenigen Punkten erst bei Bedarf (nur bei exakter Achsrichtung sinnvoll)
+    if (cand.exact) starts.push(...minimalModels(ctx, seed, cand.axis, inSmooth, maxSpan));
+    for (const m0 of starts) {
+      if (grown.some((m) => sameCylinder(m, m0, 1e-4))) continue;
+      const g = growCylinder(ctx, seed, m0, inSmooth, maxSpan);
+      if (!g || grown.some((m) => sameCylinder(m, g.model, 1e-4))) continue;
+      grown.push(g.model);
+      const f = finishCylinder(ctx, g, cosSmooth, planeArea);
+      if (!f) continue;
+      if (!best || f.area > best.area) best = f;
+      break;
+    }
   }
   return best;
 }
@@ -1047,6 +1412,44 @@ function detectCylinder(ctx: Ctx, seed: number, smooth: number[], planeArea: num
 // ---------------------------------------------------------------------------------------------
 // Ebene
 // ---------------------------------------------------------------------------------------------
+
+interface PlaneRegion {
+  tris: number[];
+  normal: Vec3;
+  centroid: Vec3;
+  area: number;
+}
+
+/**
+ * Ebene Region um ein Dreieck: Dreiecke mit (fast) gleicher Normale, deren Schwerpunkt in der Ebene
+ * liegt. Die Ebene wird danach aus der ganzen Region neu bestimmt und die Suche wiederholt; so
+ * spielt es keine Rolle, ob das Startdreieck ein schmaler Splitter mit ungenauer Normale ist.
+ */
+function growPlane(
+  ctx: Ctx, seed: number, cosPlane: number, distTol: number, limit: number, skip?: (t: number) => boolean, rounds = 4,
+): PlaneRegion {
+  const topo = ctx.topo;
+  const { centroids } = topo;
+  let n = normalOf(topo, seed);
+  let d = dot(n, centroidOf(topo, seed));
+  let res: PlaneRegion = { tris: [seed], normal: n, centroid: centroidOf(topo, seed), area: topo.areas[seed] };
+  for (let it = 0; it < rounds; it++) {
+    const pn = n;
+    const pd = d;
+    const tris = flood(ctx, seed, limit, (_r, to) => {
+      if (skip && skip(to)) return false;
+      const off = pn[0] * centroids[3 * to] + pn[1] * centroids[3 * to + 1] + pn[2] * centroids[3 * to + 2] - pd;
+      return Math.abs(off) <= distTol && (isDegenerate(topo, to) || ndotv(topo, to, pn) >= cosPlane);
+    }).tris;
+    const st = regionStats(topo, tris);
+    const same = it > 0 && tris.length === res.tris.length;
+    res = { tris, normal: st.area > 0 ? st.normal : pn, centroid: st.centroid, area: st.area };
+    if (same) break;
+    n = res.normal;
+    d = dot(n, res.centroid);
+  }
+  return res;
+}
 
 /** Randschleifen einer Region als Folgen verschweißter Eckpunkte. */
 function boundaryLoops(ctx: Ctx, tris: number[], stamp: number): number[][] {
@@ -1125,7 +1528,7 @@ function outlineCircle(outline: Vec3[], n: Vec3, maxGap: number): PlaneFeature['
 }
 
 /** Hauptrichtungen der Fläche (flächengewichtete Hauptkomponenten) und Ausdehnung entlang dieser. */
-function planeAxes(ctx: Ctx, tris: number[], n: Vec3, centroid: Vec3): PlaneFeature['axes'] {
+function planeAxes(ctx: Ctx, tris: number[], verts: number[], n: Vec3, centroid: Vec3): PlaneFeature['axes'] {
   const { positions, areas } = ctx.topo;
   const C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
   for (const t of tris) {
@@ -1145,22 +1548,12 @@ function planeAxes(ctx: Ctx, tris: number[], n: Vec3, centroid: Vec3): PlaneFeat
   if (len(u) < 0.5) u = basis(n)[0];
   u = canonical(u);
   const v = cross(n, u);
-  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-  for (const id of regionVertices(ctx, tris)) {
-    const d = sub(vertexOf(ctx.topo, id), centroid);
-    const x = dot(d, u);
-    const y = dot(d, v);
-    uMin = Math.min(uMin, x);
-    uMax = Math.max(uMax, x);
-    vMin = Math.min(vMin, y);
-    vMax = Math.max(vMax, y);
-  }
-  return { u, v, size: [uMax - uMin, vMax - vMin] };
+  return { u, v, size: [extentAlong(ctx.topo, verts, u), extentAlong(ctx.topo, verts, v)] };
 }
 
-function planeFeature(ctx: Ctx, tris: number[], smoothAngle: number): PlaneFeature {
+function planeFeature(ctx: Ctx, tris: number[], verts: number[], smoothAngle: number): PlaneFeature {
   const { area, centroid, normal } = regionStats(ctx.topo, tris);
-  const stamp = markMembers(ctx, tris);
+  const stamp = mark(ctx, ctx.s.member, tris);
   // Äußerer Umriss: die Schleife mit der größten umschlossenen Fläche
   let outline: Vec3[] = [];
   let best = -1;
@@ -1172,20 +1565,151 @@ function planeFeature(ctx: Ctx, tris: number[], smoothAngle: number): PlaneFeatu
       outline = pts;
     }
   }
-  const f: PlaneFeature = { kind: 'plane', tris, centroid, normal, area, outline, axes: planeAxes(ctx, tris, normal, centroid) };
+  const f: PlaneFeature = { kind: 'plane', tris, centroid, normal, area, outline, axes: planeAxes(ctx, tris, verts, normal, centroid) };
   const circle = outlineCircle(outline, normal, smoothAngle);
   if (circle) f.circle = circle;
   return f;
+}
+
+interface PlaneTest {
+  cosPlane: number;
+  cosSmooth: number;
+  distTol: number;
+}
+
+/**
+ * Übergang von der ebenen Region P über die Kante (u, w) in die Nachbarfacette Q (und weiter in die
+ * Facette R dahinter). Gehört P als Facette zu einer gekrümmten Fläche, knickt es zu Q ungefähr so
+ * stark ab, wie es Krümmung (gemessen zwischen Q und R) und Breite von P und Q ergeben. Eine ebene
+ * Fläche, an die eine Rundung tangential anschließt, knickt dagegen höchstens halb so stark ab
+ * (die erste Facette der Rundung steht nur um ihren halben Facettenwinkel schräg).
+ * Ergebnis: true, wenn der Übergang zu einer eigenen ebenen Fläche passt.
+ */
+function junctionIsFlat(
+  ctx: Ctx, P: PlaneFeature, pVerts: number[], pStamp: number, q: number, u: number, w: number, pt: PlaneTest, qStamp: number,
+): boolean {
+  const topo = ctx.topo;
+  const { member, group } = ctx.s;
+  const limit = Math.min(ctx.limit, JUNCTION_MAX);
+  const Q = growPlane(ctx, q, pt.cosPlane, pt.distTol, limit, (t) => member[t] === pStamp, 2);
+  for (const t of Q.tris) group[t] = qStamp;
+  const cPQ = dot(P.normal, Q.normal);
+  // Kein Knick (nur versetzt oder durch maxTris abgeschnitten): P ist eine eigene Fläche
+  if (cPQ > PARALLEL_COS) return true;
+  const e = normalize(sub(vertexOf(topo, w), vertexOf(topo, u)));
+  const qVerts = regionVertices(ctx, Q.tris);
+  const wP = extentAlong(topo, pVerts, normalize(cross(P.normal, e)));
+  const wQ = extentAlong(topo, qVerts, normalize(cross(Q.normal, e)));
+
+  // Gegenüberliegende Kante von Q: weicher Übergang, möglichst parallel zur Kante P–Q
+  let bestPar = 0.5;
+  let r = -1;
+  let rEdge: Vec3 = e;
+  for (const t of Q.tris) {
+    for (let k = 0; k < 3; k++) {
+      const nb = topo.neighbors[3 * t + k];
+      if (nb < 0 || member[nb] === pStamp || group[nb] === qStamp || isDegenerate(topo, nb)) continue;
+      if (!(ndotv(topo, nb, Q.normal) >= pt.cosSmooth)) continue;
+      const [a, b] = edgeVerts(topo, t, k);
+      const d = sub(vertexOf(topo, b), vertexOf(topo, a));
+      const l = len(d);
+      if (!(l > 0)) continue;
+      const par = Math.abs(dot(d, e)) / l;
+      if (par > bestPar) {
+        bestPar = par;
+        r = nb;
+        rEdge = scale(d, 1 / l);
+      }
+    }
+  }
+  // Q endet an harten Kanten: Knick zwischen zwei Flächen, P ist eine eigene Fläche
+  if (r < 0) return true;
+  const R = growPlane(ctx, r, pt.cosPlane, pt.distTol, limit, (t) => member[t] === pStamp || group[t] === qStamp, 2);
+  const aQR = Math.acos(Math.min(1, dot(Q.normal, R.normal)));
+  const wQ2 = extentAlong(topo, qVerts, normalize(cross(Q.normal, rEdge)));
+  if (!(aQR > 1e-3) || !(wQ2 > 0)) return true;
+  // Knick je Länge zwischen Q und R (Breite von R wie die von Q angenommen)
+  const curvature = aQR / wQ2;
+  const facetAngle = (curvature * (wP + wQ)) / 2;
+  return Math.acos(Math.min(1, cPQ)) < FACET_RATIO * facetAngle;
+}
+
+/**
+ * Ist die ebene Region eine eigene Fläche (true) oder nur eine Facette einer gekrümmten Fläche?
+ * Ohne weiche Übergänge in Nachbardreiecke ist sie immer eine Fläche; sonst muss sie exakt eben sein
+ * (fein facettierte Rundungen fasst die Winkeltoleranz sonst zu schmalen Streifen zusammen), und die
+ * Übergänge an ihrem Rand müssen zu einer ebenen Fläche passen (siehe junctionIsFlat).
+ */
+function isFace(ctx: Ctx, P: PlaneFeature, pVerts: number[], pt: PlaneTest): boolean {
+  const topo = ctx.topo;
+  const pStamp = mark(ctx, ctx.s.member, P.tris);
+  const edges: number[] = [];
+  for (const t of P.tris) {
+    for (let k = 0; k < 3; k++) {
+      const nb = topo.neighbors[3 * t + k];
+      if (nb < 0 || ctx.s.member[nb] === pStamp || isDegenerate(topo, nb)) continue;
+      if (ndotv(topo, nb, P.normal) >= pt.cosSmooth) edges.push(3 * t + k);
+    }
+  }
+  if (!edges.length) return true;
+
+  // Eben? Größte Abweichung der Eckpunkte von der Ebene, bezogen auf die schmalere Seite
+  const d0 = dot(P.normal, P.centroid);
+  let dev = 0;
+  for (const v of pVerts) dev = Math.max(dev, Math.abs(dot(P.normal, vertexOf(topo, v)) - d0));
+  const minSize = Math.min(P.axes.size[0], P.axes.size[1]);
+  if (!(dev <= FLAT_REL * minSize + FLOAT_EPS * ctx.s.coordMag + 1e-12)) return false;
+
+  // Gleichmäßig verteilte Stichprobe der weichen Randkanten; je Nachbarfacette nur einmal rechnen
+  const verdicts = new Map<number, boolean>();
+  const step = Math.max(1, Math.ceil(edges.length / JUNCTION_SAMPLES));
+  let flat = 0;
+  let facet = 0;
+  for (let i = 0; i < edges.length; i += step) {
+    const t = Math.floor(edges[i] / 3);
+    const k = edges[i] % 3;
+    const nb = topo.neighbors[edges[i]];
+    const [u, w] = edgeVerts(topo, t, k);
+    const l = len(sub(vertexOf(topo, w), vertexOf(topo, u)));
+    let v = verdicts.get(ctx.s.group[nb]);
+    if (v === undefined) {
+      const qStamp = ++ctx.s.stamp;
+      v = junctionIsFlat(ctx, P, pVerts, pStamp, nb, u, w, pt, qStamp);
+      verdicts.set(qStamp, v);
+    }
+    if (v) flat += l;
+    else facet += l;
+  }
+  return flat >= facet;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Erkennung
 // ---------------------------------------------------------------------------------------------
 
+/** Doppelt gespeichertes Dreieck (seine Nachbarn kennen es nicht): das Original suchen. */
+function originalOf(topo: Topology, t: number): number {
+  const { neighbors, vertIds } = topo;
+  for (let k = 0; k < 3; k++) {
+    const nb = neighbors[3 * t + k];
+    if (nb < 0) continue;
+    if (neighbors[3 * nb] === t || neighbors[3 * nb + 1] === t || neighbors[3 * nb + 2] === t) return t;
+    for (let j = 0; j < 3; j++) {
+      const o = neighbors[3 * nb + j];
+      if (o < 0) continue;
+      const same = [0, 1, 2].every((i) => vertIds[3 * o] === vertIds[3 * t + i] || vertIds[3 * o + 1] === vertIds[3 * t + i] ||
+        vertIds[3 * o + 2] === vertIds[3 * t + i]);
+      if (same) return o;
+    }
+  }
+  return t;
+}
+
 /** Entartetes Dreieck angeklickt: nächstgelegenes brauchbares Nachbardreieck verwenden. */
 function usableSeed(ctx: Ctx, seedTri: number): number {
-  if (!isDegenerate(ctx.topo, seedTri)) return seedTri;
-  const near = flood(ctx, seedTri, 64, () => true).tris;
+  const seed = originalOf(ctx.topo, seedTri);
+  if (!isDegenerate(ctx.topo, seed)) return seed;
+  const near = flood(ctx, seed, 64, () => true).tris;
   return near.find((t) => !isDegenerate(ctx.topo, t)) ?? -1;
 }
 
@@ -1194,8 +1718,55 @@ function usableSeed(ctx: Ctx, seedTri: number): number {
  * 1. Ebene: Dreiecke mit (fast) gleicher Normale in derselben Ebene wie das Startdreieck.
  * 2. Glatte Fläche: Ausbreitung über Kanten mit kleinem Knickwinkel.
  * 3. Ist die glatte Fläche deutlich größer als die Ebene, wird ein Zylinder angepasst.
- * 4. Sonst Ebene (mit Umriss, ggf. Kreis), oder bei doppelt gekrümmten Flächen eine Freiformfläche.
+ * 4. Sonst Ebene (mit Umriss, ggf. Kreis), wenn sie eine eigene Fläche ist und nicht nur eine
+ *    Facette einer gekrümmten Fläche; andernfalls Freiformfläche.
  */
+/**
+ * Liegt die angeklickte ebene Region selbst auf dem gefundenen Zylinder? Bei einer Facette eines
+ * facettierten Zylinders liegen ihre Eckpunkte genau auf dem Mantel. Ein echtes ebenes Stück zwischen
+ * tangential anschließenden Rundungen (z. B. die kurze Seite eines stark abgerundeten Quadrats) weicht
+ * dagegen deutlich ab – dann ist die angeklickte Fläche eine Ebene, kein Zylinder.
+ */
+function planeOnCylinder(ctx: Ctx, tris: number[], cyl: CylinderFeature): boolean {
+  if (tris.length < 2) return true;
+  const { vertPos, normals, neighbors } = ctx.topo;
+  const verts = regionVertices(ctx, tris);
+  const tol = Math.max(3 * cyl.rms, 2e-3 * cyl.radius);
+  for (const v of verts) {
+    const d: Vec3 = [vertPos[3 * v] - cyl.center[0], vertPos[3 * v + 1] - cyl.center[1], vertPos[3 * v + 2] - cyl.center[2]];
+    const along = dot(d, cyl.axis);
+    const radial = len([d[0] - along * cyl.axis[0], d[1] - along * cyl.axis[1], d[2] - along * cyl.axis[2]]);
+    if (Math.abs(radial - cyl.radius) > tol) return false;
+  }
+  // Breite der Region quer zur Achse gegen den Knick zu den seitlichen Nachbarn: Eine Facette eines
+  // facettierten Zylinders ist etwa r · Knickwinkel breit, ein ebenes Stück zwischen Rundungen viel breiter
+  const n: Vec3 = [normals[3 * tris[0]], normals[3 * tris[0] + 1], normals[3 * tris[0] + 2]];
+  const u = normalize(cross(cyl.axis, n));
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of verts) {
+    const x = vertPos[3 * v] * u[0] + vertPos[3 * v + 1] * u[1] + vertPos[3 * v + 2] * u[2];
+    lo = Math.min(lo, x);
+    hi = Math.max(hi, x);
+  }
+  const inRegion = new Set(tris);
+  let sum = 0;
+  let count = 0;
+  for (const t of tris) {
+    for (let k = 0; k < 3; k++) {
+      const nb = neighbors[3 * t + k];
+      if (nb < 0 || inRegion.has(nb)) continue;
+      const m: Vec3 = [normals[3 * nb], normals[3 * nb + 1], normals[3 * nb + 2]];
+      // Nur seitliche Nachbarn (Mantel), nicht die Stirnflächen
+      if (Math.abs(dot(m, cyl.axis)) > 0.5) continue;
+      sum += Math.acos(Math.min(1, Math.max(-1, dot(m, n))));
+      count++;
+    }
+  }
+  if (!count || sum <= 0) return true;
+  return (hi - lo) / cyl.radius <= 2.2 * (sum / count);
+}
+
 export function detectFeature(topo: Topology, seedTri: number, opts: FeatureOptions = {}): Feature {
   if (!Number.isInteger(seedTri) || seedTri < 0 || seedTri >= topo.triCount)
     throw new RangeError(`Dreieck ${seedTri} gibt es nicht.`);
@@ -1208,37 +1779,28 @@ export function detectFeature(topo: Topology, seedTri: number, opts: FeatureOpti
     return { kind: 'surface', tris: [seedTri], centroid: centroidOf(topo, seedTri), normal: [0, 0, 0], area: topo.areas[seedTri] };
 
   // Ebene durch das Startdreieck
-  const n0 = normalOf(topo, seed);
-  const d0 = dot(n0, centroidOf(topo, seed));
-  const cosPlane = Math.cos(planeAngle);
-  const distTol = topo.diag * 2e-4 + 1e-9;
-  const { centroids } = topo;
-  const plane = flood(ctx, seed, limit, (_r, to) => {
-    const off = n0[0] * centroids[3 * to] + n0[1] * centroids[3 * to + 1] + n0[2] * centroids[3 * to + 2] - d0;
-    return Math.abs(off) <= distTol && (isDegenerate(topo, to) || ndotv(topo, to, n0) >= cosPlane);
-  }).tris;
+  const pt: PlaneTest = {
+    cosPlane: Math.cos(planeAngle),
+    cosSmooth: Math.cos(smoothAngle),
+    distTol: topo.diag * PLANE_DIST_REL + FLOAT_EPS * ctx.s.coordMag + 1e-9,
+  };
+  const plane = growPlane(ctx, seed, pt.cosPlane, pt.distTol, limit);
 
   // Glatte Fläche: Knickwinkel zwischen benachbarten Dreiecken klein
-  const cosSmooth = Math.cos(smoothAngle);
-  const smooth = flood(ctx, seed, limit, (r, to) => isDegenerate(topo, to) || ndot(topo, r, to) >= cosSmooth).tris;
-
-  const aPlane = areaOf(topo, plane);
-  const aSmooth = areaOf(topo, smooth);
-  if (aSmooth > 1.5 * aPlane) {
-    const cyl = detectCylinder(ctx, seed, smooth, aPlane, smoothAngle);
-    if (cyl) return cyl;
+  const smooth = flood(ctx, seed, limit, (r, to) => isDegenerate(topo, to) || ndot(topo, r, to) >= pt.cosSmooth).tris;
+  if (areaOf(topo, smooth) > 1.5 * plane.area) {
+    const cyl = detectCylinder(ctx, seed, smooth, plane.area, smoothAngle);
+    if (cyl && planeOnCylinder(ctx, plane.tris, cyl)) return cyl;
   }
 
-  // Ebene, wenn sie von scharfen Kanten begrenzt ist oder einen nennenswerten Teil der glatten Fläche ausmacht
-  // (einzelne Facetten einer gekrümmten Fläche sind keine Ebene)
-  let planeTris = 0;
-  for (const t of plane) if (!isDegenerate(topo, t)) planeTris++;
-  if (aSmooth <= 1.5 * aPlane || aPlane >= 0.05 * aSmooth || (planeTris >= 3 && aPlane >= 0.01 * aSmooth))
-    return planeFeature(ctx, plane, smoothAngle);
+  const pVerts = regionVertices(ctx, plane.tris);
+  const pf = planeFeature(ctx, plane.tris, pVerts, smoothAngle);
+  if (isFace(ctx, pf, pVerts, pt)) return pf;
 
   // Freiformfläche: Normalen nahe der Klick-Normale, ohne über Kanten zu springen
+  const n0 = normalOf(topo, seed);
   const tris = flood(ctx, seed, limit, (r, to) =>
-    isDegenerate(topo, to) || (ndotv(topo, to, n0) >= SURFACE_COS && ndot(topo, r, to) >= cosSmooth)).tris;
+    isDegenerate(topo, to) || (ndotv(topo, to, n0) >= SURFACE_COS && ndot(topo, r, to) >= pt.cosSmooth)).tris;
   const { area, centroid, normal } = regionStats(topo, tris);
   return { kind: 'surface', tris, centroid, normal, area };
 }
