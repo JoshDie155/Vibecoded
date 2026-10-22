@@ -1597,7 +1597,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
 // Für automatisierte Tests / Debugging
 Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
-    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect,
+    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor,
     /** Fläche wie per Klick auswählen (für automatisierte Tests). */
     selectFace: (partId: number, tri: number) => {
       const j = activeJoint();
