@@ -8,10 +8,16 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 
 ## So funktioniert's
 
-1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ, 3MF, PLY, AMF, GLB/GLTF, FBX, DAE, WRL, 3DS, VTK).
-   Ab zwei Teilen wird automatisch eine Verbindung angelegt. Liegen die Teile in den Dateien schon
-   richtig zueinander, „Lage aus der Datei übernehmen" anhaken.
-2. **Auswählen** – oben im 3D-Fenster zwischen **Punkte** (Taste P) und **Flächen** (Taste F) wechseln.
+1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ mit MTL, 3MF, PLY, AMF, GLB/GLTF, FBX, DAE, WRL, 3DS, VTK).
+   Mehrteilige Dateien werden in einzelne Teile mit ihrer Farbe zerlegt – auch 3MF-Projekte aus
+   Bambu Studio, OrcaSlicer und PrusaSlicer (Farbe aus der Filament-Zuordnung). Teile eines Objekts
+   bilden eine Gruppe (⛓) und bewegen sich gemeinsam; jedes Teil lässt sich aus seiner Gruppe lösen
+   und per Farbwähler umfärben. Liegen die Teile in den Dateien schon richtig zueinander,
+   „Lage aus der Datei übernehmen" anhaken.
+2. **Automatisch oder von Hand auswählen** – **„Alles automatisch verbinden"** sucht für alle Teile
+   passende Flächen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und setzt sie ab dem
+   Basisteil zusammen; **„Vorschlagen"** macht das für eine einzelne Verbindung, „Nächster Vorschlag"
+   probiert weitere. Von Hand: oben im 3D-Fenster zwischen **Punkte** (Taste P) und **Flächen** (Taste F) wechseln.
    - *Flächen:* die Kontaktfläche auf beiden Teilen anklicken. PartJoin erkennt selbst, ob es eine
      ebene Fläche, eine Kreisfläche oder ein Zylinder (Zapfen bzw. Bohrung) ist, und setzt die Teile
      wie in einem CAD-Programm aufeinander: Ebene auf Ebene, Kreis mittig auf Kreis, Zapfen koaxial
@@ -27,7 +33,14 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    sind (z. B. nur der Drehring um die Zapfenachse), mit Winkelraster 1°/5°/15°/45°/90°.
    *Feinausrichtung* zieht die Kontaktflächen genau aufeinander, *Einsinken* schiebt die Teile minimal
    ineinander, damit der Slicer sie sicher verschmilzt.
-4. **Exportieren** – als STL, OBJ oder 3MF (ein Objekt, oder positionierte Einzelteile z. B. für Mehrfarbdruck).
+4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
+   (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
+5. **Exportieren**
+   - **3MF mehrfarbig**: ein Objekt aus mehreren Teilen, jedes mit eigenem Namen, eigener Farbe und
+     eigenem Extruder je Farbe – im Slicer jedem Extruder ein Filament zuordnen.
+   - **STL, OBJ, 3MF (ein Körper)**: mit „Zu einem Körper vereinigen" werden die Teile per
+     boolescher Vereinigung zu einem geschlossenen Netz (Überlappungen und Innenflächen verschwinden).
+     Nicht geschlossene Teile werden unverändert angehängt und genannt.
 
 Mehr als zwei Teile: einfach weitere Verbindungen anlegen. Alles wird ausgehend vom **Basisteil**
 zusammengesetzt (Basis in der Teileliste wählbar).
@@ -76,7 +89,15 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
   Levenberg-Marquardt-Löser mit mehreren Startlagen findet die Lage und bestimmt, welche Bewegungen danach
   noch frei sind (`src/math/mate.ts`, `src/math/constraints.ts`).
 - **Automatisch einpassen**: freie Drehungen/Verschiebungen werden abgetastet und nach Kontakt minus
-  Durchdringung bewertet (`src/math/scan.ts`).
+  Durchdringung bewertet (`src/math/scan.ts`), danach nur entlang freier Richtungen genau angelegt
+  (`src/math/settle.ts`); gleiche Umrisse werden deckungsgleich gelegt (`src/math/outline.ts`).
+- **Vorschläge**: markante Flächen je Teil (`src/math/segment.ts`), Paare über drehungsunabhängige
+  Formmerkmale (Fläche, Umfang, Trägheitsradien) bzw. Durchmesser, verifiziert durch Aufeinanderlegen
+  und Durchdringungsprüfung (`src/math/suggest.ts`).
+- **Prüfansicht**: Abstand und Vorzeichen zur Oberfläche des anderen Teils je (unterteiltem) Dreieck
+  (`src/math/check.ts`).
+- **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), **Vereinigung** mit
+  manifold-3d (`src/io/union.ts`).
 
 ## Entwicklung
 
@@ -91,6 +112,7 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 ## Ideen für später
 
 - CAD-Formate STEP/IGES (z. B. über `occt-import-js`)
-- Echte boolesche Vereinigung zu einem wasserdichten Netz (z. B. `manifold-3d`)
-- Passende Kontaktflächen ganz ohne Auswahl automatisch vorschlagen
 - Projekt speichern/laden
+- Druckausrichtung (größte ebene Fläche aufs Druckbett)
+- Passungshilfe (Zapfen gezielt dünner machen)
+- Bemalte Bereiche (Bambu „paint_color") beim 3MF-Import als eigene Teile
