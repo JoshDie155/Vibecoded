@@ -549,11 +549,15 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigi
       perm = pr.solutions[0]?.perm;
       if (perm) srcM.forEach((m, i) => plan.constraints.push({ kind: 'point', src: m.p, dst: dstM[perm![i]].p }));
     }
-    const sols = solveConstraints(plan.constraints, { scale: sceneScale() });
-    if (!sols.length) {
+    const all = solveConstraints(plan.constraints, { scale: sceneScale() });
+    if (!all.length) {
       j.status = { kind: 'err', text: 'Die Flächen lassen sich nicht zusammensetzen.' };
       return null;
     }
+    // Lösungen, die die Bedingungen grob verletzen (z. B. falsch herum gesteckter Zapfen), nicht als Alternative anbieten
+    const tol = Math.max(0.1, sceneScale() * 0.01);
+    const fitting = all.filter((x) => x.angleError < 1 && x.distError < tol);
+    const sols = fitting.length ? fitting : all.slice(0, 1);
     const sol = sols[Math.min(j.alt, sols.length - 1)];
     let rel = sol.T;
     let info = '';
