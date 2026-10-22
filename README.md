@@ -9,21 +9,45 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 ## So funktioniert's
 
 1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ, 3MF, PLY, AMF, GLB/GLTF, FBX, DAE, WRL, 3DS, VTK).
-   Ab zwei Teilen wird automatisch eine Verbindung angelegt.
-2. **Punkte markieren** – auf beiden Teilen dieselben markanten Stellen anklicken (Ecken, Kanten,
-   Zapfen, Löcher …). Mit „An Ecken einrasten" springt der Punkt auf die nächste Ecke des Netzes.
-   **Die Reihenfolge ist egal**: PartJoin probiert alle Zuordnungen durch und erkennt selbst,
-   welche Markierung zu welcher gehört.
-3. **Verbinden** – das bewegliche Teil wird exakt an das feste angesetzt.
-   Optional: *Feinausrichtung* zieht die Kontaktflächen rund um die Markierungen genau aufeinander,
-   *Einsinken* schiebt die Teile minimal ineinander, damit der Slicer sie sicher verschmilzt.
+   Ab zwei Teilen wird automatisch eine Verbindung angelegt. Liegen die Teile in den Dateien schon
+   richtig zueinander, „Lage aus der Datei übernehmen" anhaken.
+2. **Auswählen** – oben im 3D-Fenster zwischen **Punkte** (Taste P) und **Flächen** (Taste F) wechseln.
+   - *Flächen:* die Kontaktfläche auf beiden Teilen anklicken. PartJoin erkennt selbst, ob es eine
+     ebene Fläche, eine Kreisfläche oder ein Zylinder (Zapfen bzw. Bohrung) ist, und setzt die Teile
+     wie in einem CAD-Programm aufeinander: Ebene auf Ebene, Kreis mittig auf Kreis, Zapfen koaxial
+     in Bohrung. Mehrere Flächenpaare (z. B. Auflagefläche + Zapfen) legen die Lage vollständig fest.
+   - *Punkte:* auf beiden Teilen dieselben markanten Stellen anklicken (Ecken, Kanten …).
+     **Die Reihenfolge ist egal** – PartJoin erkennt selbst, welche Markierung zu welcher gehört.
+   Punkte und Flächen lassen sich auch kombinieren.
+3. **Verbinden** – das bewegliche Teil wird exakt an das feste angesetzt. Was die Auswahl offen lässt
+   (z. B. die Drehung um einen Zapfen), sucht *Automatisch einpassen* über Flächenkontakt ohne
+   Durchdringung: Teile mit Abflachung, Nut oder Lochbild drehen sich so von selbst richtig, und ein
+   Zapfen wird bis zum Anschlag eingeschoben.
+   *Von Hand anpassen* blendet ein Gizmo ein – standardmäßig nur für die Richtungen, die noch frei
+   sind (z. B. nur der Drehring um die Zapfenachse), mit Winkelraster 1°/5°/15°/45°/90°.
+   *Feinausrichtung* zieht die Kontaktflächen genau aufeinander, *Einsinken* schiebt die Teile minimal
+   ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Exportieren** – als STL, OBJ oder 3MF (ein Objekt, oder positionierte Einzelteile z. B. für Mehrfarbdruck).
 
 Mehr als zwei Teile: einfach weitere Verbindungen anlegen. Alles wird ausgehend vom **Basisteil**
 zusammengesetzt (Basis in der Teileliste wählbar).
 
-Bedienung: Linksklick setzt eine Markierung · Rechtsklick auf eine Markierung löscht sie ·
-Strg+Z nimmt die letzte zurück · Ziehen dreht die Ansicht, Mausrad zoomt.
+Bedienung: Linksklick wählt aus (nochmal klicken hebt eine Fläche wieder auf) · Rechtsklick auf eine
+Markierung oder Fläche löscht sie · Strg+Z nimmt die letzte Auswahl zurück · P/F wechselt Punkte/Flächen ·
+im Gizmo G = verschieben, R = drehen, Esc = fertig · Ziehen dreht die Ansicht, Mausrad zoomt.
+Jedes Teil lässt sich über ✥ in der Teileliste auch frei von Hand bewegen.
+
+## Runde Teile
+
+Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. PartJoin geht so vor:
+
+1. Achsen und Mittelpunkte werden exakt ausgerichtet (Zapfen ↔ Bohrung koaxial, Kreisfläche ↔ Kreisfläche
+   mittig). Das Spiel zwischen Zapfen und Bohrung wird angezeigt.
+2. Die Drehung wird über den ganzen Kreis abgetastet und die Stellung mit dem besten Flächenkontakt ohne
+   Durchdringung gewählt. Hat das Teil irgendetwas Unrundes (Abflachung, Nase, Lochbild, Kanten), ist die
+   Stellung damit eindeutig.
+3. Ist das Teil wirklich rund, sagt PartJoin das – dann ist die Drehung frei: mit dem Gizmo (Drehring um die
+   Achse, Raster z. B. 15°) einstellen oder einen zusätzlichen Punkt auf beiden Teilen setzen.
 
 ## Wie viele Punkte?
 
@@ -45,6 +69,14 @@ Strg+Z nimmt die letzte zurück · Ziehen dreht die Ansicht, Mausrad zoomt.
   (z. B. ein um 180° gedrehtes rechteckiges Dach), gelten nicht als Mehrdeutigkeit.
 - **Feinausrichtung**: ICP auf Oberflächenstichproben nahe der Markierungen; nur Flächen, die
   gegeneinander zeigen, zählen als Kontakt (`src/math/icp.ts`, BVH via `three-mesh-bvh`).
+- **Flächenerkennung**: vom angeklickten Dreieck aus wird die Fläche über Nachbardreiecke erweitert und als
+  Ebene (mit Umriss und ggf. Kreis), Zylinder (Achse, Radius, Zapfen/Bohrung, Bogenwinkel) oder Freiform
+  erkannt (`src/math/features.ts`).
+- **Paarungen**: Flächenpaare werden zu Bedingungen (Ebene auf Ebene, koaxial, Punkt auf Punkt); ein
+  Levenberg-Marquardt-Löser mit mehreren Startlagen findet die Lage und bestimmt, welche Bewegungen danach
+  noch frei sind (`src/math/mate.ts`, `src/math/constraints.ts`).
+- **Automatisch einpassen**: freie Drehungen/Verschiebungen werden abgetastet und nach Kontakt minus
+  Durchdringung bewertet (`src/math/scan.ts`).
 
 ## Entwicklung
 
@@ -60,5 +92,5 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 
 - CAD-Formate STEP/IGES (z. B. über `occt-import-js`)
 - Echte boolesche Vereinigung zu einem wasserdichten Netz (z. B. `manifold-3d`)
-- Automatische Erkennung passender Bruch-/Kontaktflächen ganz ohne Markierungen
+- Passende Kontaktflächen ganz ohne Auswahl automatisch vorschlagen
 - Projekt speichern/laden

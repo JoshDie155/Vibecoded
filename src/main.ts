@@ -1,13 +1,19 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } from 'three-mesh-bvh';
-import { type Rigid, type Vec3, compose } from './math/align';
+import { type Rigid, type Vec3, IDENTITY, compose, rotate } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
+import { type Feature, type Topology, buildTopology, detectFeature } from './math/features';
+import { solveConstraints } from './math/constraints';
+import { type ScanTarget, autoSeat } from './math/scan';
+import type { FreeMotion } from './math/motion';
+import { describeFeature, featureTag, planMate } from './math/mate';
 import { loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, to3MF, toOBJ, toSTL } from './io/export';
-import { makeDemo } from './demo';
+import { makeDemo, makeRoundDemo } from './demo';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -23,14 +29,32 @@ interface Part {
   geom: THREE.BufferGeometry;
   mesh: THREE.Mesh;
   color: THREE.Color;
-  /** Ausgangslage nach dem Laden (nebeneinander aufgereiht). */
+  /** Ausgangslage nach dem Laden (nebeneinander aufgereiht oder Lage aus der Datei). */
   layout: THREE.Matrix4;
   visible: boolean;
-  /** Oberflächenpunkte (lokal) für Feinausrichtung und Symmetrieprüfung. */
+  /** Oberflächenpunkte (lokal) für Feinausrichtung, Symmetrieprüfung und automatisches Einpassen. */
   samples: Sample[];
+  /** Nachbarschaften der Dreiecke für die Flächenerkennung (wird erst bei Bedarf berechnet). */
+  topo?: Topology;
 }
 
 type Side = 'a' | 'b';
+
+interface FeatureCache {
+  key: string;
+  /** Lage des beweglichen Teils im Koordinatensystem des festen Teils. */
+  rel: Rigid;
+  /** Freie Bewegungen im Koordinatensystem des festen Teils. */
+  free: FreeMotion[];
+  count: number;
+  distError: number;
+  angleError: number;
+  info: string;
+  flatRotation: boolean;
+  notes: string[];
+  summary: string;
+  perm?: number[];
+}
 
 interface Joint {
   id: number;
@@ -39,17 +63,30 @@ interface Joint {
   b: number | null;
   ma: Marker[];
   mb: Marker[];
+  /** Ausgewählte Flächen (lokale Koordinaten des jeweiligen Teils). */
+  fa: Feature[];
+  fb: Feature[];
   ordered: boolean;
   normals: NormalMode;
   overlap: number;
   spin: number;
+  /** Freie Drehung/Verschiebung automatisch über Flächenkontakt bestimmen. */
+  seat: boolean;
   applied: boolean;
   alt: number;
-  /** Korrektur aus der Feinausrichtung (Weltkoordinaten), wird nach der Grobausrichtung angewendet. */
-  icp?: Rigid;
-  icpInfo?: string;
+  /**
+   * Korrektur von Hand (Gizmo) oder aus der Feinausrichtung, im Koordinatensystem des festen Teils –
+   * so bleibt sie richtig, auch wenn das feste Teil selbst noch bewegt wird.
+   */
+  adjust?: Rigid;
+  adjustInfo?: string;
   // Ergebnis der letzten Berechnung
   result?: JointResult;
+  cache?: FeatureCache;
+  /** Zuordnung der Punkte: perm[i] = Index der Markierung am festen Teil für Markierung i am beweglichen. */
+  perm?: number[];
+  /** Freie Bewegungen in Weltkoordinaten (für das Gizmo). */
+  free?: FreeMotion[];
   fixedSide?: Side;
   status?: { kind: 'ok' | 'warn' | 'err' | 'info'; text: string };
 }
@@ -63,8 +100,11 @@ let baseId: number | null = null;
 let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
-const history: { joint: number; side: Side }[] = [];
+const history: { joint: number; side: Side; kind: 'point' | 'face' }[] = [];
 const SNAP_PX = 14;
+let pickMode: 'point' | 'face' = 'point';
+/** Welches Teil wird von welcher Verbindung bewegt (nach dem letzten solveAll). */
+const movedBy = new Map<number, number>();
 
 // ---------------------------------------------------------------- Szene
 
@@ -93,6 +133,8 @@ scene.add(grid);
 
 const markerGroup = new THREE.Group();
 scene.add(markerGroup);
+const faceGroup = new THREE.Group();
+scene.add(faceGroup);
 
 const cursor = new THREE.Mesh(
   new THREE.SphereGeometry(1, 16, 12),
@@ -101,6 +143,20 @@ const cursor = new THREE.Mesh(
 cursor.renderOrder = 10;
 cursor.visible = false;
 scene.add(cursor);
+
+/** Vorschau der Fläche unter dem Mauszeiger im Flächenmodus. */
+const hoverMesh = new THREE.Mesh(
+  new THREE.BufferGeometry(),
+  new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  }),
+);
+hoverMesh.matrixAutoUpdate = false;
+hoverMesh.visible = false;
+scene.add(hoverMesh);
+let hoverKey = '';
+let hoverTris: Set<number> | null = null;
 
 function applyTheme() {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches &&
@@ -148,6 +204,8 @@ const v3 = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
 const getPart = (id: number | null) => parts.find((p) => p.id === id);
 const activeJoint = () => joints.find((j) => j.id === activeJointId);
 const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]!);
+const hasFeatures = (j: Joint) => j.fa.length > 0 || j.fb.length > 0;
+const positionsOf = (p: Part) => p.geom.getAttribute('position').array as Float32Array;
 
 function rigidToMatrix(T: Rigid): THREE.Matrix4 {
   const R = T.R;
@@ -159,10 +217,40 @@ function matrixToRigid(m: THREE.Matrix4): Rigid {
   return { R: [e[0], e[4], e[8], e[1], e[5], e[9], e[2], e[6], e[10]], t: [e[12], e[13], e[14]] };
 }
 
+function invertRigid(T: Rigid): Rigid {
+  const R = T.R;
+  const Rt: Rigid['R'] = [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]];
+  const t = rotate(Rt, T.t);
+  return { R: Rt, t: [-t[0], -t[1], -t[2]] };
+}
+
+/** Bewegung D im Koordinatensystem M als Weltbewegung: M · D · M⁻¹. */
+const conjugate = (M: Rigid, D: Rigid) => compose(compose(M, D), invertRigid(M));
+
 function markerToWorld(m: Marker, M: THREE.Matrix4): Marker {
   const p = new THREE.Vector3(...m.p).applyMatrix4(M);
   const n = new THREE.Vector3(...m.n).transformDirection(M);
   return { p: v3(p), n: v3(n) };
+}
+
+function motionToWorld(m: FreeMotion, M: Rigid): FreeMotion {
+  return m.kind === 'rotate'
+    ? { kind: 'rotate', point: compose(M, { R: IDENTITY.R, t: m.point }).t, axis: rotate(M.R, m.axis) }
+    : { kind: 'translate', axis: rotate(M.R, m.axis) };
+}
+
+/** Bezugspunkt einer Fläche (Mitte), lokal. */
+function featureCenter(f: Feature): Vec3 {
+  if (f.kind === 'cylinder') return f.center;
+  if (f.kind === 'plane' && f.circle) return f.circle.center;
+  return f.centroid;
+}
+
+/** Ungefähre Größe einer Fläche (Radius des umschließenden Bereichs). */
+function featureRadius(f: Feature): number {
+  if (f.kind === 'cylinder') return Math.hypot(f.radius, f.length / 2);
+  if (f.kind === 'plane') return Math.hypot(f.axes.size[0], f.axes.size[1]) / 2;
+  return Math.sqrt(f.area / Math.PI);
 }
 
 /** Typische Modellgröße – bestimmt Markergröße, Fangradius usw. */
@@ -173,12 +261,12 @@ function sceneScale(): number {
 }
 
 let toastTimer = 0;
-function toast(msg: string) {
+function toast(msg: string, ms = 3200) {
   const el = document.getElementById('toast')!;
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el.classList.remove('show'), 3200);
+  toastTimer = window.setTimeout(() => el.classList.remove('show'), ms);
 }
 
 function fitView() {
@@ -207,23 +295,29 @@ function addPart(name: string, geom: THREE.BufferGeometry) {
   );
   mesh.matrixAutoUpdate = false;
 
-  // Neben die bereits geladenen Teile legen, damit man bequem markieren kann
-  const bb = geom.boundingBox!;
-  let x = 0;
-  for (const p of parts) {
-    const b = new THREE.Box3().setFromObject(p.mesh);
-    x = Math.max(x, b.max.x);
+  let layout: THREE.Matrix4;
+  if ((document.getElementById('keepPos') as HTMLInputElement).checked) {
+    // Viele mehrteilige Downloads liegen in der Datei schon richtig zueinander
+    layout = new THREE.Matrix4();
+  } else {
+    // Neben die bereits geladenen Teile legen, damit man bequem markieren kann
+    const bb = geom.boundingBox!;
+    let x = 0;
+    for (const p of parts) {
+      const b = new THREE.Box3().setFromObject(p.mesh);
+      x = Math.max(x, b.max.x);
+    }
+    const gap = parts.length ? sceneScale() * 0.3 : 0;
+    layout = new THREE.Matrix4().makeTranslation(
+      parts.length ? x + gap - bb.min.x : -(bb.min.x + bb.max.x) / 2,
+      -(bb.min.y + bb.max.y) / 2,
+      -bb.min.z,
+    );
   }
-  const gap = parts.length ? sceneScale() * 0.3 : 0;
-  const layout = new THREE.Matrix4().makeTranslation(
-    parts.length ? x + gap - bb.min.x : -(bb.min.x + bb.max.x) / 2,
-    -(bb.min.y + bb.max.y) / 2,
-    -bb.min.z,
-  );
   mesh.matrix.copy(layout);
   mesh.matrixWorldNeedsUpdate = true;
 
-  const part: Part = { id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 4000) };
+  const part: Part = { id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 6000) };
   mesh.userData.partId = part.id;
   parts.push(part);
   scene.add(mesh);
@@ -255,17 +349,23 @@ async function loadFiles(files: FileList | File[]) {
 function removePart(id: number) {
   const p = getPart(id);
   if (!p) return;
+  if (gizmoTarget && (gizmoTarget.kind === 'part' ? gizmoTarget.id === id : true)) closeGizmo();
   scene.remove(p.mesh);
   p.geom.disposeBoundsTree();
   p.geom.dispose();
   parts.splice(parts.indexOf(p), 1);
   for (const j of joints) {
-    if (j.a === id) { j.a = null; j.ma = []; j.applied = false; }
-    if (j.b === id) { j.b = null; j.mb = []; j.applied = false; }
+    if (j.a === id) { j.a = null; j.ma = []; j.fa = []; j.applied = false; markersChanged(j); }
+    if (j.b === id) { j.b = null; j.mb = []; j.fb = []; j.applied = false; markersChanged(j); }
   }
   if (baseId === id) baseId = parts[0]?.id ?? null;
   solveAll();
   renderAll();
+}
+
+function topologyOf(p: Part): Topology {
+  p.topo ??= buildTopology(positionsOf(p));
+  return p.topo;
 }
 
 // ---------------------------------------------------------------- Verbindungen
@@ -283,10 +383,13 @@ function addJoint() {
     b,
     ma: [],
     mb: [],
+    fa: [],
+    fb: [],
     ordered: false,
     normals: 'auto',
     overlap: 0,
     spin: 0,
+    seat: true,
     applied: false,
     alt: 0,
   };
@@ -298,17 +401,19 @@ function addJoint() {
 function removeJoint(id: number) {
   const i = joints.findIndex((j) => j.id === id);
   if (i < 0) return;
+  if (gizmoTarget?.kind === 'joint' && gizmoTarget.id === id) closeGizmo();
   joints.splice(i, 1);
   if (activeJointId === id) activeJointId = joints[joints.length - 1]?.id ?? null;
   solveAll();
   renderAll();
 }
 
-/** Markierungen haben sich geändert → alte Alternativen/Feinausrichtung verwerfen. */
+/** Auswahl hat sich geändert → alte Alternativen, Korrekturen und Zwischenergebnisse verwerfen. */
 function markersChanged(j: Joint) {
   j.alt = 0;
-  j.icp = undefined;
-  j.icpInfo = undefined;
+  j.adjust = undefined;
+  j.adjustInfo = undefined;
+  j.cache = undefined;
 }
 
 /**
@@ -317,10 +422,13 @@ function markersChanged(j: Joint) {
  */
 function solveAll() {
   const placed = new Map<number, THREE.Matrix4>();
+  movedBy.clear();
   for (const j of joints) {
     j.result = undefined;
     j.fixedSide = undefined;
     j.status = undefined;
+    j.perm = undefined;
+    j.free = undefined;
   }
   const seeds = [baseId, ...joints.map((j) => j.a), ...parts.map((p) => p.id)].filter(
     (x): x is number => x !== null && !!getPart(x),
@@ -341,35 +449,17 @@ function solveAll() {
           if (!j.fixedSide) j.status = { kind: 'warn', text: 'Beide Teile sind schon über andere Verbindungen festgelegt – diese Verbindung wird ignoriert.' };
           continue;
         }
-        const fixedM = placed.get(cur)!;
-        const dst = (fixedSide === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixedM));
-        const src = fixedSide === 'a' ? j.mb : j.ma;
-        const res = solveJoint({ src, dst, ordered: j.ordered, normals: j.normals });
-        j.result = res;
         j.fixedSide = fixedSide;
-        if (res.error) {
-          j.status = { kind: 'err', text: res.error };
-          continue;
-        }
-        dropEquivalent(res, getPart(other)!);
-        const sol = res.solutions[Math.min(j.alt, res.solutions.length - 1)];
-        let T = applyAdjustments(sol, dst, j.spin, j.overlap);
-        if (j.icp) T = compose(j.icp, T);
+        const fixedM = placed.get(cur)!;
+        const Mf = matrixToRigid(fixedM);
+        const coarse = hasFeatures(j)
+          ? solveFeatureJoint(j, getPart(cur)!, getPart(other)!, Mf)
+          : solvePointJoint(j, getPart(other)!, fixedM);
+        if (!coarse) continue;
+        const T = j.adjust ? compose(conjugate(Mf, j.adjust), coarse) : coarse;
         placed.set(other, rigidToMatrix(T));
+        movedBy.set(other, j.id);
         queue.push(other);
-
-        const scaleRef = sceneScale();
-        // Handgesetzte Punkte (ohne Einrasten) sind nie ganz exakt – grobe Fehler deuten auf falsche Punkte hin
-        const good = !!j.icp || sol.rmsd < Math.max(0.1, scaleRef * 0.015);
-        let text = `Abweichung ${fmt(sol.rmsd)} mm`;
-        if (j.icpInfo) text += ` · ${j.icpInfo}`;
-        if (res.ambiguous && j.alt === 0) {
-          j.status = { kind: 'warn', text: `${text} – Zuordnung nicht eindeutig. Prüfe das Ergebnis, nutze „Alternative" oder setze einen weiteren, unsymmetrischen Punkt.` };
-        } else if (!good) {
-          j.status = { kind: 'warn', text: `${text} – die Punkte passen nicht genau zusammen. Markierungen prüfen.` };
-        } else {
-          j.status = { kind: 'ok', text: `✓ Verbunden · ${text}` };
-        }
       }
     }
   }
@@ -384,10 +474,141 @@ function solveAll() {
     const na = j.ma.length;
     const nb = j.mb.length;
     if (j.a === null || j.b === null) j.status = { kind: 'info', text: 'Wähle zwei Teile aus (oder klicke sie im Modell an).' };
-    else if (na === 0 && nb === 0) j.status = { kind: 'info', text: 'Klicke auf passende Punkte beider Teile.' };
+    else if (hasFeatures(j)) {
+      if (j.fa.length === 0 || j.fb.length === 0)
+        j.status = { kind: 'info', text: `Wähle noch die passende Fläche auf „${nameOf(j.fa.length ? j.b : j.a)}".` };
+      else j.status = { kind: 'info', text: 'Bereit zum Verbinden.' };
+    } else if (na === 0 && nb === 0) j.status = { kind: 'info', text: 'Klicke auf passende Punkte oder Flächen beider Teile.' };
     else if (na !== nb) j.status = { kind: 'info', text: `Noch ${Math.abs(na - nb)} Markierung(en) auf ${na < nb ? nameOf(j.a) : nameOf(j.b)} setzen.` };
     else j.status = { kind: 'info', text: na < 3 ? 'Bereit. (Mit 3+ Punkten wird es am genauesten.)' : 'Bereit zum Verbinden.' };
   }
+}
+
+/** Verbindung nur über Punkte (bisheriges Verfahren). Liefert die Lage des beweglichen Teils in Weltkoordinaten. */
+function solvePointJoint(j: Joint, moving: Part, fixedM: THREE.Matrix4): Rigid | null {
+  const fixedSide = j.fixedSide!;
+  const dst = (fixedSide === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixedM));
+  const src = fixedSide === 'a' ? j.mb : j.ma;
+  const res = solveJoint({ src, dst, ordered: j.ordered, normals: j.normals });
+  j.result = res;
+  if (res.error) {
+    j.status = { kind: 'err', text: res.error };
+    return null;
+  }
+  dropEquivalent(res, moving);
+  const sol = res.solutions[Math.min(j.alt, res.solutions.length - 1)];
+  j.perm = sol.perm;
+  if (sol.freeAxis) j.free = [{ kind: 'rotate', point: sol.freeAxis.point, axis: sol.freeAxis.axis }];
+  const T = applyAdjustments(sol, dst, j.spin, j.overlap);
+
+  const scaleRef = sceneScale();
+  // Handgesetzte Punkte (ohne Einrasten) sind nie ganz exakt – grobe Fehler deuten auf falsche Punkte hin
+  const good = !!j.adjust || sol.rmsd < Math.max(0.1, scaleRef * 0.015);
+  let text = `Abweichung ${fmt(sol.rmsd)} mm`;
+  if (j.adjustInfo) text += ` · ${j.adjustInfo}`;
+  if (res.ambiguous && j.alt === 0) {
+    j.status = { kind: 'warn', text: `${text} – Zuordnung nicht eindeutig. Prüfe das Ergebnis, nutze „Alternative" oder setze einen weiteren, unsymmetrischen Punkt.` };
+  } else if (!good) {
+    j.status = { kind: 'warn', text: `${text} – die Punkte passen nicht genau zusammen. Markierungen prüfen.` };
+  } else {
+    j.status = { kind: 'ok', text: `✓ Verbunden · ${text}` };
+  }
+  return T;
+}
+
+/**
+ * Verbindung über Flächen (und optional zusätzliche Punkte). Gelöst wird im Koordinatensystem des
+ * festen Teils, so kann das Ergebnis zwischengespeichert werden – das automatische Einpassen ist teuer.
+ */
+function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigid | null {
+  const fixedSide = j.fixedSide!;
+  const srcF = fixedSide === 'a' ? j.fb : j.fa;
+  const dstF = fixedSide === 'a' ? j.fa : j.fb;
+  const srcM = fixedSide === 'a' ? j.mb : j.ma;
+  const dstM = fixedSide === 'a' ? j.ma : j.mb;
+  const key = JSON.stringify([
+    fixed.id, moving.id, srcF.map((f) => [f.tris[0], f.tris.length]), dstF.map((f) => [f.tris[0], f.tris.length]),
+    srcM, dstM, j.alt, j.seat, j.ordered, j.normals, j.overlap,
+  ]);
+
+  if (j.cache?.key !== key) {
+    j.cache = undefined;
+    const plan = planMate(srcF, dstF, { src: moving.name, dst: fixed.name });
+    if (plan.error) {
+      j.status = { kind: 'err', text: plan.error };
+      return null;
+    }
+    let perm: number[] | undefined;
+    if (srcM.length || dstM.length) {
+      if (srcM.length !== dstM.length) {
+        j.status = { kind: 'err', text: `Ungleiche Anzahl Punkte (${dstM.length} ↔ ${srcM.length}).` };
+        return null;
+      }
+      // Welche Punkte zusammengehören, bestimmt wie bisher die automatische Zuordnung
+      const pr = solveJoint({ src: srcM, dst: dstM, ordered: j.ordered, normals: j.normals });
+      perm = pr.solutions[0]?.perm;
+      if (perm) srcM.forEach((m, i) => plan.constraints.push({ kind: 'point', src: m.p, dst: dstM[perm![i]].p }));
+    }
+    const sols = solveConstraints(plan.constraints, { scale: sceneScale() });
+    if (!sols.length) {
+      j.status = { kind: 'err', text: 'Die Flächen lassen sich nicht zusammensetzen.' };
+      return null;
+    }
+    const sol = sols[Math.min(j.alt, sols.length - 1)];
+    let rel = sol.T;
+    let info = '';
+    let flatRotation = false;
+    if (j.seat && sol.free.length) {
+      const s = sceneScale();
+      const samples = regionSamples(moving, srcF, srcM);
+      const target: ScanTarget = { bvh: fixed.geom.boundsTree as MeshBVH, positions: positionsOf(fixed), matrix: IDENTITY };
+      const seat = autoSeat(samples, rel, target, sol.free, { contactDist: s * 0.012, maxDepth: s * 0.06 });
+      rel = seat.T;
+      info = seat.info;
+      flatRotation = seat.flatRotation;
+    }
+    if (j.overlap && plan.contactNormal) {
+      const n = plan.contactNormal;
+      rel = { R: rel.R, t: [rel.t[0] - n[0] * j.overlap, rel.t[1] - n[1] * j.overlap, rel.t[2] - n[2] * j.overlap] };
+    }
+    const summary = plan.pairs
+      .map((p) => `${describeFeature(dstF[p.dst])} ↔ ${describeFeature(srcF[p.src])}`)
+      .join(' · ');
+    j.cache = {
+      key, rel, free: sol.free, count: sols.length, distError: sol.distError, angleError: sol.angleError,
+      info, flatRotation, notes: plan.notes, summary, perm,
+    };
+  }
+
+  const c = j.cache;
+  j.perm = c.perm;
+  j.free = c.free.map((m) => motionToWorld(m, Mf));
+  const bits = [c.summary, ...c.notes];
+  if (c.info) bits.push(c.info);
+  if (j.adjustInfo) bits.push(j.adjustInfo);
+  const bad = c.distError > Math.max(0.1, sceneScale() * 0.01) || c.angleError > 1;
+  if (bad && !j.adjust) {
+    j.status = { kind: 'warn', text: `Flächen passen nicht genau zusammen (Abweichung ${fmt(c.distError)} mm / ${c.angleError.toFixed(1)}°). ${bits.join(' · ')}` };
+  } else if (c.flatRotation && !j.adjust) {
+    j.status = { kind: 'warn', text: `✓ Verbunden · ${bits.join(' · ')} – Drehung um die Achse ist frei: bei Bedarf „Von Hand anpassen".` };
+  } else {
+    j.status = { kind: 'ok', text: `✓ Verbunden · ${bits.join(' · ')}` };
+  }
+  return compose(Mf, c.rel);
+}
+
+/** Oberflächenpunkte des beweglichen Teils in der Nähe der gewählten Flächen und Punkte (lokal). */
+function regionSamples(moving: Part, feats: Feature[], markers: Marker[]): Sample[] {
+  const regions: { c: Vec3; r: number }[] = [
+    ...feats.map((f) => ({ c: featureCenter(f), r: featureRadius(f) * 1.6 + sceneScale() * 0.05 })),
+    ...markers.map((m) => ({ c: m.p, r: sceneScale() * 0.25 })),
+  ];
+  const near = moving.samples.filter((s) =>
+    regions.some((g) => Math.hypot(s.p[0] - g.c[0], s.p[1] - g.c[1], s.p[2] - g.c[2]) < g.r),
+  );
+  const list = near.length >= 50 ? near : moving.samples;
+  const step = Math.max(1, Math.floor(list.length / 1500));
+  return list.filter((_, i) => i % step === 0);
 }
 
 /**
@@ -410,42 +631,217 @@ function dropEquivalent(res: JointResult, moving: Part) {
 const fmt = (x: number) => (x < 0.001 ? '< 0.001' : x.toFixed(x < 1 ? 3 : 2));
 const nameOf = (id: number | null) => getPart(id)?.name ?? '–';
 
+function alternativesOf(j: Joint): number {
+  return hasFeatures(j) ? (j.cache?.count ?? 0) : (j.result?.solutions.length ?? 0);
+}
+
 function connect(j: Joint) {
   j.applied = true;
   solveAll();
   if (j.status?.kind === 'err') {
     j.applied = false;
-    toast(j.status.text);
+    toast(j.status.text, 5000);
   } else fitView();
   renderAll();
 }
 
 function refine(j: Joint) {
-  if (!j.applied || !j.fixedSide || !j.result?.solutions.length) return;
+  if (!j.applied || !j.fixedSide) return;
   const fixed = getPart(j.fixedSide === 'a' ? j.a : j.b)!;
   const moving = getPart(j.fixedSide === 'a' ? j.b : j.a)!;
-  const contacts = (j.fixedSide === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixed.mesh.matrixWorld).p);
+  const Mf = matrixToRigid(fixed.mesh.matrixWorld);
+  const contacts = [
+    ...(j.fixedSide === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixed.mesh.matrixWorld).p),
+    ...(j.fixedSide === 'a' ? j.fa : j.fb).map((f) => compose(Mf, { R: IDENTITY.R, t: featureCenter(f) }).t),
+  ];
+  if (!contacts.length) return;
   const s = sceneScale();
-  const sol = j.result.solutions[Math.min(j.alt, j.result.solutions.length - 1)];
-  const dst = (j.fixedSide === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixed.mesh.matrixWorld));
-  const coarse = applyAdjustments(sol, dst, j.spin, j.overlap);
-  const res = refineICP(moving.samples, coarse, fixed.geom, fixed.geom.boundsTree as MeshBVH, fixed.mesh.matrixWorld, contacts, {
-    regionRadius: s * 0.35,
-    maxPairDist: Math.max(sol.rmsd * 4, s * 0.02),
+  const current = matrixToRigid(moving.mesh.matrixWorld);
+  const rmsd = j.result?.solutions[0]?.rmsd ?? 0;
+  const res = refineICP(moving.samples, current, fixed.geom, fixed.geom.boundsTree as MeshBVH, fixed.mesh.matrixWorld, contacts, {
+    regionRadius: Math.max(s * 0.35, ...(j.fixedSide === 'a' ? j.fa : j.fb).map((f) => featureRadius(f) * 1.3)),
+    maxPairDist: Math.max(rmsd * 4, s * 0.02),
   });
   if (!res) {
-    toast('Feinausrichtung: zu wenig Kontaktfläche in der Nähe der Markierungen gefunden.');
+    toast('Feinausrichtung: zu wenig Kontaktfläche in der Nähe der Auswahl gefunden.');
     return;
   }
-  // Korrektur relativ zur Grobausrichtung speichern
-  const inv = rigidToMatrix(coarse).invert();
-  j.icp = matrixToRigid(rigidToMatrix(res.T).multiply(inv));
-  j.icpInfo = `fein ausgerichtet (${res.pairs} Flächenpunkte, Rest ${fmt(res.rmsd)} mm)`;
+  // Korrektur als Bewegung im Koordinatensystem des festen Teils speichern
+  const Dw = compose(res.T, invertRigid(current));
+  j.adjust = compose(conjugate(invertRigid(Mf), Dw), j.adjust ?? IDENTITY);
+  j.adjustInfo = `fein ausgerichtet (${res.pairs} Flächenpunkte, Rest ${fmt(res.rmsd)} mm)`;
   solveAll();
   renderAll();
 }
 
-// ---------------------------------------------------------------- Markierungen (3D)
+// ---------------------------------------------------------------- Gizmo (von Hand bewegen/drehen)
+
+const tc = new TransformControls(camera, renderer.domElement);
+tc.setSpace('local');
+tc.setSize(0.9);
+scene.add(tc.getHelper());
+const gizmoAnchor = new THREE.Object3D();
+gizmoAnchor.matrixAutoUpdate = true;
+scene.add(gizmoAnchor);
+let gizmoTarget: { kind: 'joint' | 'part'; id: number } | null = null;
+let gizmoMode: 'translate' | 'rotate' = 'rotate';
+let gizmoFreeOnly = true;
+let gizmoSnapDeg = 0;
+let dragStart: { anchor: THREE.Matrix4; adjust: Rigid; layout: THREE.Matrix4 } | null = null;
+/** Klicks, die auf dem Gizmo landen, dürfen keine Markierungen setzen. */
+let suppressClick = false;
+
+tc.addEventListener('dragging-changed', (e) => {
+  controls.enabled = !e.value;
+  if (e.value) {
+    suppressClick = true;
+    const j = gizmoTarget?.kind === 'joint' ? joints.find((x) => x.id === gizmoTarget!.id) : undefined;
+    const p = gizmoTarget?.kind === 'part' ? getPart(gizmoTarget.id) : undefined;
+    gizmoAnchor.updateMatrixWorld(true);
+    dragStart = { anchor: gizmoAnchor.matrixWorld.clone(), adjust: j?.adjust ?? IDENTITY, layout: p?.layout.clone() ?? new THREE.Matrix4() };
+  } else {
+    dragStart = null;
+    renderAll();
+  }
+});
+
+tc.addEventListener('objectChange', () => {
+  if (!dragStart || !gizmoTarget) return;
+  gizmoAnchor.updateMatrixWorld(true);
+  const D = gizmoAnchor.matrixWorld.clone().multiply(dragStart.anchor.clone().invert());
+  if (gizmoTarget.kind === 'part') {
+    const p = getPart(gizmoTarget.id);
+    if (!p) return;
+    p.layout.copy(D.multiply(dragStart.layout));
+  } else {
+    const j = joints.find((x) => x.id === gizmoTarget!.id);
+    const fixed = j && getPart(j.fixedSide === 'a' ? j.a : j.b);
+    if (!j || !fixed) return;
+    const Mf = matrixToRigid(fixed.mesh.matrixWorld);
+    j.adjust = compose(conjugate(invertRigid(Mf), matrixToRigid(D)), dragStart.adjust);
+    j.adjustInfo = 'von Hand angepasst';
+  }
+  solveAll();
+  renderLight();
+});
+
+/** Freie Bewegungen, die das Gizmo zeigen soll (Weltkoordinaten). Leer = alles frei. */
+function gizmoMotions(): FreeMotion[] | null {
+  if (!gizmoTarget || gizmoTarget.kind === 'part' || !gizmoFreeOnly) return null;
+  return joints.find((x) => x.id === gizmoTarget!.id)?.free ?? [];
+}
+
+function placeGizmo() {
+  if (!gizmoTarget) return;
+  let moving: Part | undefined;
+  let pivot: THREE.Vector3 | null = null;
+  let zAxis: THREE.Vector3 | null = null;
+  let xHint: THREE.Vector3 | null = null;
+  if (gizmoTarget.kind === 'part') {
+    moving = getPart(gizmoTarget.id);
+  } else {
+    const j = joints.find((x) => x.id === gizmoTarget!.id);
+    if (!j?.applied || !j.fixedSide) { closeGizmo(); return; }
+    moving = getPart(j.fixedSide === 'a' ? j.b : j.a);
+    const free = j.free ?? [];
+    const rot = free.find((m) => m.kind === 'rotate');
+    const trans = free.filter((m) => m.kind === 'translate');
+    if (rot && rot.kind === 'rotate') {
+      pivot = new THREE.Vector3(...rot.point);
+      zAxis = new THREE.Vector3(...rot.axis);
+    } else if (trans.length === 1) zAxis = new THREE.Vector3(...trans[0].axis);
+    else if (trans.length === 2) zAxis = new THREE.Vector3(...trans[0].axis).cross(new THREE.Vector3(...trans[1].axis));
+    const t0 = trans[0];
+    if (t0 && zAxis && Math.abs(new THREE.Vector3(...t0.axis).normalize().dot(zAxis.clone().normalize())) < 0.99)
+      xHint = new THREE.Vector3(...t0.axis);
+    if (!pivot && moving) {
+      // Mitte der gewählten Flächen/Punkte des beweglichen Teils
+      const side = j.fixedSide === 'a' ? 'b' : 'a';
+      const pts = [...(side === 'a' ? j.fa : j.fb).map(featureCenter), ...(side === 'a' ? j.ma : j.mb).map((m) => m.p)];
+      if (pts.length) {
+        const c = pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length, a[2] + p[2] / pts.length], [0, 0, 0]);
+        pivot = new THREE.Vector3(...c).applyMatrix4(moving.mesh.matrixWorld);
+      }
+    }
+  }
+  if (!moving) { closeGizmo(); return; }
+  if (!pivot) pivot = new THREE.Box3().setFromObject(moving.mesh).getCenter(new THREE.Vector3());
+  const z = (zAxis ?? new THREE.Vector3(0, 0, 1)).normalize();
+  let x = xHint ? xHint.clone().addScaledVector(z, -xHint.dot(z)) : new THREE.Vector3(1, 0, 0).addScaledVector(z, -z.x);
+  if (x.lengthSq() < 1e-6) x = new THREE.Vector3(0, 1, 0).addScaledVector(z, -z.y);
+  x.normalize();
+  const y = z.clone().cross(x);
+  gizmoAnchor.matrix.makeBasis(x, y, z).setPosition(pivot);
+  gizmoAnchor.matrix.decompose(gizmoAnchor.position, gizmoAnchor.quaternion, gizmoAnchor.scale);
+  gizmoAnchor.updateMatrixWorld(true);
+  tc.attach(gizmoAnchor);
+  updateGizmoAxes();
+}
+
+/** Zeigt nur die Achsen, entlang/um die sich das Teil laut Verbindung noch bewegen darf. */
+function updateGizmoAxes() {
+  tc.setMode(gizmoMode);
+  tc.setRotationSnap(gizmoSnapDeg ? THREE.MathUtils.degToRad(gizmoSnapDeg) : null);
+  const motions = gizmoMotions();
+  const hint = document.getElementById('gizmoHint')!;
+  if (!motions) {
+    tc.showX = tc.showY = tc.showZ = true;
+    hint.textContent = '';
+    return;
+  }
+  const axes = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  gizmoAnchor.matrixWorld.extractBasis(axes[0], axes[1], axes[2]);
+  const wanted = motions.filter((m) => (gizmoMode === 'rotate' ? m.kind === 'rotate' : m.kind === 'translate'));
+  // Orthonormalbasis der erlaubten Richtungen, dann prüfen, welche Gizmo-Achsen darin liegen
+  const basis: THREE.Vector3[] = [];
+  for (const m of wanted) {
+    const v = new THREE.Vector3(...m.axis).normalize();
+    for (const b of basis) v.addScaledVector(b, -v.dot(b));
+    if (v.length() > 1e-3) basis.push(v.normalize());
+  }
+  const inSpan = (a: THREE.Vector3) => Math.hypot(...basis.map((b) => a.dot(b))) > 0.98;
+  [tc.showX, tc.showY, tc.showZ] = axes.map(inSpan);
+  hint.textContent = basis.length
+    ? ''
+    : gizmoMode === 'rotate'
+      ? 'Drehen ist durch die Verbindung festgelegt. Für freies Drehen den Haken bei „Nur freie Richtungen" entfernen.'
+      : 'Verschieben ist durch die Verbindung festgelegt. Für freies Verschieben den Haken bei „Nur freie Richtungen" entfernen.';
+}
+
+function openGizmo(target: { kind: 'joint' | 'part'; id: number }, mode?: 'translate' | 'rotate') {
+  gizmoTarget = target;
+  if (target.kind === 'joint') {
+    const j = joints.find((x) => x.id === target.id);
+    const free = j?.free ?? [];
+    gizmoMode = mode ?? (free.some((m) => m.kind === 'rotate') ? 'rotate' : 'translate');
+  } else gizmoMode = mode ?? 'translate';
+  document.getElementById('gizmoBar')!.hidden = false;
+  placeGizmo();
+  renderGizmoBar();
+}
+
+function closeGizmo() {
+  gizmoTarget = null;
+  tc.detach();
+  document.getElementById('gizmoBar')!.hidden = true;
+}
+
+function renderGizmoBar() {
+  const bar = document.getElementById('gizmoBar')!;
+  if (!gizmoTarget) return;
+  const label =
+    gizmoTarget.kind === 'part'
+      ? `„${nameOf(gizmoTarget.id)}" bewegen`
+      : `Verbindung ${joints.findIndex((x) => x.id === gizmoTarget!.id) + 1} anpassen`;
+  bar.querySelector('[data-g="title"]')!.textContent = label;
+  bar.querySelectorAll<HTMLButtonElement>('[data-g-mode]').forEach((b) => b.classList.toggle('on', b.dataset.gMode === gizmoMode));
+  (bar.querySelector('#gizmoFree') as HTMLInputElement).checked = gizmoFreeOnly;
+  (bar.querySelector('[data-g="free"]') as HTMLElement).hidden = gizmoTarget.kind === 'part';
+  (bar.querySelector('#gizmoSnap') as HTMLSelectElement).value = String(gizmoSnapDeg);
+  (bar.querySelector('[data-g="reset"]') as HTMLElement).hidden = gizmoTarget.kind === 'part';
+}
+
+// ---------------------------------------------------------------- Markierungen und Flächen (3D)
 
 function labelSprite(text: string, color: THREE.Color): THREE.Sprite {
   const c = document.createElement('canvas');
@@ -459,7 +855,7 @@ function labelSprite(text: string, color: THREE.Color): THREE.Sprite {
   g.strokeStyle = '#ffffff';
   g.stroke();
   g.fillStyle = '#ffffff';
-  g.font = 'bold 30px system-ui, sans-serif';
+  g.font = `bold ${text.length > 1 ? 24 : 30}px system-ui, sans-serif`;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(text, 32, 34);
@@ -470,9 +866,20 @@ function labelSprite(text: string, color: THREE.Color): THREE.Sprite {
   return s;
 }
 
-function rebuildMarkers() {
-  for (const o of [...markerGroup.children]) {
-    markerGroup.remove(o);
+/** Teilgeometrie aus ausgewählten Dreiecken (lokale Koordinaten). */
+function subGeometry(part: Part, tris: Iterable<number>): THREE.BufferGeometry {
+  const src = positionsOf(part);
+  const list = [...tris];
+  const out = new Float32Array(list.length * 9);
+  list.forEach((t, k) => out.set(src.subarray(t * 9, t * 9 + 9), k * 9));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(out, 3));
+  return g;
+}
+
+function disposeGroup(group: THREE.Group) {
+  for (const o of [...group.children]) {
+    group.remove(o);
     o.traverse((x) => {
       const m = x as THREE.Mesh;
       m.geometry?.dispose();
@@ -481,16 +888,20 @@ function rebuildMarkers() {
       mat?.dispose();
     });
   }
+}
+
+function rebuildMarkers() {
+  disposeGroup(markerGroup);
+  disposeGroup(faceGroup);
   const sphere = new THREE.SphereGeometry(1, 16, 12);
   for (const j of joints) {
     const active = j.id === activeJointId;
+    const movingSide = j.fixedSide ? (j.fixedSide === 'a' ? 'b' : 'a') : null;
     for (const side of ['a', 'b'] as Side[]) {
       const part = getPart(side === 'a' ? j.a : j.b);
       if (!part || !part.visible) continue;
       const list = side === 'a' ? j.ma : j.mb;
       // Auf der bewegten Seite nach dem Verbinden die erkannte Zuordnung anzeigen
-      const sol = j.result?.solutions[Math.min(j.alt, (j.result?.solutions.length ?? 1) - 1)];
-      const movingSide = j.fixedSide ? (j.fixedSide === 'a' ? 'b' : 'a') : null;
       list.forEach((m, i) => {
         const w = markerToWorld(m, part.mesh.matrixWorld);
         const anchor = new THREE.Vector3(...w.p);
@@ -499,14 +910,41 @@ function rebuildMarkers() {
           sphere,
           new THREE.MeshBasicMaterial({ color: j.color, transparent: !active, opacity: active ? 1 : 0.45 }),
         );
-        dot.userData = { joint: j.id, side, index: i, px: 5, anchor, normal, lift: 0 };
+        dot.userData = { joint: j.id, side, index: i, kind: 'point', px: 5, anchor, normal, lift: 0 };
         markerGroup.add(dot);
 
-        const num = side === movingSide && sol ? sol.perm[i] + 1 : i + 1;
+        const num = side === movingSide && j.perm ? j.perm[i] + 1 : i + 1;
         const label = labelSprite(String(num), j.color);
         label.material.opacity = active ? 1 : 0.5;
         // Beschriftung etwas von der Oberfläche abheben
         label.userData = { ...dot.userData, px: 22, lift: side === 'a' ? 16 : 26 };
+        markerGroup.add(label);
+      });
+
+      // Ausgewählte Flächen farbig hervorheben und beschriften
+      const feats = side === 'a' ? j.fa : j.fb;
+      const counters: Record<string, number> = {};
+      feats.forEach((f, i) => {
+        const overlay = new THREE.Mesh(
+          subGeometry(part, f.tris),
+          new THREE.MeshBasicMaterial({
+            color: j.color, transparent: true, opacity: active ? 0.55 : 0.25, side: THREE.DoubleSide, depthWrite: false,
+            polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+          }),
+        );
+        overlay.matrixAutoUpdate = false;
+        overlay.matrix.copy(part.mesh.matrixWorld);
+        overlay.userData = { joint: j.id, side, index: i, kind: 'face' };
+        faceGroup.add(overlay);
+
+        const tag = featureTag(f);
+        const group = f.kind === 'cylinder' ? 'round' : 'flat';
+        counters[group] = (counters[group] ?? 0) + 1;
+        const label = labelSprite(`${tag}${counters[group]}`, j.color);
+        label.material.opacity = active ? 1 : 0.5;
+        const c = new THREE.Vector3(...featureCenter(f)).applyMatrix4(part.mesh.matrixWorld);
+        const n = f.kind === 'cylinder' ? new THREE.Vector3() : new THREE.Vector3(...f.normal).transformDirection(part.mesh.matrixWorld);
+        label.userData = { joint: j.id, side, index: i, kind: 'face', px: 24, anchor: c, normal: n, lift: 14 };
         markerGroup.add(label);
       });
     }
@@ -526,19 +964,26 @@ function setNdc(e: PointerEvent | MouseEvent) {
   raycaster.setFromCamera(ndc, camera);
 }
 
-/** Trifft die Oberfläche eines Teils; rastet optional an der nächsten Ecke ein. */
-function pick(e: PointerEvent | MouseEvent): { part: Part; local: Marker; world: THREE.Vector3 } | null {
+interface Hit {
+  part: Part;
+  local: Marker;
+  world: THREE.Vector3;
+  tri: number;
+}
+
+/** Trifft die Oberfläche eines Teils; rastet im Punktmodus optional an der nächsten Ecke ein. */
+function pick(e: PointerEvent | MouseEvent): Hit | null {
   setNdc(e);
   const meshes = parts.filter((p) => p.visible).map((p) => p.mesh);
   const hit = raycaster.intersectObjects(meshes, false)[0];
-  if (!hit || !hit.face) return null;
+  if (!hit || !hit.face || hit.faceIndex == null) return null;
   const part = getPart(hit.object.userData.partId)!;
   const inv = part.mesh.matrixWorld.clone().invert();
   const local = hit.point.clone().applyMatrix4(inv);
   // Außennormale laut Dreiecks-Umlaufsinn (nicht zur Kamera gedreht)
   const n = hit.face.normal.clone();
   const snap = (document.getElementById('snap') as HTMLInputElement).checked;
-  if (snap) {
+  if (snap && pickMode === 'point') {
     // Fangradius in Bildschirmpixeln, umgerechnet in Modellgröße am Trefferpunkt
     const rect = renderer.domElement.getBoundingClientRect();
     const worldPerPx = (2 * hit.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rect.height;
@@ -557,32 +1002,67 @@ function pick(e: PointerEvent | MouseEvent): { part: Part; local: Marker; world:
     if (best) local.copy(best);
   }
   const world = local.clone().applyMatrix4(part.mesh.matrixWorld);
-  return { part, local: { p: v3(local), n: v3(n.normalize()) }, world };
+  return { part, local: { p: v3(local), n: v3(n.normalize()) }, world, tri: hit.faceIndex };
+}
+
+/** Darf ein Klick auf dieses Teil in der aktiven Verbindung landen? */
+function usableFor(j: Joint | undefined, part: Part) {
+  return !!j && (j.a === part.id || j.b === part.id || j.a === null || j.b === null);
+}
+
+function updateHover(h: Hit | null) {
+  if (pickMode !== 'face' || !h || !usableFor(activeJoint(), h.part)) {
+    hoverMesh.visible = false;
+    hoverKey = '';
+    hoverTris = null;
+    return;
+  }
+  const key = `${h.part.id}`;
+  if (key === hoverKey && hoverTris?.has(h.tri)) return;
+  const f = detectFeature(topologyOf(h.part), h.tri);
+  hoverKey = key;
+  hoverTris = new Set(f.tris);
+  hoverMesh.geometry.dispose();
+  hoverMesh.geometry = subGeometry(h.part, f.tris);
+  hoverMesh.matrix.copy(h.part.mesh.matrixWorld);
+  hoverMesh.visible = true;
+  const j = activeJoint()!;
+  (hoverMesh.material as THREE.MeshBasicMaterial).color.copy(j.color).lerp(new THREE.Color(1, 1, 1), 0.4);
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   downPos = { x: e.clientX, y: e.clientY };
+  // Klick auf einen Gizmo-Griff
+  suppressClick = !!(tc.object && tc.axis);
 });
 
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (e.buttons) { cursor.visible = false; return; }
+  if (e.buttons || tc.dragging) {
+    cursor.visible = false;
+    return;
+  }
   const h = pick(e);
   const j = activeJoint();
-  const usable = h && j && (j.a === h.part.id || j.b === h.part.id || j.a === null || j.b === null);
-  cursor.visible = !!usable;
+  const usable = !!h && usableFor(j, h.part) && !(tc.object && tc.axis);
+  cursor.visible = usable && pickMode === 'point';
   if (h && usable) {
     cursor.position.copy(h.world);
     (cursor.material as THREE.MeshBasicMaterial).color.copy(j!.color).lerp(new THREE.Color(1, 1, 1), 0.35);
   }
-  renderer.domElement.style.cursor = usable ? 'crosshair' : 'default';
+  updateHover(usable ? h : null);
+  renderer.domElement.style.cursor = usable ? (pickMode === 'face' ? 'pointer' : 'crosshair') : 'default';
 });
 
-renderer.domElement.addEventListener('pointerleave', () => (cursor.visible = false));
+renderer.domElement.addEventListener('pointerleave', () => {
+  cursor.visible = false;
+  updateHover(null);
+});
 
 renderer.domElement.addEventListener('pointerup', (e) => {
   if (!downPos || e.button !== 0) return;
   const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
   downPos = null;
+  if (suppressClick) { suppressClick = false; return; }
   if (moved > 5) return; // war eine Kamerabewegung
 
   const h = pick(e);
@@ -601,39 +1081,79 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     toast(`„${h.part.name}" gehört nicht zur aktiven Verbindung. Wähle sie links aus oder lege eine neue an.`);
     return;
   }
-  (side === 'a' ? j.ma : j.mb).push(h.local);
-  history.push({ joint: j.id, side });
+  if (pickMode === 'face') toggleFace(j, side, h.part, h.tri);
+  else {
+    (side === 'a' ? j.ma : j.mb).push(h.local);
+    history.push({ joint: j.id, side, kind: 'point' });
+    markersChanged(j);
+    solveAll();
+    renderAll();
+  }
+});
+
+/** Wählt die Fläche unter einem Dreieck aus – oder hebt die Auswahl auf, wenn sie schon gewählt ist. */
+function toggleFace(j: Joint, side: Side, part: Part, tri: number) {
+  const list = side === 'a' ? j.fa : j.fb;
+  const existing = list.findIndex((f) => f.tris.includes(tri));
+  if (existing >= 0) list.splice(existing, 1);
+  else {
+    list.push(detectFeature(topologyOf(part), tri));
+    history.push({ joint: j.id, side, kind: 'face' });
+  }
   markersChanged(j);
+  if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
   solveAll();
   renderAll();
-});
+}
 
 renderer.domElement.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   setNdc(e);
-  const hit = raycaster.intersectObjects(markerGroup.children.filter((o) => (o as THREE.Mesh).isMesh), false)[0];
+  const targets = [...markerGroup.children.filter((o) => (o as THREE.Mesh).isMesh), ...faceGroup.children];
+  const hit = raycaster.intersectObjects(targets, false)[0];
   if (!hit) return;
-  const { joint, side, index } = hit.object.userData as { joint: number; side: Side; index: number };
+  const { joint, side, index, kind } = hit.object.userData as { joint: number; side: Side; index: number; kind: 'point' | 'face' };
   const j = joints.find((x) => x.id === joint);
   if (!j) return;
-  (side === 'a' ? j.ma : j.mb).splice(index, 1);
+  if (kind === 'face') (side === 'a' ? j.fa : j.fb).splice(index, 1);
+  else (side === 'a' ? j.ma : j.mb).splice(index, 1);
   markersChanged(j);
-  if (j.ma.length === 0 && j.mb.length === 0) j.applied = false;
+  if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
   solveAll();
   renderAll();
 });
 
+function setPickMode(mode: 'point' | 'face') {
+  pickMode = mode;
+  document.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) => b.classList.toggle('on', b.dataset.pick === mode));
+  updateHover(null);
+  cursor.visible = false;
+  renderHint();
+}
+
 window.addEventListener('keydown', (e) => {
+  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     const last = history.pop();
     const j = last && joints.find((x) => x.id === last.joint);
     if (!j) return;
     e.preventDefault();
-    (last!.side === 'a' ? j.ma : j.mb).pop();
+    if (last!.kind === 'face') (last!.side === 'a' ? j.fa : j.fb).pop();
+    else (last!.side === 'a' ? j.ma : j.mb).pop();
     markersChanged(j);
     solveAll();
     renderAll();
+    return;
   }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'p') setPickMode('point');
+  else if (k === 'f') setPickMode('face');
+  else if (gizmoTarget && (k === 'g' || k === 'r')) {
+    gizmoMode = k === 'g' ? 'translate' : 'rotate';
+    updateGizmoAxes();
+    renderGizmoBar();
+  } else if (gizmoTarget && k === 'escape') closeGizmo();
 });
 
 // ---------------------------------------------------------------- Seitenleiste
@@ -651,6 +1171,7 @@ function renderParts() {
         <label class="base" title="Das Basisteil bleibt liegen, alle anderen werden daran angefügt.">
           <input type="radio" name="base" data-act="base" data-id="${p.id}" ${p.id === baseId ? 'checked' : ''}/> Basis
         </label>
+        <button class="icon" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen">✥</button>
         <button class="icon" data-act="rm-part" data-id="${p.id}" title="Entfernen">✕</button>
       </li>`,
     )
@@ -671,44 +1192,71 @@ function jointStatusHTML(j: Joint) {
   return j.status ? `<div class="status ${j.status.kind}" data-status="${j.id}">${esc(j.status.text)}</div>` : `<div class="status" data-status="${j.id}"></div>`;
 }
 
+function featureChips(j: Joint, side: Side) {
+  const list = side === 'a' ? j.fa : j.fb;
+  if (!list.length) return '';
+  const counters: Record<string, number> = {};
+  return `<ul class="chips">${list
+    .map((f, i) => {
+      const group = f.kind === 'cylinder' ? 'round' : 'flat';
+      counters[group] = (counters[group] ?? 0) + 1;
+      return `<li><b>${featureTag(f)}${counters[group]}</b> ${esc(describeFeature(f))}
+        <button class="icon" data-act="rm-face" data-side="${side}" data-idx="${i}" data-id="${j.id}" title="Fläche abwählen">✕</button></li>`;
+    })
+    .join('')}</ul>`;
+}
+
 function renderJoints() {
   jointsEl.innerHTML = joints
     .map((j, idx) => {
       const active = j.id === activeJointId;
-      const sol = j.result?.solutions[Math.min(j.alt, (j.result?.solutions.length ?? 1) - 1)];
-      const nAlt = j.result?.solutions.length ?? 0;
-      const ready = j.a !== null && j.b !== null && j.ma.length > 0 && j.ma.length === j.mb.length;
+      const feat = hasFeatures(j);
+      const sol = !feat ? j.result?.solutions[Math.min(j.alt, (j.result?.solutions.length ?? 1) - 1)] : undefined;
+      const nAlt = alternativesOf(j);
+      const ready =
+        j.a !== null && j.b !== null &&
+        (feat ? j.fa.length > 0 && j.fb.length > 0 && j.ma.length === j.mb.length : j.ma.length > 0 && j.ma.length === j.mb.length);
       const head = `<div class="head">
           <span class="dot" style="background:#${j.color.getHexString()}"></span>
           <span class="grow">Verbindung ${idx + 1}</span>
           <button class="icon" data-act="rm-joint" data-id="${j.id}" title="Verbindung löschen">✕</button>
         </div>`;
+      const sel = [
+        j.ma.length + j.mb.length ? `${j.ma.length}/${j.mb.length} Punkte` : '',
+        j.fa.length + j.fb.length ? `${j.fa.length}/${j.fb.length} Flächen` : '',
+      ].filter(Boolean).join(' · ') || 'noch nichts gewählt';
       if (!active) {
         return `<div class="joint" data-act="activate" data-id="${j.id}">${head}
-          <div class="help" style="margin:0">${esc(nameOf(j.a))} ↔ ${esc(nameOf(j.b))} · ${j.ma.length}/${j.mb.length} Punkte</div>
+          <div class="help" style="margin:0">${esc(nameOf(j.a))} ↔ ${esc(nameOf(j.b))} · ${sel}</div>
           ${jointStatusHTML(j)}</div>`;
       }
+      const isGizmo = gizmoTarget?.kind === 'joint' && gizmoTarget.id === j.id;
       return `<div class="joint active">${head}
         <label class="field">Teil 1<select data-act="sel-a" data-id="${j.id}">${partOptions(j.a, j.b)}</select></label>
         <label class="field">Teil 2<select data-act="sel-b" data-id="${j.id}">${partOptions(j.b, j.a)}</select></label>
         <div class="counts">
-          <div class="c"><span>Teil 1: <b>${j.ma.length}</b></span><button class="icon" data-act="clr-a" data-id="${j.id}" title="Markierungen löschen">⌫</button></div>
-          <div class="c"><span>Teil 2: <b>${j.mb.length}</b></span><button class="icon" data-act="clr-b" data-id="${j.id}" title="Markierungen löschen">⌫</button></div>
+          <div class="c"><span>Teil 1: <b>${j.ma.length}</b> P · <b>${j.fa.length}</b> F</span><button class="icon" data-act="clr-a" data-id="${j.id}" title="Auswahl auf Teil 1 löschen">⌫</button></div>
+          <div class="c"><span>Teil 2: <b>${j.mb.length}</b> P · <b>${j.fb.length}</b> F</span><button class="icon" data-act="clr-b" data-id="${j.id}" title="Auswahl auf Teil 2 löschen">⌫</button></div>
         </div>
-        <label class="check small"><input type="checkbox" data-act="ordered" data-id="${j.id}" ${j.ordered ? 'checked' : ''}/>
-          Reihenfolge vorgeben (sonst automatische Zuordnung)</label>
-        <label class="field">Flächen­normalen
-          <span class="seg">${(['auto', 'on', 'off'] as NormalMode[])
-            .map((m) => `<button data-act="normals" data-val="${m}" data-id="${j.id}" class="${j.normals === m ? 'on' : ''}">${{ auto: 'Auto', on: 'An', off: 'Aus' }[m]}</button>`)
-            .join('')}</span></label>
+        ${featureChips(j, 'a')}${featureChips(j, 'b')}
+        ${feat
+          ? `<label class="check small" title="Sucht die Drehung um eine freie Achse und schiebt das Teil bis zum Anschlag – über Flächenkontakt ohne Durchdringung."><input type="checkbox" data-act="seat" data-id="${j.id}" ${j.seat ? 'checked' : ''}/>
+              Automatisch einpassen (Drehung &amp; Anschlag suchen)</label>`
+          : `<label class="check small"><input type="checkbox" data-act="ordered" data-id="${j.id}" ${j.ordered ? 'checked' : ''}/>
+              Reihenfolge vorgeben (sonst automatische Zuordnung)</label>
+            <label class="field">Flächen­normalen
+              <span class="seg">${(['auto', 'on', 'off'] as NormalMode[])
+                .map((m) => `<button data-act="normals" data-val="${m}" data-id="${j.id}" class="${j.normals === m ? 'on' : ''}">${{ auto: 'Auto', on: 'An', off: 'Aus' }[m]}</button>`)
+                .join('')}</span></label>`}
         <label class="field" title="Schiebt das Teil etwas ineinander, damit der Slicer beide Teile sicher zu einem Körper verschmilzt.">Einsinken (mm)
           <input type="number" step="0.05" min="-5" max="5" value="${j.overlap}" data-act="overlap" data-id="${j.id}"/></label>
         ${sol?.freeAxis ? `<label class="field" title="Bei wenigen Punkten ist die Drehung um die Kontaktachse nicht festgelegt.">Drehung <span class="row"><input type="range" min="-180" max="180" step="1" value="${j.spin}" data-act="spin" data-id="${j.id}"/><span data-spinval="${j.id}" style="width:38px;text-align:right">${j.spin}°</span></span></label>` : ''}
         <div class="row wrap">
           ${j.applied
             ? `<button class="ghost" data-act="disconnect" data-id="${j.id}">Lösen</button>
-               <button class="ghost" data-act="refine" data-id="${j.id}" title="Zieht die Kontaktflächen nahe der Markierungen genau aufeinander (ICP).">Feinausrichtung</button>
-               ${nAlt > 1 && !j.ordered ? `<button class="ghost" data-act="alt" data-id="${j.id}" title="Nächstbeste Zuordnung der Markierungen ausprobieren">Alternative ${Math.min(j.alt, nAlt - 1) + 1}/${nAlt}</button>` : ''}`
+               <button class="${isGizmo ? '' : 'ghost'}" data-act="gizmo" data-id="${j.id}" title="Mit Pfeilen und Drehring nachjustieren – standardmäßig nur in den Richtungen, die die Verbindung offen lässt.">${isGizmo ? 'Anpassen beenden' : 'Von Hand anpassen'}</button>
+               <button class="ghost" data-act="refine" data-id="${j.id}" title="Zieht die Kontaktflächen nahe der Auswahl genau aufeinander (ICP).">Feinausrichtung</button>
+               ${nAlt > 1 && !j.ordered ? `<button class="ghost" data-act="alt" data-id="${j.id}" title="Nächste mögliche Lösung ausprobieren">Alternative ${Math.min(j.alt, nAlt - 1) + 1}/${nAlt}</button>` : ''}`
             : `<button data-act="connect" data-id="${j.id}" ${ready ? '' : 'disabled'}>Verbinden</button>`}
         </div>
         ${jointStatusHTML(j)}
@@ -720,15 +1268,20 @@ function renderJoints() {
 function renderHint() {
   const el = document.getElementById('hint')!;
   const j = activeJoint();
-  if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere das Beispiel.';
+  const what = pickMode === 'face' ? 'Flächen' : 'Punkte';
+  if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
   else if (!j) el.textContent = 'Lege links eine Verbindung an.';
   else if (j.a === null || j.b === null) el.textContent = 'Klicke die beiden Teile an, die verbunden werden sollen.';
-  else if (j.applied) el.textContent = 'Verbunden. Weitere Punkte verfeinern das Ergebnis live · Rechtsklick entfernt eine Markierung.';
-  else {
+  else if (j.applied) el.textContent = `Verbunden. Weitere ${what} verfeinern das Ergebnis live · Rechtsklick entfernt eine Auswahl.`;
+  else if (pickMode === 'face') {
+    if (!j.fa.length && !j.fb.length) el.textContent = `Klicke die Kontaktfläche auf „${nameOf(j.a)}" und die passende auf „${nameOf(j.b)}" (z. B. Zapfen und Bohrung).`;
+    else if (!j.fa.length || !j.fb.length) el.textContent = `Jetzt die passende Fläche auf „${nameOf(j.fa.length ? j.b : j.a)}" anklicken.`;
+    else el.textContent = 'Flächen gewählt. Weitere Flächenpaare (z. B. Auflage + Zapfen) machen es eindeutiger – oder „Verbinden" klicken.';
+  } else {
     const na = j.ma.length;
     const nb = j.mb.length;
-    if (na === 0 && nb === 0) el.textContent = `Klicke markante Punkte auf „${nameOf(j.a)}" – danach dieselben Stellen auf „${nameOf(j.b)}".`;
+    if (na === 0 && nb === 0) el.textContent = `Klicke markante Punkte auf „${nameOf(j.a)}" – danach dieselben Stellen auf „${nameOf(j.b)}". Tipp: Mit „Flächen" (Taste F) geht es oft schneller.`;
     else if (na !== nb) el.textContent = `Noch ${Math.abs(na - nb)} Punkt(e) auf „${na < nb ? nameOf(j.a) : nameOf(j.b)}" – Reihenfolge egal.`;
     else el.textContent = `${na} Punktpaar(e) gesetzt. Weitere Punkte setzen oder links auf „Verbinden" klicken.`;
   }
@@ -739,9 +1292,13 @@ function renderAll() {
   renderJoints();
   renderHint();
   rebuildMarkers();
+  if (gizmoTarget && !tc.dragging) {
+    placeGizmo();
+    renderGizmoBar();
+  }
 }
 
-/** Nur Statuszeilen aktualisieren (z. B. während ein Regler gezogen wird). */
+/** Nur Statuszeilen und 3D-Anzeige aktualisieren (z. B. während ein Regler oder das Gizmo gezogen wird). */
 function renderLight() {
   for (const j of joints) {
     const el = jointsEl.querySelector(`[data-status="${j.id}"]`);
@@ -770,13 +1327,30 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
     case 'rm-part':
       removePart(id);
       break;
+    case 'move-part': {
+      // Wird das Teil von einer Verbindung bewegt, wird diese angepasst
+      const jid = movedBy.get(id);
+      if (jid !== undefined) {
+        activeJointId = jid;
+        openGizmo({ kind: 'joint', id: jid });
+      } else openGizmo({ kind: 'part', id });
+      renderAll();
+      break;
+    }
     case 'clr-a':
     case 'clr-b':
       if (!j) break;
-      if (t.dataset.act === 'clr-a') j.ma = [];
-      else j.mb = [];
+      if (t.dataset.act === 'clr-a') { j.ma = []; j.fa = []; } else { j.mb = []; j.fb = []; }
       j.applied = false;
       markersChanged(j);
+      solveAll();
+      renderAll();
+      break;
+    case 'rm-face':
+      if (!j) break;
+      (t.dataset.side === 'a' ? j.fa : j.fb).splice(Number(t.dataset.idx), 1);
+      markersChanged(j);
+      if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
       solveAll();
       renderAll();
       break;
@@ -792,23 +1366,33 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
       break;
     case 'disconnect':
       if (!j) break;
+      if (gizmoTarget?.kind === 'joint' && gizmoTarget.id === j.id) closeGizmo();
       j.applied = false;
-      j.icp = undefined;
-      j.icpInfo = undefined;
+      j.adjust = undefined;
+      j.adjustInfo = undefined;
       solveAll();
+      renderAll();
+      break;
+    case 'gizmo':
+      if (!j) break;
+      if (gizmoTarget?.kind === 'joint' && gizmoTarget.id === j.id) closeGizmo();
+      else openGizmo({ kind: 'joint', id: j.id });
       renderAll();
       break;
     case 'refine':
       if (j) refine(j);
       break;
-    case 'alt':
-      if (!j?.result) break;
-      j.alt = (Math.min(j.alt, j.result.solutions.length - 1) + 1) % j.result.solutions.length;
-      j.icp = undefined;
-      j.icpInfo = undefined;
+    case 'alt': {
+      if (!j) break;
+      const n = alternativesOf(j);
+      if (n < 2) break;
+      j.alt = (Math.min(j.alt, n - 1) + 1) % n;
+      j.adjust = undefined;
+      j.adjustInfo = undefined;
       solveAll();
       renderAll();
       break;
+    }
   }
 });
 
@@ -817,8 +1401,6 @@ document.getElementById('panel')!.addEventListener('input', (e) => {
   const j = joints.find((x) => x.id === Number(t.dataset.id));
   if (t.dataset.act === 'spin' && j) {
     j.spin = Number(t.value);
-    j.icp = undefined;
-    j.icpInfo = undefined;
     const lbl = jointsEl.querySelector(`[data-spinval="${j.id}"]`);
     if (lbl) lbl.textContent = `${j.spin}°`;
     solveAll();
@@ -851,7 +1433,7 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
     case 'sel-b': {
       if (!j) break;
       const v = t.value ? Number(t.value) : null;
-      if (t.dataset.act === 'sel-a') { j.a = v; j.ma = []; } else { j.b = v; j.mb = []; }
+      if (t.dataset.act === 'sel-a') { j.a = v; j.ma = []; j.fa = []; } else { j.b = v; j.mb = []; j.fb = []; }
       j.applied = false;
       markersChanged(j);
       solveAll();
@@ -862,6 +1444,13 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
       if (!j) break;
       j.ordered = t.checked;
       markersChanged(j);
+      solveAll();
+      renderAll();
+      break;
+    case 'seat':
+      if (!j) break;
+      j.seat = t.checked;
+      j.cache = undefined;
       solveAll();
       renderAll();
       break;
@@ -880,6 +1469,38 @@ document.getElementById('addJoint')!.addEventListener('click', () => {
 });
 
 document.getElementById('fit')!.addEventListener('click', fitView);
+document.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) =>
+  b.addEventListener('click', () => setPickMode(b.dataset.pick as 'point' | 'face')),
+);
+
+// Gizmo-Leiste
+const gizmoBar = document.getElementById('gizmoBar')!;
+gizmoBar.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-g-mode], [data-g]');
+  if (!t) return;
+  if (t.dataset.gMode) {
+    gizmoMode = t.dataset.gMode as 'translate' | 'rotate';
+    updateGizmoAxes();
+    renderGizmoBar();
+  } else if (t.dataset.g === 'done') {
+    closeGizmo();
+    renderAll();
+  } else if (t.dataset.g === 'reset' && gizmoTarget?.kind === 'joint') {
+    const j = joints.find((x) => x.id === gizmoTarget!.id);
+    if (j) {
+      j.adjust = undefined;
+      j.adjustInfo = undefined;
+      solveAll();
+      renderAll();
+    }
+  }
+});
+gizmoBar.addEventListener('change', (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.id === 'gizmoFree') gizmoFreeOnly = t.checked;
+  else if (t.id === 'gizmoSnap') gizmoSnapDeg = Number(t.value);
+  placeGizmo();
+});
 
 const fileInput = document.getElementById('file') as HTMLInputElement;
 fileInput.accept = SUPPORTED.map((s) => `.${s}`).join(',');
@@ -900,16 +1521,30 @@ for (const target of [drop, view]) {
   });
 }
 
-document.getElementById('demo')!.addEventListener('click', () => {
+function loadDemo(items: { name: string; geom: THREE.BufferGeometry }[], hint: string, mode: 'point' | 'face') {
+  closeGizmo();
   for (const p of [...parts]) removePart(p.id);
   joints.length = 0;
   activeJointId = null;
-  for (const { name, geom } of makeDemo()) addPart(name, geom);
+  history.length = 0;
+  const keep = document.getElementById('keepPos') as HTMLInputElement;
+  const wasChecked = keep.checked;
+  keep.checked = false;
+  for (const { name, geom } of items) addPart(name, geom);
+  keep.checked = wasChecked;
+  setPickMode(mode);
   solveAll();
   fitView();
   renderAll();
-  toast('Beispiel geladen: Setze z. B. die vier Ecken der Unterseite des Dachs und die vier oberen Ecken des Hauses.');
-});
+  toast(hint, 7000);
+}
+
+document.getElementById('demo')!.addEventListener('click', () =>
+  loadDemo(makeDemo(), 'Beispiel „Haus": Setze die vier oberen Ecken des Hauses und die vier Ecken der Dach-Unterseite – oder wähle unter „Flächen" einfach beide Flächen.', 'point'),
+);
+document.getElementById('demoRound')!.addEventListener('click', () =>
+  loadDemo(makeRoundDemo(), 'Beispiel „Zapfen": Klicke den runden Teil des Zapfens und die runde Bohrungswand der Kappe an, dann „Verbinden". Die Drehung findet PartJoin über die Abflachung selbst.', 'face'),
+);
 
 document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
   b.addEventListener('click', () => {
@@ -928,7 +1563,16 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
 
 // Für automatisierte Tests / Debugging
 Object.assign(window as unknown as Record<string, unknown>, {
-  partjoin: { parts, joints, solveAll, renderAll, camera, controls },
+  partjoin: {
+    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect,
+    /** Fläche wie per Klick auswählen (für automatisierte Tests). */
+    selectFace: (partId: number, tri: number) => {
+      const j = activeJoint();
+      const part = getPart(partId);
+      const side: Side | null = !j || !part ? null : j.a === partId ? 'a' : j.b === partId ? 'b' : null;
+      if (j && part && side) toggleFace(j, side, part, tri);
+    },
+  },
 });
 
 solveAll();
