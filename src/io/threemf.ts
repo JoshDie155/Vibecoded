@@ -538,6 +538,8 @@ export interface BambuPrinter {
   filament: string;
   /** Druckbereich in mm */
   bed: [number, number];
+  /** Drucker mit zwei Düsen: Art jedes Extruders (wie im Druckerprofil von Bambu Studio). */
+  extruders?: string[];
 }
 
 export const BAMBU_PRINTERS: BambuPrinter[] = [
@@ -551,6 +553,10 @@ export const BAMBU_PRINTERS: BambuPrinter[] = [
   { id: 'A1M', label: 'A1 mini', model: 'Bambu Lab A1 mini', printer: 'Bambu Lab A1 mini 0.4 nozzle', process: '0.20mm Standard @BBL A1M', filament: 'Bambu PLA Basic @BBL A1M', bed: [180, 180] },
   { id: 'A2L', label: 'A2L', model: 'Bambu Lab A2L', printer: 'Bambu Lab A2L 0.4 nozzle', process: '0.20mm Standard @BBL A2L', filament: 'Bambu PLA Basic @BBL A2L 0.4 nozzle', bed: [330, 320] },
   { id: 'H2S', label: 'H2S', model: 'Bambu Lab H2S', printer: 'Bambu Lab H2S 0.4 nozzle', process: '0.20mm Standard @BBL H2S', filament: 'Bambu PLA Basic @BBL H2S', bed: [340, 320] },
+  { id: 'H2C', label: 'H2C', model: 'Bambu Lab H2C', printer: 'Bambu Lab H2C 0.4 nozzle', process: '0.20mm Standard @BBL H2C', filament: 'Bambu PLA Basic @BBL H2C', bed: [330, 320], extruders: ['Direct Drive', 'Direct Drive'] },
+  { id: 'H2D', label: 'H2D', model: 'Bambu Lab H2D', printer: 'Bambu Lab H2D 0.4 nozzle', process: '0.20mm Standard @BBL H2D', filament: 'Bambu PLA Basic @BBL H2D', bed: [350, 320], extruders: ['Direct Drive', 'Direct Drive'] },
+  { id: 'H2DP', label: 'H2D Pro', model: 'Bambu Lab H2D Pro', printer: 'Bambu Lab H2D Pro 0.4 nozzle', process: '0.20mm Standard @BBL H2DP', filament: 'Bambu PLA Basic @BBL H2DP', bed: [350, 320], extruders: ['Direct Drive', 'Direct Drive'] },
+  { id: 'X2D', label: 'X2D', model: 'Bambu Lab X2D', printer: 'Bambu Lab X2D 0.4 nozzle', process: '0.20mm Standard @BBL X2D', filament: 'Bambu PLA Basic @BBL X2D 0.4 nozzle', bed: [256, 256], extruders: ['Direct Drive', 'Bowden'] },
 ];
 
 export interface BambuOptions {
@@ -578,7 +584,11 @@ function bambuProjectSettings(printer: BambuPrinter, colors: string[], version: 
     printer_model: printer.model,
     printer_settings_id: printer.printer,
     print_settings_id: printer.process,
-    nozzle_diameter: ['0.4'],
+    nozzle_diameter: (printer.extruders ?? ['']).map(() => '0.4'),
+    // Zwei Düsen: Art und Volumen je Düse wie im Druckerprofil, Filamente verteilt Bambu Studio selbst
+    ...(printer.extruders
+      ? { extruder_type: printer.extruders, nozzle_volume_type: printer.extruders.map(() => 'Standard'), filament_map_mode: 'Auto For Flush' }
+      : {}),
     filament_settings_id: each(printer.filament),
     filament_colour: list,
     filament_multi_colour: list,

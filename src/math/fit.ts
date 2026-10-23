@@ -6,7 +6,7 @@
  * Alles im Koordinatensystem des festen Teils; das Ergebnis ist die Lage des beweglichen Teils darin.
  */
 import { type Rigid, type Vec3, IDENTITY, compose } from './align';
-import { type Feature, type PlaneFeature } from './features';
+import { type EdgeFeature, type Feature, type PlaneFeature } from './features';
 import { type Sample } from './icp';
 import { type Marker, type NormalMode, solveJoint } from './match';
 import { type MatePlan, describeFeature, planMate } from './mate';
@@ -73,7 +73,7 @@ export function similarPlanes(a: PlaneFeature, b: PlaneFeature): boolean {
 
 /** Bezugspunkt einer Fläche (Mitte), lokal. */
 function centerOf(f: Feature): Vec3 {
-  if (f.kind === 'cylinder') return f.center;
+  if (f.kind === 'cylinder' || f.kind === 'edge') return f.center;
   if (f.kind === 'plane' && f.circle) return f.circle.center;
   return f.centroid;
 }
@@ -102,6 +102,11 @@ export function fitFeatures(input: FitInput): FitResult {
   // Etwa gleich große Flächen mittig aufeinander: offen bleibt nur die Drehung um die Normale
   const centered = !!sP && !!dP && similarPlanes(sP, dP);
   if (centered) plan.constraints.push({ kind: 'point', src: sP!.centroid, dst: dP!.centroid });
+  // Genau ein Kantenpaar etwa gleicher Länge: Mitte auf Mitte, offen bleibt die Drehung um die Kante
+  const sE = only?.kind === 'edge' && srcF[only.src].kind === 'edge' ? (srcF[only.src] as EdgeFeature) : undefined;
+  const dE = only?.kind === 'edge' && dstF[only.dst].kind === 'edge' ? (dstF[only.dst] as EdgeFeature) : undefined;
+  const edgeCentered = !!sE && !!dE && Math.min(sE.length, dE.length) / Math.max(sE.length, dE.length) >= 0.8;
+  if (edgeCentered) plan.constraints.push({ kind: 'point', src: sE!.center, dst: dE!.center });
 
   const all = solveConstraints(plan.constraints, { scale });
   if (!all.length) return fail('Die Flächen lassen sich nicht zusammensetzen.');
@@ -122,6 +127,7 @@ export function fitFeatures(input: FitInput): FitResult {
     info.push(`Umrisse deckungsgleich (Rest ${fmt(congruent.rms)} mm)`);
   } else if (input.seat && sol.free.length) {
     if (centered) info.push('Flächen mittig aufeinander');
+    if (edgeCentered) info.push('Kanten mittig aufeinander');
     const seat = autoSeat(input.samples, rel, input.target, sol.free, { contactDist: scale * 0.012, maxDepth: scale * 0.06 });
     rel = seat.T;
     if (seat.info) info.push(seat.info);
@@ -140,6 +146,7 @@ export function fitFeatures(input: FitInput): FitResult {
       }
     }
   } else if (centered) info.push('Flächen mittig aufeinander');
+  else if (edgeCentered) info.push('Kanten mittig aufeinander');
   if (input.overlap && plan.contactNormal) {
     const n = plan.contactNormal;
     rel = { R: rel.R, t: [rel.t[0] - n[0] * input.overlap, rel.t[1] - n[1] * input.overlap, rel.t[2] - n[2] * input.overlap] };
@@ -151,7 +158,9 @@ export function fitFeatures(input: FitInput): FitResult {
   // Von Hand bleibt bei mittig aufgesetzten Flächen auch das Verschieben in der Ebene möglich
   const free: FreeMotion[] = centered
     ? [{ kind: 'rotate', point: dP!.centroid, axis: dP!.normal }, { kind: 'translate', axis: dP!.axes.u }, { kind: 'translate', axis: dP!.axes.v }]
-    : sol.free;
+    : edgeCentered
+      ? [{ kind: 'rotate', point: dE!.center, axis: dE!.dir }, { kind: 'translate', axis: dE!.dir }]
+      : sol.free;
   return {
     rel, free, count: sols.length, distError: sol.distError, angleError: sol.angleError,
     info: info.join(' · '), flatRotation, notes: plan.notes, summary, perm, turn,

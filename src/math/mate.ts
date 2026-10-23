@@ -1,13 +1,13 @@
 /**
  * Macht aus ausgewählten Flächen beider Teile Paarungen ("Mates") und daraus Bedingungen
  * für den Löser: ebene Fläche auf ebene Fläche, Kreisfläche mittig auf Kreisfläche,
- * Zylinder koaxial in Zylinder (Zapfen in Bohrung).
+ * Zylinder koaxial in Zylinder (Zapfen in Bohrung), Kante auf Kante.
  */
 import type { Vec3 } from './align';
 import type { Constraint } from './constraints';
 import type { Feature } from './features';
 
-export type MateKind = 'plane' | 'circle' | 'axis' | 'surface';
+export type MateKind = 'plane' | 'circle' | 'axis' | 'surface' | 'edge';
 
 export interface MatePair {
   kind: MateKind;
@@ -27,6 +27,7 @@ export interface MatePlan {
 }
 
 const isRound = (f: Feature) => f.kind === 'cylinder';
+const isEdge = (f: Feature) => f.kind === 'edge';
 const mm = (x: number) => x.toFixed(x < 10 ? 2 : 1).replace('.', ',');
 
 /** Kurze, verständliche Beschreibung einer Fläche für die Seitenleiste. */
@@ -41,12 +42,13 @@ export function describeFeature(f: Feature): string {
     const [a, b] = f.axes.size;
     return `Ebene Fläche ${mm(Math.max(a, b))} × ${mm(Math.min(a, b))} mm`;
   }
+  if (f.kind === 'edge') return `Kante ${mm(f.length)} mm`;
   return 'Freiformfläche';
 }
 
-/** Kürzel für die Beschriftung im 3D-Fenster: E = Ebene, K = Kreisfläche, Z = Zylinder, F = Freiform. */
+/** Kürzel für die Beschriftung im 3D-Fenster: E = Ebene, K = Kreisfläche, Z = Zylinder, F = Freiform, L = Kante (Linie). */
 export function featureTag(f: Feature): string {
-  return f.kind === 'cylinder' ? 'Z' : f.kind === 'plane' ? (f.circle ? 'K' : 'E') : 'F';
+  return f.kind === 'cylinder' ? 'Z' : f.kind === 'edge' ? 'L' : f.kind === 'plane' ? (f.circle ? 'K' : 'E') : 'F';
 }
 
 /**
@@ -56,17 +58,19 @@ export function featureTag(f: Feature): string {
 export function planMate(src: Feature[], dst: Feature[], names = { src: 'Teil 2', dst: 'Teil 1' }): MatePlan {
   const plan: MatePlan = { constraints: [], pairs: [], notes: [] };
   // Ebene und Freiform-Flächen bilden eine Gruppe, runde Flächen die andere – jeweils in Auswahlreihenfolge
-  const flatS = src.map((f, i) => ({ f, i })).filter((x) => !isRound(x.f));
-  const flatD = dst.map((f, i) => ({ f, i })).filter((x) => !isRound(x.f));
+  const flatS = src.map((f, i) => ({ f, i })).filter((x) => !isRound(x.f) && !isEdge(x.f));
+  const flatD = dst.map((f, i) => ({ f, i })).filter((x) => !isRound(x.f) && !isEdge(x.f));
   const roundS = src.map((f, i) => ({ f, i })).filter((x) => isRound(x.f));
   const roundD = dst.map((f, i) => ({ f, i })).filter((x) => isRound(x.f));
+  const edgeS = src.map((f, i) => ({ f, i })).filter((x) => isEdge(x.f));
+  const edgeD = dst.map((f, i) => ({ f, i })).filter((x) => isEdge(x.f));
 
-  if (flatS.length !== flatD.length || roundS.length !== roundD.length) {
-    const count = (n: number, r: number) =>
-      [n ? `${n} flache` : '', r ? `${r} runde` : ''].filter(Boolean).join(' und ') || 'keine';
+  if (flatS.length !== flatD.length || roundS.length !== roundD.length || edgeS.length !== edgeD.length) {
+    const count = (n: number, r: number, e: number) =>
+      [n ? `${n} flache` : '', r ? `${r} runde` : '', e ? `${e} Kante(n)` : ''].filter(Boolean).join(' und ') || 'keine';
     plan.error =
-      `Die Flächen passen nicht zusammen: „${names.dst}" hat ${count(flatD.length, roundD.length)}, ` +
-      `„${names.src}" ${count(flatS.length, roundS.length)} Fläche(n). Wähle auf beiden Teilen gleichartige Flächen.`;
+      `Die Auswahl passt nicht zusammen: „${names.dst}" hat ${count(flatD.length, roundD.length, edgeD.length)}, ` +
+      `„${names.src}" ${count(flatS.length, roundS.length, edgeS.length)} Fläche(n). Wähle auf beiden Teilen Gleichartiges.`;
     return plan;
   }
 
@@ -106,6 +110,16 @@ export function planMate(src: Feature[], dst: Feature[], names = { src: 'Teil 2'
     } else if (Math.abs(s.radius - d.radius) > Math.max(0.05, 0.02 * d.radius)) {
       plan.notes.push(`Durchmesser unterschiedlich (⌀ ${mm(d.radius * 2)} ↔ ${mm(s.radius * 2)} mm)`);
     }
+  }
+
+  // Kante auf Kante: die Geraden fluchten (beide Richtungen sind mögliche Lösungen)
+  for (let k = 0; k < edgeS.length; k++) {
+    const s = edgeS[k].f as Extract<Feature, { kind: 'edge' }>;
+    const d = edgeD[k].f as Extract<Feature, { kind: 'edge' }>;
+    plan.constraints.push({ kind: 'axis', src: { p: s.center, d: s.dir }, dst: { p: d.center, d: d.dir } });
+    plan.pairs.push({ kind: 'edge', src: edgeS[k].i, dst: edgeD[k].i });
+    if (Math.abs(s.length - d.length) > Math.max(0.05, 0.02 * d.length))
+      plan.notes.push(`Kanten unterschiedlich lang (${mm(d.length)} ↔ ${mm(s.length)} mm)`);
   }
   return plan;
 }

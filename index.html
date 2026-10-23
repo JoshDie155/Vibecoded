@@ -44,8 +44,10 @@
         <section>
           <h2><span class="step">2</span> Verbindungen</h2>
           <p class="help">
-            <b>Punkte:</b> auf beiden Teilen dieselben markanten Stellen anklicken – die Reihenfolge ist egal.
             <b>Flächen:</b> die Kontaktflächen anklicken (eben, Kreisfläche, Zapfen/Bohrung) – PartJoin setzt sie wie im CAD aufeinander.
+            Flächen dürfen auch auf Nachbarteilen liegen, die schon fest mit dem Teil verbunden sind.
+            <b>Kanten:</b> gerade Kante auf gerade Kante. <b>Punkte:</b> dieselben markanten Stellen auf beiden Teilen, Reihenfolge egal.
+            <b>Pinsel:</b> eine Kontaktstelle selbst bemalen.
           </p>
           <div id="joints"></div>
           <div class="row wrap">
@@ -81,12 +83,14 @@
       <main id="view">
         <div id="toolbar">
           <span class="seg" role="group" aria-label="Auswahlmodus">
-            <button data-pick="point" class="on" title="Punkte markieren (Taste P)">Punkte</button>
-            <button data-pick="face" title="Flächen auswählen (Taste F)">Flächen</button>
+            <button data-pick="face" class="on" title="Flächen auswählen (Taste F)">Flächen</button>
+            <button data-pick="edge" title="Gerade Kanten auswählen (Taste K)">Kanten</button>
+            <button data-pick="point" title="Punkte markieren, z. B. Ecken (Taste P)">Punkte</button>
+            <button data-pick="brush" title="Fläche selbst bemalen: mit gedrückter Maustaste über das Teil streichen, beim Loslassen wird daraus eine Fläche (Taste B)">Pinsel</button>
           </span>
-          <label class="check small"><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
+          <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
-          <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen">Gesamtes Modell bewegen</button>
+          <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen.">Gesamtes Modell bewegen</button>
         </div>
         <div id="tip" hidden></div>
         <div id="gizmoBar" hidden>

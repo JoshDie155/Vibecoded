@@ -11,7 +11,7 @@
  * Jede Flutfüllung ist auf `maxTris` Dreiecke begrenzt, damit ein Klick auf ein riesiges Netz
  * nie hängt.
  */
-import { type Vec3, add, dot, len, normalize, scale, sub } from './align';
+import { type Rigid, type Vec3, add, apply, dot, len, normalize, rotate, scale, sub } from './align';
 
 export interface Topology {
   triCount: number;
@@ -83,7 +83,22 @@ export interface SurfaceFeature {
   area: number;
 }
 
-export type Feature = PlaneFeature | CylinderFeature | SurfaceFeature;
+/** Gerade, scharfe Kante (oder offener Rand) – Kante auf Kante setzt Teile wie an einem Lineal an. */
+export interface EdgeFeature {
+  kind: 'edge';
+  /** Dreiecke an der Kante (je Kantenstück eines). */
+  tris: number[];
+  /** Endpunkte, Mitte und Richtung (Einheitsvektor von a nach b). */
+  a: Vec3;
+  b: Vec3;
+  center: Vec3;
+  dir: Vec3;
+  length: number;
+  /** Mittlere Normale der angrenzenden Flächen (zeigt vom Teil weg). */
+  normal: Vec3;
+}
+
+export type Feature = PlaneFeature | CylinderFeature | SurfaceFeature | EdgeFeature;
 
 export interface FeatureOptions {
   /** Höchstens so weit (Grad) darf eine Dreiecksnormale von der angeklickten Ebene abweichen. */
@@ -1803,4 +1818,44 @@ export function detectFeature(topo: Topology, seedTri: number, opts: FeatureOpti
     isDegenerate(topo, to) || (ndotv(topo, to, n0) >= SURFACE_COS && ndot(topo, r, to) >= pt.cosSmooth)).tris;
   const { area, centroid, normal } = regionStats(topo, tris);
   return { kind: 'surface', tris, centroid, normal, area };
+}
+
+/**
+ * Fläche in ein anderes Koordinatensystem übertragen (starre Bewegung T). Die Dreiecksliste bleibt
+ * die des ursprünglichen Teils.
+ */
+export function transformFeature<F extends Feature>(f: F, T: Rigid): F {
+  const p = (v: Vec3) => apply(T, v);
+  const d = (v: Vec3) => rotate(T.R, v);
+  if (f.kind === 'cylinder') return { ...f, center: p(f.center), axis: d(f.axis) };
+  if (f.kind === 'edge') return { ...f, a: p(f.a), b: p(f.b), center: p(f.center), dir: d(f.dir), normal: d(f.normal) };
+  if (f.kind === 'surface') return { ...f, centroid: p(f.centroid), normal: d(f.normal) };
+  return {
+    ...f,
+    centroid: p(f.centroid),
+    normal: d(f.normal),
+    outline: f.outline.map(p),
+    circle: f.circle ? { ...f.circle, center: p(f.circle.center) } : undefined,
+    axes: { ...f.axes, u: d(f.axes.u), v: d(f.axes.v) },
+  };
+}
+
+/**
+ * Fläche aus frei gewählten Dreiecken (z. B. mit dem Pinsel bemalt): eben, wenn alle Dreiecke in einer
+ * Ebene liegen (dann mit Umriss und Hauptachsen wie eine erkannte Fläche), sonst Freiformfläche mit
+ * mittlerer Normale.
+ */
+export function featureFromTris(topo: Topology, tris: number[]): Feature {
+  const list = [...new Set(tris)].filter((t) => t >= 0 && t < topo.triCount && !isDegenerate(topo, t));
+  if (!list.length) throw new RangeError('Keine gültigen Dreiecke ausgewählt.');
+  const { area, centroid, normal } = regionStats(topo, list);
+  const ctx = makeCtx(topo, list.length + 1);
+  const verts = regionVertices(ctx, list);
+  // Eben: Normalen höchstens um den Ebenen-Winkel geneigt und Eckpunkte nahe der Ebene
+  const cos = Math.cos(FEATURE_DEFAULTS.planeAngleDeg * 2 * DEG);
+  const tol = topo.diag * PLANE_DIST_REL * 4 + FLOAT_EPS * ctx.s.coordMag + 1e-9;
+  const flat = list.every((t) => ndotv(topo, t, normal) >= cos)
+    && verts.every((v) => Math.abs(dot(sub(vertexOf(topo, v), centroid), normal)) <= tol);
+  if (flat) return planeFeature(ctx, list, verts, FEATURE_DEFAULTS.smoothAngleDeg * DEG);
+  return { kind: 'surface', tris: list, centroid, normal, area };
 }

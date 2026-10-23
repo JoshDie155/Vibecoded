@@ -79,6 +79,13 @@ body {
 @keyframes flash { 0%, 40% { background: color-mix(in srgb, var(--accent) 35%, transparent); } 100% { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .parts li.flash { animation: none; background: color-mix(in srgb, var(--accent) 20%, transparent); } }
 .parts .name { cursor: pointer; }
+.parts li.off .name { color: var(--muted); }
+.parts li.sep {
+  margin-top: 6px; padding: 4px 6px 2px 0; border-top: 1px solid var(--line); border-radius: 0;
+  color: var(--muted); font-size: 12px; gap: 4px;
+}
+.parts li.sep:hover { background: transparent; }
+.parts li.sep button.fold { width: 26px; height: 24px; font-size: 14px; color: var(--muted); }
 .parts .rename {
   flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--panel);
   border: 1px solid var(--accent); border-radius: 5px; padding: 1px 5px;
@@ -142,6 +149,7 @@ button.icon:hover { color: var(--err); }
 .parts button.icon:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .parts button.icon.move { color: var(--accent); }
 .parts button.icon.move:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.parts button.icon.move.on { color: var(--accent-ink); background: var(--accent); }
 .parts button.icon.rm:hover { color: var(--err); }
 .partsbar { display: flex; align-items: center; gap: 8px; margin: 10px 6px -4px 0; }
 .partsbar #partsCount { margin-left: auto; }
@@ -212,6 +220,8 @@ button.icon:hover { color: var(--err); }
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .chips li b { font-variant-numeric: tabular-nums; min-width: 22px; }
+.chips .desc { display: flex; flex-direction: column; min-width: 0; }
+.chips .desc small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chips li button { margin-left: auto; }
 #hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);

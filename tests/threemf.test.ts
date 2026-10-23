@@ -301,6 +301,21 @@ describe('write3MFBambu', () => {
     expect((bb.min[1] + bb.max[1]) / 2).toBeCloseTo(90, 4);
   });
 
+  it('Drucker mit zwei Düsen: Düsen-Angaben je Extruder, Filamente verteilt Bambu Studio automatisch', () => {
+    const json = JSON.parse(strFromU8(unzipSync(write3MFBambu(parts, { printer: 'H2C' }))['Metadata/project_settings.config']));
+    expect(json.printer_model).toBe('Bambu Lab H2C');
+    expect(json.printer_settings_id).toBe('Bambu Lab H2C 0.4 nozzle');
+    expect(json.nozzle_diameter).toEqual(['0.4', '0.4']);
+    expect(json.extruder_type).toEqual(['Direct Drive', 'Direct Drive']);
+    expect(json.nozzle_volume_type).toEqual(['Standard', 'Standard']);
+    expect(json.filament_map_mode).toBe('Auto For Flush');
+    expect(json.filament_settings_id).toEqual(['Bambu PLA Basic @BBL H2C', 'Bambu PLA Basic @BBL H2C']);
+    // Einzeldüse: keine Extruder-Angaben
+    const single = JSON.parse(strFromU8(unzipSync(write3MFBambu(parts, { printer: 'P2S' }))['Metadata/project_settings.config']));
+    expect(single.nozzle_diameter).toEqual(['0.4']);
+    expect(single.extruder_type).toBeUndefined();
+  });
+
   it('erkennt beim Lesen den Drucker eines Bambu-Projekts', () => {
     const info: { printer?: string } = {};
     read3MF(write3MFBambu(parts, { printer: 'P1S' }), info);

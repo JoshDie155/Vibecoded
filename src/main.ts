@@ -7,7 +7,8 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } fro
 import { type Rigid, type Vec3, IDENTITY, compose, rotate, rotationAbout } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
-import { type Feature, type Topology, buildTopology, detectFeature } from './math/features';
+import { type EdgeFeature, type Feature, type Topology, buildTopology, detectFeature, featureFromTris, transformFeature } from './math/features';
+import { detectEdge } from './math/edges';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
 import { splitLoosePieces } from './math/components';
@@ -78,6 +79,9 @@ interface FeatureCache {
   turn?: { point: Vec3; axis: Vec3; angles: number[] };
 }
 
+/** Fläche einer Verbindung; `on`: Teil, auf dem sie liegt, falls nicht das Teil der Seite selbst. */
+type PickedFeature = Feature & { on?: number };
+
 interface Joint {
   id: number;
   color: THREE.Color;
@@ -85,9 +89,12 @@ interface Joint {
   b: number | null;
   ma: Marker[];
   mb: Marker[];
-  /** Ausgewählte Flächen (lokale Koordinaten des jeweiligen Teils). */
-  fa: Feature[];
-  fb: Feature[];
+  /**
+   * Ausgewählte Flächen (lokale Koordinaten des Teils, auf dem sie liegen). Eine Fläche darf auch auf
+   * einem Nachbarteil liegen, das schon fest mit dem Teil dieser Seite verbunden ist (`on`).
+   */
+  fa: PickedFeature[];
+  fb: PickedFeature[];
   ordered: boolean;
   normals: NormalMode;
   overlap: number;
@@ -133,13 +140,21 @@ let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
 const history: { joint: number; side: Side; kind: 'point' | 'face' }[] = [];
+/** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
+let hiddenFolded = false;
 /** Teileliste eingeklappt (bleibt im Browser gespeichert). */
 let partsFolded = false;
 try { partsFolded = localStorage.getItem('partjoin.partsFolded') === '1'; } catch { /* ohne Speicher */ }
 const SNAP_PX = 14;
 /** Auch sehr fein aufgelöste Flächen (Millionen Dreiecke) vollständig erfassen. */
 const FEATURE_OPTS = { maxTris: 4_000_000 };
-let pickMode: 'point' | 'face' = 'point';
+/** Auswahlmodus im 3D-Fenster: Flächen (Standard), Kanten, Punkte oder Pinsel (Fläche selbst bemalen). */
+type PickMode = 'face' | 'edge' | 'point' | 'brush';
+/** Pinselgröße in Bildschirmpixeln (Radius). */
+const BRUSH_PX = 16;
+let pickMode: PickMode = 'face';
+/** Fangradius für Kanten in Bildschirmpixeln. */
+const EDGE_PX = 10;
 /** Welches Teil wird von welcher Verbindung bewegt (nach dem letzten solveAll). */
 const movedBy = new Map<number, number>();
 /** Von welchem Ausgangsteil aus wurde jedes Teil platziert (Teile mit gleichem Wert hängen zusammen). */
@@ -161,6 +176,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 // Mittlere Maustaste verschiebt die Ansicht (wie in den meisten Slicern), gezoomt wird mit dem Mausrad
 controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+// Mausrad zoomt dorthin, wo der Mauszeiger steht
+controls.zoomToCursor = true;
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -204,6 +221,12 @@ hoverMesh.visible = false;
 scene.add(hoverMesh);
 let hoverKey = '';
 let hoverTris: Set<number> | null = null;
+/** Vorschau der Kante unter dem Mauszeiger im Kantenmodus. */
+const hoverLine = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 }));
+hoverLine.matrixAutoUpdate = false;
+hoverLine.visible = false;
+hoverLine.renderOrder = 15;
+scene.add(hoverLine);
 
 function applyTheme() {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches &&
@@ -236,11 +259,21 @@ function scaleMarkers() {
     o.position.copy(u.anchor).addScaledVector(u.normal, u.lift * wpp);
   }
   const wpp = k * camera.position.distanceTo(cursor.position);
-  cursor.scale.setScalar(4 * wpp);
+  // Im Pinselmodus zeigt der Cursor die Pinselgröße
+  cursor.scale.setScalar((pickMode === 'brush' ? BRUSH_PX : 4) * wpp);
+  (cursor.material as THREE.MeshBasicMaterial).opacity = pickMode === 'brush' ? 0.3 : 0.85;
 }
 
 renderer.setAnimationLoop(() => {
   controls.update();
+  // Clipping-Ebenen an den Abstand anpassen – beim Heranzoomen an den Mauszeiger wird sonst abgeschnitten
+  const dist = camera.position.distanceTo(controls.target);
+  const near = dist / 100;
+  if (Math.abs(camera.near - near) > near * 0.2) {
+    camera.near = near;
+    camera.far = Math.max(dist * 100, sceneScale() * 40);
+    camera.updateProjectionMatrix();
+  }
   scaleMarkers();
   renderer.render(scene, camera);
 });
@@ -291,7 +324,7 @@ function motionToWorld(m: FreeMotion, M: Rigid): FreeMotion {
 
 /** Bezugspunkt einer Fläche (Mitte), lokal. */
 function featureCenter(f: Feature): Vec3 {
-  if (f.kind === 'cylinder') return f.center;
+  if (f.kind === 'cylinder' || f.kind === 'edge') return f.center;
   if (f.kind === 'plane' && f.circle) return f.circle.center;
   return f.centroid;
 }
@@ -311,6 +344,7 @@ function featureAnchor(part: Part, f: Feature): [Vec3, Vec3] {
 function featureRadius(f: Feature): number {
   if (f.kind === 'cylinder') return Math.hypot(f.radius, f.length / 2);
   if (f.kind === 'plane') return Math.hypot(f.axes.size[0], f.axes.size[1]) / 2;
+  if (f.kind === 'edge') return f.length / 2;
   return Math.sqrt(f.area / Math.PI);
 }
 
@@ -469,6 +503,11 @@ function removePart(id: number) {
   for (const j of joints) {
     if (j.a === id) { j.a = null; j.ma = []; j.fa = []; j.applied = false; markersChanged(j); }
     if (j.b === id) { j.b = null; j.mb = []; j.fb = []; j.applied = false; markersChanged(j); }
+    if (j.fa.some((f) => f.on === id) || j.fb.some((f) => f.on === id)) {
+      j.fa = j.fa.filter((f) => f.on !== id);
+      j.fb = j.fb.filter((f) => f.on !== id);
+      markersChanged(j);
+    }
   }
   if (baseId === id) baseId = parts[0]?.id ?? null;
   solveAll();
@@ -563,16 +602,12 @@ function solveAll() {
     }
   };
 
-  for (const seed of seeds) {
-    if (placed.has(seed)) continue;
-    currentSeed = seed;
-    const queue: number[] = [];
-    place(seed, getPart(seed)!.layout.clone(), queue);
-    while (queue.length) {
-      const cur = queue.shift()!;
-      for (const j of joints) {
-        if (!j.applied || j.a === null || j.b === null) continue;
-        if (j.a !== cur && j.b !== cur) continue;
+  /** Verbindungen, deren Flächen auf Nachbarteilen liegen, die noch nicht platziert sind. */
+  let deferred: { j: Joint; cur: number }[] = [];
+  /** Verbindung j vom bereits platzierten Teil cur aus lösen und das andere Teil platzieren. */
+  const handle = (j: Joint, cur: number, queue: number[]) => {
+        if (!j.applied || j.a === null || j.b === null) return;
+        if (j.a !== cur && j.b !== cur) return;
         const fixedSide: Side = j.a === cur ? 'a' : 'b';
         const other = fixedSide === 'a' ? j.b : j.a;
         if (placed.has(other)) {
@@ -584,7 +619,20 @@ function solveAll() {
                 ? 'Beide Teile gehören zur selben Gruppe und liegen schon richtig zueinander. Zum Verbinden ein Teil aus der Gruppe lösen (⛓ in der Teileliste).'
                 : 'Beide Teile sind schon über andere Verbindungen festgelegt – diese Verbindung wird ignoriert.',
             };
-          continue;
+          return;
+        }
+        // Flächen auf Nachbarteilen: nur auf der festen Seite, und diese Teile müssen schon liegen
+        const movingSide: Side = fixedSide === 'a' ? 'b' : 'a';
+        if (helperParts(j, movingSide).length) {
+          j.status = {
+            kind: 'err',
+            text: `Flächen auf weiteren Teilen gehen nur auf der Seite, die schon festliegt. Hier liegt „${nameOf(cur)}" zuerst fest – wähle die Flächen auf dessen Seite oder ein anderes Basisteil.`,
+          };
+          return;
+        }
+        if (helperParts(j, fixedSide).some((id) => !placed.has(id))) {
+          if (!deferred.some((d) => d.j === j)) deferred.push({ j, cur });
+          return;
         }
         j.fixedSide = fixedSide;
         const fixedM = placed.get(cur)!;
@@ -595,18 +643,44 @@ function solveAll() {
           const rel = j.last.side === fixedSide ? j.last.rel : invertRigid(j.last.rel);
           j.status = { kind: 'info', text: `Wähle noch das Gegenstück auf „${nameOf(waiting === 'a' ? j.a : j.b)}" – bis dahin bleibt die bisherige Lage.` };
           place(other, rigidToMatrix(compose(Mf, rel)), queue, j.id);
-          continue;
+          return;
         }
         const coarse = hasFeatures(j)
-          ? solveFeatureJoint(j, getPart(cur)!, getPart(other)!, Mf)
+          ? solveFeatureJoint(j, getPart(cur)!, getPart(other)!, Mf, placed)
           : solvePointJoint(j, getPart(other)!, fixedM);
-        if (!coarse) continue;
+        if (!coarse) return;
         const T = j.adjust ? compose(conjugate(Mf, j.adjust), coarse) : coarse;
         j.last = { side: fixedSide, rel: compose(invertRigid(Mf), T) };
         place(other, rigidToMatrix(T), queue, j.id);
+  };
+
+  for (const seed of seeds) {
+    if (placed.has(seed)) continue;
+    currentSeed = seed;
+    const queue: number[] = [];
+    place(seed, getPart(seed)!.layout.clone(), queue);
+    const run = () => {
+      while (queue.length) {
+        const cur = queue.shift()!;
+        for (const j of joints) handle(j, cur, queue);
       }
+    };
+    run();
+    // Zurückgestellte Verbindungen erneut versuchen, solange dadurch weitere Teile platziert werden
+    for (let again = true; again; ) {
+      for (const d of deferred.splice(0)) handle(d.j, d.cur, queue);
+      again = queue.length > 0;
+      run();
     }
   }
+  for (const { j } of deferred) {
+    const missing = helperParts(j, j.a !== null && placed.has(j.a) ? 'a' : 'b').filter((id) => !placed.has(id));
+    j.status = {
+      kind: 'err',
+      text: `${missing.map((id) => `„${nameOf(id)}"`).join(', ')} liegt noch nicht fest – erst damit verbinden, dann lassen sich seine Flächen hier nutzen.`,
+    };
+  }
+  deferred = [];
 
   for (const p of parts) {
     p.mesh.matrix.copy(placed.get(p.id) ?? p.layout);
@@ -628,10 +702,55 @@ function solveAll() {
   }
 }
 
+/** Nachbarteile, auf denen Flächen dieser Seite liegen. */
+function helperParts(j: Joint, side: Side): number[] {
+  const own = side === 'a' ? j.a : j.b;
+  return [...new Set((side === 'a' ? j.fa : j.fb).map((f) => f.on).filter((id): id is number => id !== undefined && id !== own))];
+}
+
+/** Teil, auf dem eine Fläche liegt. */
+function featurePart(j: Joint, side: Side, f: PickedFeature): Part | undefined {
+  return getPart(f.on ?? (side === 'a' ? j.a : j.b));
+}
+
+/** Alle Teile, die (ohne die Verbindung skip) fest mit dem Teil id zusammenhängen – über Verbindungen und Gruppen. */
+function rigidWith(id: number, skip: Joint): Set<number> {
+  const seen = new Set<number>([id]);
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    const p = getPart(cur);
+    const next = [
+      ...(p ? groupOf(p).map((q) => q.id) : []),
+      ...joints
+        .filter((k) => k !== skip && k.applied && k.fixedSide && k.a !== null && k.b !== null && (k.a === cur || k.b === cur))
+        .map((k) => (k.a === cur ? k.b! : k.a!)),
+    ];
+    for (const n of next) if (!seen.has(n)) { seen.add(n); stack.push(n); }
+  }
+  return seen;
+}
+
+/**
+ * Darf auf diesem Teil eine Fläche für die Verbindung gewählt werden, obwohl es keins ihrer beiden
+ * Teile ist? Ja, wenn es fest mit genau einer Seite verbunden ist (z. B. die Haare am Kopf, wenn
+ * eine Maske auf Kopf und Haare zugleich passt).
+ */
+function helperSide(j: Joint | undefined, part: Part): Side | null {
+  if (!j || j.a === null || j.b === null || part.id === j.a || part.id === j.b) return null;
+  const inA = rigidWith(j.a, j).has(part.id);
+  const inB = rigidWith(j.b, j).has(part.id);
+  return inA && !inB ? 'a' : inB && !inA ? 'b' : null;
+}
+
 /** Seite, auf der zu einer Fläche oder Markierung noch das Gegenstück fehlt (sonst null). */
 function pendingSide(j: Joint): Side | null {
-  const round = (l: Feature[]) => l.filter((f) => f.kind === 'cylinder').length;
-  const diff = [j.ma.length - j.mb.length, j.fa.length - round(j.fa) - (j.fb.length - round(j.fb)), round(j.fa) - round(j.fb)];
+  const count = (l: Feature[], kind: 'cylinder' | 'edge') => l.filter((f) => f.kind === kind).length;
+  const flat = (l: Feature[]) => l.length - count(l, 'cylinder') - count(l, 'edge');
+  const diff = [
+    j.ma.length - j.mb.length, flat(j.fa) - flat(j.fb),
+    count(j.fa, 'cylinder') - count(j.fb, 'cylinder'), count(j.fa, 'edge') - count(j.fb, 'edge'),
+  ];
   const d = diff.find((x) => x !== 0);
   return d === undefined ? null : d < 0 ? 'a' : 'b';
 }
@@ -672,14 +791,20 @@ function solvePointJoint(j: Joint, moving: Part, fixedM: THREE.Matrix4): Rigid |
  * Verbindung über Flächen (und optional zusätzliche Punkte). Gelöst wird im Koordinatensystem des
  * festen Teils, so kann das Ergebnis zwischengespeichert werden – das automatische Einpassen ist teuer.
  */
-function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigid | null {
+function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid, placed: Map<number, THREE.Matrix4>): Rigid | null {
   const fixedSide = j.fixedSide!;
   const srcF = fixedSide === 'a' ? j.fb : j.fa;
-  const dstF = fixedSide === 'a' ? j.fa : j.fb;
   const srcM = fixedSide === 'a' ? j.mb : j.ma;
   const dstM = fixedSide === 'a' ? j.ma : j.mb;
+  // Flächen auf Nachbarteilen in das Koordinatensystem des festen Teils übertragen
+  const helpers = helperRelations(j, fixedSide, fixed, (id) => placed.get(id)!);
+  const dstF = (fixedSide === 'a' ? j.fa : j.fb).map((f) => {
+    const rel = f.on !== undefined ? helpers.find((h) => h.id === f.on)?.rel : undefined;
+    return rel ? transformFeature(f, matrixToRigid(rel)) : f;
+  });
   const key = JSON.stringify([
-    fixed.id, moving.id, srcF.map((f) => [f.tris[0], f.tris.length]), dstF.map((f) => [f.tris[0], f.tris.length]),
+    fixed.id, moving.id, srcF.map((f) => [f.tris[0], f.tris.length]), dstF.map((f) => [f.on ?? 0, f.tris[0], f.tris.length]),
+    helpers.map((h) => [h.id, h.rel.elements.map((x) => Math.round(x * 1e4))]),
     srcM, dstM, j.alt, j.seat, j.ordered, j.normals, j.overlap,
   ]);
 
@@ -689,7 +814,7 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigi
       srcF, dstF, srcM, dstM, names: { src: moving.name, dst: fixed.name },
       alt: j.alt, seat: j.seat, ordered: j.ordered, normals: j.normals, overlap: j.overlap, scale: sceneScale(),
       samples: regionSamples(moving, srcF, srcM),
-      target: { bvh: fixed.geom.boundsTree as MeshBVH, positions: positionsOf(fixed), matrix: IDENTITY },
+      target: { ...fixedTarget(j, fixed, helpers), matrix: IDENTITY },
     });
     if (fit.error) {
       j.status = { kind: 'err', text: fit.error };
@@ -713,6 +838,43 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid): Rigi
     j.status = { kind: 'ok', text: `✓ Verbunden · ${bits.join(' · ')}` };
   }
   return compose(Mf, c.rel);
+}
+
+/** Lage der Nachbarteile (mit Flächen dieser Seite) im Koordinatensystem des festen Teils. */
+function helperRelations(j: Joint, side: Side, fixed: Part, worldOf: (id: number) => THREE.Matrix4) {
+  const inv = worldOf(fixed.id).clone().invert();
+  return helperParts(j, side).map((id) => ({ id, rel: inv.clone().multiply(worldOf(id)) }));
+}
+
+const mergedTargets = new WeakMap<Joint, { key: string; bvh: MeshBVH; positions: Float32Array }>();
+
+/**
+ * Das feste Teil für die Kontaktsuche – liegen Flächen auch auf Nachbarteilen, gehören diese mit
+ * dazu (zusammengeführt im Koordinatensystem des festen Teils, zwischengespeichert).
+ */
+function fixedTarget(j: Joint, fixed: Part, helpers: { id: number; rel: THREE.Matrix4 }[]): { bvh: MeshBVH; positions: Float32Array } {
+  if (!helpers.length) return { bvh: fixed.geom.boundsTree as MeshBVH, positions: positionsOf(fixed) };
+  const key = JSON.stringify([fixed.id, helpers.map((h) => [h.id, h.rel.elements.map((x) => Math.round(x * 1e4))])]);
+  const hit = mergedTargets.get(j);
+  if (hit?.key === key) return hit;
+  const lists = [positionsOf(fixed), ...helpers.map((h) => {
+    const src = positionsOf(getPart(h.id)!);
+    const out = new Float32Array(src.length);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < src.length; i += 3) {
+      v.set(src[i], src[i + 1], src[i + 2]).applyMatrix4(h.rel);
+      out[i] = v.x; out[i + 1] = v.y; out[i + 2] = v.z;
+    }
+    return out;
+  })];
+  const positions = new Float32Array(lists.reduce((n, l) => n + l.length, 0));
+  let o = 0;
+  for (const l of lists) { positions.set(l, o); o += l.length; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const entry = { key, bvh: new MeshBVH(g), positions };
+  mergedTargets.set(j, entry);
+  return entry;
 }
 
 /** Oberflächenpunkte des beweglichen Teils in der Nähe der gewählten Flächen und Punkte (lokal). */
@@ -759,7 +921,8 @@ function connect(j: Joint) {
   if (j.status?.kind === 'err') {
     j.applied = false;
     toast(j.status.text, 5000);
-  } else fitView();
+  }
+  // Ansicht bewusst nicht verändern: man arbeitet meist weiter an derselben Stelle
   renderAll();
 }
 
@@ -768,15 +931,20 @@ function refine(j: Joint) {
   const fixed = getPart(j.fixedSide === 'a' ? j.a : j.b)!;
   const moving = getPart(j.fixedSide === 'a' ? j.b : j.a)!;
   const Mf = matrixToRigid(fixed.mesh.matrixWorld);
+  const side = j.fixedSide;
   const contacts = [
-    ...(j.fixedSide === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixed.mesh.matrixWorld).p),
-    ...(j.fixedSide === 'a' ? j.fa : j.fb).map((f) => compose(Mf, { R: IDENTITY.R, t: featureCenter(f) }).t),
+    ...(side === 'a' ? j.ma : j.mb).map((m) => markerToWorld(m, fixed.mesh.matrixWorld).p),
+    ...(side === 'a' ? j.fa : j.fb).map((f) => {
+      const M = matrixToRigid((featurePart(j, side, f) ?? fixed).mesh.matrixWorld);
+      return compose(M, { R: IDENTITY.R, t: featureCenter(f) }).t;
+    }),
   ];
+  const target = fixedTarget(j, fixed, helperRelations(j, side, fixed, (id) => getPart(id)!.mesh.matrixWorld));
   if (!contacts.length) return;
   const s = sceneScale();
   const current = matrixToRigid(moving.mesh.matrixWorld);
   const rmsd = j.result?.solutions[0]?.rmsd ?? 0;
-  const res = refineICP(moving.samples, current, fixed.geom.boundsTree as MeshBVH, fixed.mesh.matrixWorld, contacts, {
+  const res = refineICP(moving.samples, current, target.bvh, fixed.mesh.matrixWorld, contacts, {
     regionRadius: Math.max(s * 0.35, ...(j.fixedSide === 'a' ? j.fa : j.fb).map((f) => featureRadius(f) * 1.3)),
     maxPairDist: Math.max(rmsd * 4, s * 0.02),
   });
@@ -855,7 +1023,6 @@ function proposeJoint(j: Joint) {
     j.proposalIdx = 0;
     applySuggestion(j, list[0]);
     solveAll();
-    fitView();
     renderAll();
     toast(list.length > 1 ? `${list.length} Vorschläge gefunden – der beste ist angewendet.` : 'Passende Flächen gefunden und verbunden.', 4000);
   }, 30);
@@ -1258,9 +1425,9 @@ function rebuildMarkers() {
     const active = j.id === activeJointId;
     const movingSide = j.fixedSide ? (j.fixedSide === 'a' ? 'b' : 'a') : null;
     for (const side of ['a', 'b'] as Side[]) {
-      const part = getPart(side === 'a' ? j.a : j.b);
-      if (!part || !part.visible) continue;
-      const list = side === 'a' ? j.ma : j.mb;
+      const own = getPart(side === 'a' ? j.a : j.b);
+      const list = own?.visible ? (side === 'a' ? j.ma : j.mb) : [];
+      const part = own!;
       // Auf der bewegten Seite nach dem Verbinden die erkannte Zuordnung anzeigen
       list.forEach((m, i) => {
         const w = markerToWorld(m, part.mesh.matrixWorld);
@@ -1285,22 +1452,26 @@ function rebuildMarkers() {
       const feats = side === 'a' ? j.fa : j.fb;
       const counters: Record<string, number> = {};
       feats.forEach((f, i) => {
-        const overlay = new THREE.Mesh(
-          subGeometry(part, f.tris),
-          new THREE.MeshBasicMaterial({
-            color: j.color, transparent: true, opacity: active ? 0.55 : 0.25, side: THREE.DoubleSide, depthWrite: false,
-            polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
-          }),
-        );
+        const group = f.kind === 'cylinder' ? 'round' : f.kind === 'edge' ? 'edge' : 'flat';
+        counters[group] = (counters[group] ?? 0) + 1;
+        const part = featurePart(j, side, f);
+        if (!part?.visible) return;
+        const overlay = f.kind === 'edge'
+          ? new THREE.Mesh(edgeTube(f), new THREE.MeshBasicMaterial({ color: j.color, transparent: true, opacity: active ? 1 : 0.5, depthTest: false }))
+          : new THREE.Mesh(
+            subGeometry(part, f.tris),
+            new THREE.MeshBasicMaterial({
+              color: j.color, transparent: true, opacity: active ? 0.55 : 0.25, side: THREE.DoubleSide, depthWrite: false,
+              polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+            }),
+          );
+        if (f.kind === 'edge') overlay.renderOrder = 12;
         overlay.matrixAutoUpdate = false;
         overlay.matrix.copy(part.mesh.matrixWorld);
         overlay.userData = { joint: j.id, side, index: i, kind: 'face' };
         faceGroup.add(overlay);
 
-        const tag = featureTag(f);
-        const group = f.kind === 'cylinder' ? 'round' : 'flat';
-        counters[group] = (counters[group] ?? 0) + 1;
-        const label = labelSprite(`${tag}${counters[group]}`, j.color);
+        const label = labelSprite(`${featureTag(f)}${counters[group]}`, j.color);
         label.material.opacity = active ? 1 : 0.5;
         const [ca, na] = featureAnchor(part, f);
         const c = new THREE.Vector3(...ca).applyMatrix4(part.mesh.matrixWorld);
@@ -1440,6 +1611,10 @@ interface Hit {
   local: Marker;
   world: THREE.Vector3;
   tri: number;
+  /** Modellgröße eines Bildschirmpixels am Trefferpunkt. */
+  worldPerPx: number;
+  /** Ungerasteter Trefferpunkt (lokal). */
+  raw: Vec3;
 }
 
 /** Trifft die Oberfläche eines Teils; rastet im Punktmodus optional an der nächsten Ecke ein. */
@@ -1453,11 +1628,12 @@ function pick(e: PointerEvent | MouseEvent): Hit | null {
   const local = hit.point.clone().applyMatrix4(inv);
   // Außennormale laut Dreiecks-Umlaufsinn (nicht zur Kamera gedreht)
   const n = hit.face.normal.clone();
+  const raw = v3(local);
   const snap = (document.getElementById('snap') as HTMLInputElement).checked;
+  // Fangradius in Bildschirmpixeln, umgerechnet in Modellgröße am Trefferpunkt
+  const rect = renderer.domElement.getBoundingClientRect();
+  const worldPerPx = (2 * hit.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rect.height;
   if (snap && pickMode === 'point') {
-    // Fangradius in Bildschirmpixeln, umgerechnet in Modellgröße am Trefferpunkt
-    const rect = renderer.domElement.getBoundingClientRect();
-    const worldPerPx = (2 * hit.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rect.height;
     const sphere = new THREE.Sphere(local.clone(), SNAP_PX * worldPerPx);
     let best: THREE.Vector3 | null = null;
     let bd = sphere.radius;
@@ -1475,7 +1651,7 @@ function pick(e: PointerEvent | MouseEvent): Hit | null {
   const world = local.clone().applyMatrix4(part.mesh.matrixWorld);
   // Die BVH meldet faceIndex in ihrer eigenen (umsortierten) Reihenfolge – das Dreieck im Netz ergibt
   // sich aus den Eckpunkten, die bei nicht indizierten Netzen zu je dritt zu einem Dreieck gehören
-  return { part, local: { p: v3(local), n: v3(n.normalize()) }, world, tri: Math.floor(hit.face.a / 3) };
+  return { part, local: { p: v3(local), n: v3(n.normalize()) }, world, tri: Math.floor(hit.face.a / 3), worldPerPx, raw };
 }
 
 /** Darf ein Klick auf dieses Teil in der aktiven Verbindung landen? */
@@ -1484,10 +1660,25 @@ function usableFor(j: Joint | undefined, part: Part) {
 }
 
 function updateHover(h: Hit | null) {
-  if (pickMode !== 'face' || !h || !usableFor(activeJoint(), h.part)) {
+  hoverLine.visible = false;
+  if (pickMode === 'brush') return;
+  if (pickMode === 'point' || !h || !(usableFor(activeJoint(), h.part) || helperSide(activeJoint(), h.part))) {
     hoverMesh.visible = false;
     hoverKey = '';
     hoverTris = null;
+    return;
+  }
+  if (pickMode === 'edge') {
+    hoverMesh.visible = false;
+    hoverKey = '';
+    hoverTris = null;
+    const edge = edgeAt(h);
+    if (!edge) return;
+    hoverLine.geometry.dispose();
+    hoverLine.geometry = edgeTube(edge);
+    hoverLine.matrix.copy(h.part.mesh.matrixWorld);
+    (hoverLine.material as THREE.MeshBasicMaterial).color.copy(activeJoint()!.color).lerp(new THREE.Color(1, 1, 1), 0.3);
+    hoverLine.visible = true;
     return;
   }
   const key = `${h.part.id}`;
@@ -1502,6 +1693,115 @@ function updateHover(h: Hit | null) {
   const j = activeJoint()!;
   (hoverMesh.material as THREE.MeshBasicMaterial).color.copy(j.color).lerp(new THREE.Color(1, 1, 1), 0.4);
 }
+
+// Strg/⌘ + Ziehen: Teil (mit allem, was daran hängt) frei über die Bauplatte schieben
+let platformDrag: { id: number; plane: THREE.Plane; start: THREE.Vector3; layouts: Map<number, THREE.Matrix4> } | null = null;
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || !(e.ctrlKey || e.metaKey)) return;
+  const h = pick(e);
+  if (!h) return;
+  // Vor OrbitControls und Gizmo abfangen: die Ansicht soll sich dabei nicht drehen
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  const seed = seedOf.get(h.part.id);
+  const members = parts.filter((q) => seedOf.get(q.id) === seed);
+  platformDrag = {
+    id: e.pointerId,
+    plane: new THREE.Plane(new THREE.Vector3(0, 0, 1), -h.world.z),
+    start: h.world.clone(),
+    layouts: new Map(members.map((q) => [q.id, q.layout.clone()])),
+  };
+  renderer.domElement.setPointerCapture(e.pointerId);
+  renderer.domElement.style.cursor = 'grabbing';
+  hideTip();
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!platformDrag || e.pointerId !== platformDrag.id) return;
+  e.stopImmediatePropagation();
+  setNdc(e);
+  const at = raycaster.ray.intersectPlane(platformDrag.plane, new THREE.Vector3());
+  if (!at) return;
+  const d = at.sub(platformDrag.start);
+  const T = new THREE.Matrix4().makeTranslation(d.x, d.y, 0);
+  for (const [id, L] of platformDrag.layouts) getPart(id)?.layout.copy(T.clone().multiply(L));
+  solveAll();
+  renderLight();
+}, { capture: true });
+const endPlatformDrag = (e: PointerEvent) => {
+  if (!platformDrag || e.pointerId !== platformDrag.id) return;
+  e.stopImmediatePropagation();
+  platformDrag = null;
+  renderer.domElement.style.cursor = 'default';
+  renderAll();
+};
+renderer.domElement.addEventListener('pointerup', endPlatformDrag, { capture: true });
+renderer.domElement.addEventListener('pointercancel', endPlatformDrag, { capture: true });
+
+// Pinsel: mit gedrückter linker Maustaste Dreiecke bemalen, beim Loslassen wird daraus eine Fläche
+let painting: { id: number; part: Part; side: Side; on?: number; tris: Set<number> } | null = null;
+/** Dreiecke im Pinselradius um den Treffer, zusammenhängend mit dem getroffenen Dreieck. */
+function paintAt(h: Hit) {
+  if (!painting || h.part !== painting.part) return;
+  const topo = topologyOf(h.part);
+  const r = BRUSH_PX * h.worldPerPx;
+  const p = h.raw;
+  const stack = [h.tri];
+  const seen = new Set<number>(stack);
+  while (stack.length && seen.size < 20000) {
+    const t = stack.pop()!;
+    const c = [topo.centroids[3 * t], topo.centroids[3 * t + 1], topo.centroids[3 * t + 2]];
+    if (Math.hypot(c[0] - p[0], c[1] - p[1], c[2] - p[2]) > r && t !== h.tri) continue;
+    painting.tris.add(t);
+    for (let k = 0; k < 3; k++) {
+      const n = topo.neighbors[3 * t + k];
+      if (n >= 0 && !seen.has(n)) { seen.add(n); stack.push(n); }
+    }
+  }
+  hoverMesh.geometry.dispose();
+  hoverMesh.geometry = subGeometry(h.part, [...painting.tris]);
+  hoverMesh.matrix.copy(h.part.mesh.matrixWorld);
+  (hoverMesh.material as THREE.MeshBasicMaterial).color.copy(activeJoint()?.color ?? new THREE.Color(1, 1, 1)).lerp(new THREE.Color(1, 1, 1), 0.2);
+  hoverMesh.visible = true;
+}
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (pickMode !== 'brush' || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const h = pick(e);
+  const j = activeJoint();
+  if (!h || !j || (tc.object && tc.axis)) return;
+  let side: Side | null = j.a === h.part.id ? 'a' : j.b === h.part.id ? 'b' : null;
+  const helper = side ? null : helperSide(j, h.part);
+  side ??= helper;
+  if (!side) return;
+  // Beginnt der Strich auf einem Teil der Verbindung, wird gemalt statt die Ansicht gedreht
+  e.stopImmediatePropagation();
+  painting = { id: e.pointerId, part: h.part, side, on: helper ? h.part.id : undefined, tris: new Set() };
+  renderer.domElement.setPointerCapture(e.pointerId);
+  paintAt(h);
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!painting || e.pointerId !== painting.id) return;
+  e.stopImmediatePropagation();
+  const h = pick(e);
+  if (h) paintAt(h);
+}, { capture: true });
+const endPainting = (e: PointerEvent) => {
+  if (!painting || e.pointerId !== painting.id) return;
+  e.stopImmediatePropagation();
+  const { part, side, on, tris } = painting;
+  painting = null;
+  hoverMesh.visible = false;
+  const j = activeJoint();
+  if (!j || !tris.size) return;
+  const f: PickedFeature = featureFromTris(topologyOf(part), [...tris]);
+  if (on !== undefined) f.on = on;
+  (side === 'a' ? j.fa : j.fb).push(f);
+  history.push({ joint: j.id, side, kind: 'face' });
+  markersChanged(j);
+  solveAll();
+  renderAll();
+};
+renderer.domElement.addEventListener('pointerup', endPainting, { capture: true });
+renderer.domElement.addEventListener('pointercancel', endPainting, { capture: true });
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   downPos = { x: e.clientX, y: e.clientY };
@@ -1617,14 +1917,14 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   const h = pick(e);
   hoverName(e, h?.part ?? null);
   const j = activeJoint();
-  const usable = !!h && usableFor(j, h.part) && !(tc.object && tc.axis);
-  cursor.visible = usable && pickMode === 'point';
+  const usable = !!h && (usableFor(j, h.part) || (pickMode !== 'point' && !!helperSide(j, h.part))) && !(tc.object && tc.axis);
+  cursor.visible = usable && (pickMode === 'point' || pickMode === 'brush');
   if (h && usable) {
     cursor.position.copy(h.world);
     (cursor.material as THREE.MeshBasicMaterial).color.copy(j!.color).lerp(new THREE.Color(1, 1, 1), 0.35);
   }
   updateHover(usable ? h : null);
-  renderer.domElement.style.cursor = usable ? (pickMode === 'face' ? 'pointer' : 'crosshair') : 'default';
+  renderer.domElement.style.cursor = usable ? (pickMode === 'point' ? 'crosshair' : 'pointer') : 'default';
 });
 
 renderer.domElement.addEventListener('pointerleave', () => {
@@ -1655,12 +1955,23 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (j.a === null && j.b !== h.part.id) j.a = h.part.id;
   else if (j.b === null && j.a !== h.part.id) j.b = h.part.id;
 
-  const side: Side | null = j.a === h.part.id ? 'a' : j.b === h.part.id ? 'b' : null;
+  let side: Side | null = j.a === h.part.id ? 'a' : j.b === h.part.id ? 'b' : null;
+  // Fläche auf einem Nachbarteil, das schon fest mit einem der beiden Teile verbunden ist
+  const helper = !side ? helperSide(j, h.part) : null;
+  if (helper && pickMode !== 'point') side = helper;
   if (!side) {
-    toast(`„${h.part.name}" gehört nicht zur aktiven Verbindung. Wähle sie links aus oder lege eine neue an.`);
+    toast(helper
+      ? `Punkte gehen nur auf „${nameOf(j.a)}" und „${nameOf(j.b)}" – Flächen dürfen auch auf fest verbundenen Nachbarteilen wie „${h.part.name}" liegen.`
+      : `„${h.part.name}" gehört nicht zur aktiven Verbindung. Wähle sie links aus oder lege eine neue an.`, 5000);
     return;
   }
-  if (pickMode === 'face') toggleFace(j, side, h.part, h.tri);
+  if (pickMode === 'brush') return; // Pinsel arbeitet beim Ziehen
+  if (pickMode === 'face') toggleFace(j, side, h.part, h.tri, helper ? h.part.id : undefined);
+  else if (pickMode === 'edge') {
+    const edge = edgeAt(h);
+    if (!edge) { toast('Hier ist keine gerade Kante – näher an eine Kante klicken.'); return; }
+    toggleEdge(j, side, h.part, edge, helper ? h.part.id : undefined);
+  }
   else {
     (side === 'a' ? j.ma : j.mb).push(h.local);
     history.push({ joint: j.id, side, kind: 'point' });
@@ -1671,12 +1982,46 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 });
 
 /** Wählt die Fläche unter einem Dreieck aus – oder hebt die Auswahl auf, wenn sie schon gewählt ist. */
-function toggleFace(j: Joint, side: Side, part: Part, tri: number) {
+function toggleFace(j: Joint, side: Side, part: Part, tri: number, on?: number) {
   const list = side === 'a' ? j.fa : j.fb;
-  const existing = list.findIndex((f) => f.tris.includes(tri));
+  const existing = list.findIndex((f) => f.kind !== 'edge' && featurePart(j, side, f) === part && f.tris.includes(tri));
   if (existing >= 0) list.splice(existing, 1);
   else {
-    list.push(detectFeature(topologyOf(part), tri, FEATURE_OPTS));
+    const f: PickedFeature = detectFeature(topologyOf(part), tri, FEATURE_OPTS);
+    if (on !== undefined) f.on = on;
+    list.push(f);
+    history.push({ joint: j.id, side, kind: 'face' });
+  }
+  markersChanged(j);
+  if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
+  solveAll();
+  renderAll();
+}
+
+/** Gerade Kante in der Nähe des Treffers (lokale Koordinaten des Teils). */
+function edgeAt(h: Hit): EdgeFeature | null {
+  return detectEdge(topologyOf(h.part), h.tri, h.raw, EDGE_PX * h.worldPerPx);
+}
+
+/** Kante als dünne Röhre (lokale Koordinaten). */
+function edgeTube(f: EdgeFeature, thick = 1): THREE.BufferGeometry {
+  const r = Math.max(f.length * 0.012, sceneScale() * 0.0025) * thick;
+  const g = new THREE.CylinderGeometry(r, r, f.length, 10);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...f.dir)));
+  g.translate(...f.center);
+  return g;
+}
+
+/** Wählt eine Kante aus – oder hebt die Auswahl auf, wenn sie schon gewählt ist. */
+function toggleEdge(j: Joint, side: Side, part: Part, edge: EdgeFeature, on?: number) {
+  const list = side === 'a' ? j.fa : j.fb;
+  const same = (f: PickedFeature) => f.kind === 'edge' && featurePart(j, side, f) === part && f.tris.some((t) => edge.tris.includes(t));
+  const existing = list.findIndex(same);
+  if (existing >= 0) list.splice(existing, 1);
+  else {
+    const f: PickedFeature = edge;
+    if (on !== undefined) f.on = on;
+    list.push(f);
     history.push({ joint: j.id, side, kind: 'face' });
   }
   markersChanged(j);
@@ -1687,6 +2032,8 @@ function toggleFace(j: Joint, side: Side, part: Part, tri: number) {
 
 renderer.domElement.addEventListener('contextmenu', (e) => {
   e.preventDefault();
+  // Strg+Klick ist auf dem Mac ein Rechtsklick – dort beginnt das Verschieben, nichts löschen
+  if (e.ctrlKey && e.button === 0) return;
   setNdc(e);
   const targets = [...markerGroup.children.filter((o) => (o as THREE.Mesh).isMesh), ...faceGroup.children];
   const hit = raycaster.intersectObjects(targets, false)[0];
@@ -1702,9 +2049,11 @@ renderer.domElement.addEventListener('contextmenu', (e) => {
   renderAll();
 });
 
-function setPickMode(mode: 'point' | 'face') {
+function setPickMode(mode: PickMode) {
   pickMode = mode;
   document.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) => b.classList.toggle('on', b.dataset.pick === mode));
+  // Einrasten an Ecken gibt es nur für Punkte
+  document.getElementById('snap')!.closest('label')!.hidden = mode !== 'point';
   updateHover(null);
   cursor.visible = false;
   renderHint();
@@ -1728,6 +2077,8 @@ window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === 'p') setPickMode('point');
   else if (k === 'f') setPickMode('face');
+  else if (k === 'k') setPickMode('edge');
+  else if (k === 'b') setPickMode('brush');
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
     updateGizmoAxes();
@@ -1739,9 +2090,7 @@ window.addEventListener('keydown', (e) => {
 
 
 function renderParts() {
-  partsEl.innerHTML = parts
-    .map(
-      (p) => `<li data-part="${p.id}">
+  const row = (p: Part) => `<li data-part="${p.id}"${p.visible ? '' : ' class="off"'}>
         <input type="color" class="swatch" data-act="color" data-id="${p.id}" value="#${p.color.getHexString()}" title="Farbe (wird beim mehrfarbigen 3MF-Export übernommen)" />
         <input type="checkbox" data-act="vis" data-id="${p.id}" ${p.visible ? 'checked' : ''} title="Sichtbar" />
         <span class="name" data-act="name" data-id="${p.id}" title="${esc(p.name)} – Klick: im Modell zeigen, Doppelklick: umbenennen">${esc(p.name)}</span>
@@ -1749,11 +2098,15 @@ function renderParts() {
           <input type="radio" name="base" data-act="base" data-id="${p.id}" ${p.id === baseId ? 'checked' : ''}/> Basis
         </label>
         ${p.group && groupOf(p).length > 1 ? `<button class="icon" data-act="ungroup" data-id="${p.id}" title="Gehört zu einer Gruppe (${groupOf(p).length} Teile, bewegen sich gemeinsam). Klicken, um dieses Teil aus der Gruppe zu lösen.">⛓</button>` : ''}
-        <button class="icon move" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen" aria-label="Teil von Hand bewegen/drehen">${MOVE_ICON}</button>
+        <button class="icon move${gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? ' on' : ''}" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen (nochmal klicken: fertig)" aria-label="Teil von Hand bewegen/drehen" aria-pressed="${gizmoPart()?.id === p.id}">${MOVE_ICON}</button>
         <button class="icon rm" data-act="rm-part" data-id="${p.id}" title="Entfernen" aria-label="Entfernen">✕</button>
-      </li>`,
-    )
-    .join('');
+      </li>`;
+  // Sichtbare Teile oben, ausgeblendete in einem eigenen, einklappbaren Abschnitt
+  const hidden = parts.filter((p) => !p.visible);
+  partsEl.innerHTML = parts.filter((p) => p.visible).map(row).join('') + (hidden.length
+    ? `<li class="sep"><button class="icon fold" data-act="fold-hidden" aria-expanded="${!hiddenFolded}" title="Ausgeblendete Teile ein- oder ausklappen">${hiddenFolded ? '▸' : '▾'}</button>
+        <span>Ausgeblendet (${hidden.length})</span></li>${hiddenFolded ? '' : hidden.map(row).join('')}`
+    : '');
   // Alle ein-/ausblenden
   const shown = parts.filter((p) => p.visible).length;
   const bar = document.getElementById('partsBar')!;
@@ -1803,9 +2156,10 @@ function featureChips(j: Joint, side: Side) {
   const counters: Record<string, number> = {};
   return `<ul class="chips">${list
     .map((f, i) => {
-      const group = f.kind === 'cylinder' ? 'round' : 'flat';
+      const group = f.kind === 'cylinder' ? 'round' : f.kind === 'edge' ? 'edge' : 'flat';
       counters[group] = (counters[group] ?? 0) + 1;
-      return `<li><b>${featureTag(f)}${counters[group]}</b> ${esc(describeFeature(f))}
+      const on = f.on !== undefined && f.on !== (side === 'a' ? j.a : j.b) ? `<small>auf „${esc(nameOf(f.on))}"</small>` : '';
+      return `<li><b>${featureTag(f)}${counters[group]}</b> <span class="desc">${esc(describeFeature(f))}${on}</span>
         <button class="icon" data-act="rm-face" data-side="${side}" data-idx="${i}" data-id="${j.id}" title="Fläche abwählen">✕</button></li>`;
     })
     .join('')}</ul>`;
@@ -1890,20 +2244,28 @@ function renderJoints() {
 function renderHint() {
   const el = document.getElementById('hint')!;
   const j = activeJoint();
-  const what = pickMode === 'face' ? 'Flächen' : 'Punkte';
+  const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
   if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
   else if (!j) el.textContent = 'Lege links eine Verbindung an.';
   else if (j.a === null || j.b === null) el.textContent = 'Klicke die beiden Teile an, die verbunden werden sollen.';
   else if (j.applied) el.textContent = `Verbunden. Weitere ${what} verfeinern das Ergebnis live · Rechtsklick entfernt eine Auswahl.`;
-  else if (pickMode === 'face') {
+  else if (pickMode === 'brush') {
+    el.textContent = `Pinsel: mit gedrückter Maustaste über die Kontaktstelle auf „${nameOf(j.fa.length <= j.fb.length ? j.a : j.b)}" streichen – beim Loslassen wird daraus eine Fläche. Daneben ziehen dreht die Ansicht.`;
+  } else if (pickMode === 'edge') {
+    const na = j.fa.filter((f) => f.kind === 'edge').length;
+    const nb = j.fb.filter((f) => f.kind === 'edge').length;
+    if (!na && !nb) el.textContent = `Klicke nahe an eine gerade Kante von „${nameOf(j.a)}" und an die passende Kante von „${nameOf(j.b)}". Kanten lassen sich mit Flächen kombinieren.`;
+    else if (na !== nb) el.textContent = `Jetzt die passende Kante auf „${nameOf(na < nb ? j.a : j.b)}" anklicken.`;
+    else el.textContent = 'Kanten gewählt. Mit einer Fläche dazu wird die Lage eindeutig – oder „Verbinden" klicken.';
+  } else if (pickMode === 'face') {
     if (!j.fa.length && !j.fb.length) el.textContent = `Klicke die Kontaktfläche auf „${nameOf(j.a)}" und die passende auf „${nameOf(j.b)}" (z. B. Zapfen und Bohrung).`;
     else if (!j.fa.length || !j.fb.length) el.textContent = `Jetzt die passende Fläche auf „${nameOf(j.fa.length ? j.b : j.a)}" anklicken.`;
     else el.textContent = 'Flächen gewählt. Weitere Flächenpaare (z. B. Auflage + Zapfen) machen es eindeutiger – oder „Verbinden" klicken.';
   } else {
     const na = j.ma.length;
     const nb = j.mb.length;
-    if (na === 0 && nb === 0) el.textContent = `Klicke markante Punkte auf „${nameOf(j.a)}" – danach dieselben Stellen auf „${nameOf(j.b)}". Tipp: Mit „Flächen" (Taste F) geht es oft schneller.`;
+    if (na === 0 && nb === 0) el.textContent = `Klicke markante Punkte auf „${nameOf(j.a)}" – danach dieselben Stellen auf „${nameOf(j.b)}". Tipp: Mit „Flächen" (Taste F) geht es meist schneller.`;
     else if (na !== nb) el.textContent = `Noch ${Math.abs(na - nb)} Punkt(e) auf „${na < nb ? nameOf(j.a) : nameOf(j.b)}" – Reihenfolge egal.`;
     else el.textContent = `${na} Punktpaar(e) gesetzt. Weitere Punkte setzen oder links auf „Verbinden" klicken.`;
   }
@@ -1914,6 +2276,8 @@ let rendering = false;
 
 function renderAll() {
   if (rendering) return;
+  // Gizmo schließen, wenn sein Teil ausgeblendet oder entfernt wurde
+  if (gizmoTarget && !gizmoPart()?.visible) closeGizmo();
   rendering = true;
   try {
     renderParts();
@@ -1928,6 +2292,14 @@ function renderAll() {
     placeGizmo();
     renderGizmoBar();
   }
+}
+
+/** Das Teil, das das Gizmo gerade bewegt. */
+function gizmoPart(): Part | undefined {
+  if (!gizmoTarget) return undefined;
+  if (gizmoTarget.kind === 'part') return getPart(gizmoTarget.id);
+  const j = joints.find((x) => x.id === gizmoTarget!.id);
+  return j?.fixedSide ? getPart(j.fixedSide === 'a' ? j.b : j.a) : undefined;
 }
 
 /** Nur Statuszeilen und 3D-Anzeige aktualisieren (z. B. während ein Regler oder das Gizmo gezogen wird). */
@@ -1975,7 +2347,17 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
       toast(`„${p.name}" bewegt sich jetzt unabhängig von seiner Gruppe.`);
       break;
     }
+    case 'fold-hidden':
+      hiddenFolded = !hiddenFolded;
+      renderParts();
+      break;
     case 'move-part': {
+      // Nochmal klicken schließt das Gizmo wieder
+      if (gizmoPart()?.id === id && !gizmoTarget?.assembly) {
+        closeGizmo();
+        renderAll();
+        break;
+      }
       // Wird das Teil von einer Verbindung bewegt, wird diese angepasst
       const jid = movedBy.get(id);
       if (jid !== undefined) {
@@ -2198,7 +2580,7 @@ document.getElementById('checkBtn')!.addEventListener('click', () => {
   void runCheck();
 });
 document.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) =>
-  b.addEventListener('click', () => setPickMode(b.dataset.pick as 'point' | 'face')),
+  b.addEventListener('click', () => setPickMode(b.dataset.pick as PickMode)),
 );
 
 // Gizmo-Leiste
@@ -2249,7 +2631,7 @@ for (const target of [drop, view]) {
   });
 }
 
-function loadDemo(items: { name: string; geom: THREE.BufferGeometry }[], hint: string, mode: 'point' | 'face') {
+function loadDemo(items: { name: string; geom: THREE.BufferGeometry }[], hint: string, mode: PickMode) {
   closeGizmo();
   for (const p of [...parts]) removePart(p.id);
   joints.length = 0;
@@ -2269,7 +2651,7 @@ function loadDemo(items: { name: string; geom: THREE.BufferGeometry }[], hint: s
 }
 
 document.getElementById('demo')!.addEventListener('click', () =>
-  loadDemo(makeDemo(), 'Beispiel „Haus": Setze die vier oberen Ecken des Hauses und die vier Ecken der Dach-Unterseite – oder wähle unter „Flächen" einfach beide Flächen.', 'point'),
+  loadDemo(makeDemo(), 'Beispiel „Haus": Klicke die Oberseite des Hauses und die Unterseite des Dachs an, dann „Verbinden" – oder setze unter „Punkte" die vier Ecken.', 'face'),
 );
 document.getElementById('demoRound')!.addEventListener('click', () =>
   loadDemo(makeRoundDemo(), 'Beispiel „Zapfen": Klicke den runden Teil des Zapfens und die runde Bohrungswand der Kappe an, dann „Verbinden". Die Drehung findet PartJoin über die Abflachung selbst.', 'face'),
@@ -2343,13 +2725,15 @@ Object.assign(window as unknown as Record<string, unknown>, {
     parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor,
     checkCount: () => checkGroup.children.length,
     gizmoLocked: () => [...gizmoLocked],
-    proposePair: (a: number, b: number) => proposePair(getPart(a)!, getPart(b)!).map((s) => ({ score: s.score, fa: s.fa.kind + ':' + Math.round(s.fa.area), fb: s.fb.kind + ':' + Math.round(s.fb.area) })),
+    hoverLineVisible: () => hoverLine.visible,
+    proposePair: (a: number, b: number) => proposePair(getPart(a)!, getPart(b)!).map((s) => ({ score: s.score, fa: s.fa.kind + ':' + Math.round((s.fa as { area?: number }).area ?? 0), fb: s.fb.kind + ':' + Math.round((s.fb as { area?: number }).area ?? 0) })),
     /** Fläche wie per Klick auswählen (für automatisierte Tests). */
     selectFace: (partId: number, tri: number) => {
       const j = activeJoint();
       const part = getPart(partId);
       const side: Side | null = !j || !part ? null : j.a === partId ? 'a' : j.b === partId ? 'b' : null;
-      if (j && part && side) toggleFace(j, side, part, tri);
+      const helper = j && part && !side ? helperSide(j, part) : null;
+      if (j && part && (side || helper)) toggleFace(j, (side ?? helper)!, part, tri, helper ? partId : undefined);
     },
   },
 });

@@ -17,14 +17,20 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 2. **Automatisch oder von Hand auswählen** – **„Alles automatisch verbinden"** sucht für alle Teile
    passende Flächen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und setzt sie ab dem
    Basisteil zusammen; **„Vorschlagen"** macht das für eine einzelne Verbindung, „Nächster Vorschlag"
-   probiert weitere. Von Hand: oben im 3D-Fenster zwischen **Punkte** (Taste P) und **Flächen** (Taste F) wechseln.
+   probiert weitere. Von Hand: oben im 3D-Fenster zwischen **Flächen** (Taste F, Standard), **Kanten** (Taste K),
+   **Punkte** (Taste P) und **Pinsel** (Taste B) wechseln.
    - *Flächen:* die Kontaktfläche auf beiden Teilen anklicken. PartJoin erkennt selbst, ob es eine
      ebene Fläche, eine Kreisfläche oder ein Zylinder (Zapfen bzw. Bohrung) ist, und setzt die Teile
      wie in einem CAD-Programm aufeinander: Ebene auf Ebene, Kreis mittig auf Kreis, Zapfen koaxial
      in Bohrung. Mehrere Flächenpaare (z. B. Auflagefläche + Zapfen) legen die Lage vollständig fest.
    - *Punkte:* auf beiden Teilen dieselben markanten Stellen anklicken (Ecken, Kanten …).
      **Die Reihenfolge ist egal** – PartJoin erkennt selbst, welche Markierung zu welcher gehört.
-   Punkte und Flächen lassen sich auch kombinieren.
+   - *Kanten:* gerade Kante auf gerade Kante (z. B. bündig an einer Außenkante) – gut kombinierbar mit einer Fläche.
+   - *Pinsel:* mit gedrückter Maustaste über die Kontaktstelle streichen; beim Loslassen wird daraus eine
+     Fläche (eben oder Freiform). Praktisch, wo die automatische Flächenerkennung nicht passt.
+   Punkte, Kanten und Flächen lassen sich auch kombinieren. Besteht das Gegenstück aus mehreren Teilen (z. B.
+   eine Maske, die auf Kopf *und* Haare passt), dürfen Flächen auch auf Nachbarteilen liegen, die schon fest mit
+   Teil 1 verbunden sind – PartJoin rechnet und prüft den Kontakt dann mit allen diesen Teilen.
 3. **Verbinden** – das bewegliche Teil wird exakt an das feste angesetzt. Was die Auswahl offen lässt
    (z. B. die Drehung um einen Zapfen), sucht *Automatisch einpassen* über Flächenkontakt ohne
    Durchdringung: Teile mit Abflachung, Nut oder Lochbild drehen sich so von selbst richtig, und ein
@@ -45,7 +51,8 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): ein Objekt aus mehreren Teilen
      mit eigenem Namen; jede Teilefarbe wird ein Filament in genau dieser Farbe. Die Datei bringt
      Projekteinstellungen für den gewählten Drucker mit (System-Profile von Bambu Studio: 0,4-mm-Düse,
-     0,20 mm Standard, Bambu PLA Basic) – ohne sie lädt Bambu Studio ab 2.8.2 nur die Geometrie.
+     0,20 mm Standard, Bambu PLA Basic; auch H2C, H2D, H2D Pro und X2D mit zwei Düsen) – ohne sie lädt
+     Bambu Studio ab 2.8.2 nur die Geometrie.
      Der Drucker eines geladenen Bambu-Projekts wird vorausgewählt.
    - **3MF für PrusaSlicer**: ein Objekt aus mehreren Teilen; Teile gleicher Farbe bekommen dieselbe
      Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen.
@@ -59,12 +66,14 @@ zusammengesetzt (Basis in der Teileliste wählbar).
 Bedienung: Linksklick wählt aus (nochmal klicken hebt eine Fläche wieder auf) · Rechtsklick auf eine
 Markierung oder Fläche löscht sie · Strg+Z nimmt die letzte Auswahl zurück · P/F wechselt Punkte/Flächen ·
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
-rechte verschiebt sie, Mausrad zoomt.
+rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
+daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
 Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick zeigt es in der Teileliste,
 Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
 am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).
 „Alle Teile" über der Teileliste blendet alle Teile aus oder wieder ein, der Pfeil davor klappt die
-Liste ein. Die Auswahllisten der Verbindungen zeigen nur sichtbare Teile.
+Liste ein. Ausgeblendete Teile stehen in einem eigenen, einklappbaren Abschnitt; die Auswahllisten der
+Verbindungen zeigen nur sichtbare Teile.
 Jedes Teil lässt sich über das Pfeilkreuz in der Teileliste frei von Hand bewegen, „Gesamtes Modell bewegen" verschiebt
 oder dreht das ganze zusammengesetzte Modell.
 

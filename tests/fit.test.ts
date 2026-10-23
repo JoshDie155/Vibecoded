@@ -45,7 +45,7 @@ const fitOf = (s: ReturnType<typeof setup>, scale: number) =>
     alt: 0, seat: true, ordered: false, normals: 'auto', overlap: 0, scale, samples: s.samples, target: s.target,
   });
 
-const centerOf = (f: Feature): Vec3 => (f.kind === 'cylinder' ? f.center : f.centroid);
+const centerOf = (f: Feature): Vec3 => (f.kind === 'cylinder' || f.kind === 'edge' ? f.center : f.centroid);
 
 describe('similarPlanes', () => {
   const plane = (area: number, size: number) => ({ kind: 'plane', area, axes: { size: [size, size * 0.8] } }) as unknown as PlaneFeature;
