@@ -50,7 +50,7 @@ body {
 }
 #app { display: flex; height: 100%; }
 #panel {
-  width: 360px;
+  width: var(--panel-w, 360px);
   flex: none;
   overflow-y: auto;
   background: var(--panel);
@@ -58,11 +58,37 @@ body {
   padding: 16px;
 }
 #view { position: relative; flex: 1; min-width: 0; background: var(--view); }
+#resizer {
+  flex: none; width: 7px; margin-left: -4px; cursor: col-resize; position: relative; z-index: 2;
+  touch-action: none;
+}
+#resizer::after {
+  content: ''; position: absolute; inset: 0 3px; background: transparent; transition: background 0.15s;
+}
+#resizer:hover::after, #resizer.drag::after { background: var(--accent); }
+#tip {
+  position: absolute; pointer-events: none; z-index: 5; max-width: 320px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+  display: flex; align-items: center; gap: 7px;
+}
+#tip[hidden] { display: none; }
+#tip small { color: var(--muted); }
+.parts li.hl { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.parts li.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0%, 40% { background: color-mix(in srgb, var(--accent) 35%, transparent); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .parts li.flash { animation: none; background: color-mix(in srgb, var(--accent) 20%, transparent); } }
+.parts .name { cursor: pointer; }
+.parts .rename {
+  flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--accent); border-radius: 5px; padding: 1px 5px;
+}
 #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
 @media (max-width: 760px) {
   #app { flex-direction: column-reverse; height: auto; min-height: 100%; }
   #panel { width: 100%; border-right: none; border-top: 1px solid var(--line); }
+  #resizer { display: none; }
   #view { height: 60vh; flex: none; }
 }
 

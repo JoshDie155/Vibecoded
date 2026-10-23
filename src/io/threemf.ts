@@ -517,6 +517,137 @@ ${vol}
   return zipSync(files);
 }
 
+/** Gleichbleibende Pseudo-UUID (Bambu Studio erwartet p:UUID-Attribute, Inhalt ist beliebig). */
+function uuid(kind: number, n: number): string {
+  const h = (x: number, len: number) => x.toString(16).padStart(len, '0').slice(-len);
+  return `${h(n, 8)}-${h(kind, 4)}-4000-8000-${h(n * 7919 + kind, 12)}`;
+}
+
+export interface BambuOptions {
+  /** Mitte der Druckplatte (mm), Standard 128/128 (X1, P1, A1). */
+  bedCenter?: [number, number];
+  /** Versionsangabe für Bambu Studio (Format „BambuStudio-xx.xx.xx.xx"). */
+  version?: string;
+}
+
+/**
+ * Projektformat von Bambu Studio / OrcaSlicer: ein Objekt aus mehreren Teilen (je Teil ein Netz in
+ * 3D/Objects/object_1.model), Filament je Teil in Metadata/model_settings.config. Ohne diese
+ * Kennzeichnung laden beide Slicer nur die Geometrie. Die Farben selbst übernimmt der Slicer aus den
+ * eingestellten Filamenten – Teile gleicher Farbe bekommen dieselbe Filament-Nummer.
+ */
+export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Uint8Array {
+  const slots = colorSlots(parts);
+  // Baugruppe mittig auf die Platte, Unterseite auf z = 0
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const p of parts)
+    for (let i = 0; i < p.positions.length; i += 3)
+      for (let k = 0; k < 3; k++) {
+        min[k] = Math.min(min[k], p.positions[i + k]);
+        max[k] = Math.max(max[k], p.positions[i + k]);
+      }
+  const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]];
+  const [bx, by] = opts.bedCenter ?? [128, 128];
+  const objId = parts.length + 1;
+
+  const sub: string[] = [];
+  const components: string[] = [];
+  const settings: string[] = [];
+  parts.forEach((part, i) => {
+    const id = i + 1;
+    const local = new Float32Array(part.positions.length);
+    for (let k = 0; k < local.length; k++) local[k] = part.positions[k] - c[k % 3];
+    const { verts, tris } = weld(local);
+    const v: string[] = [];
+    for (let k = 0; k < verts.length; k += 3) v.push(`<vertex x="${f5(verts[k])}" y="${f5(verts[k + 1])}" z="${f5(verts[k + 2])}"/>`);
+    const t: string[] = [];
+    for (let k = 0; k < tris.length; k += 3) t.push(`<triangle v1="${tris[k]}" v2="${tris[k + 1]}" v3="${tris[k + 2]}"/>`);
+    sub.push(`  <object id="${id}" p:UUID="${uuid(1, id)}" type="model">
+   <mesh><vertices>${v.join('')}</vertices><triangles>${t.join('')}</triangles></mesh>
+  </object>`);
+    components.push(`    <component p:path="/3D/Objects/object_1.model" objectid="${id}" p:UUID="${uuid(2, id)}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>`);
+    const extruder = Math.max(0, slots.indexOf(part.color.toLowerCase())) + 1;
+    settings.push(`    <part id="${id}" subtype="normal_part">
+      <metadata key="name" value="${esc(part.name)}"/>
+      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>
+      <metadata key="extruder" value="${extruder}"/>
+    </part>`);
+  });
+  const ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
+  const version = opts.version ?? 'BambuStudio-01.09.00.70';
+  const main = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" ${ns}>
+ <metadata name="Application">${version}</metadata>
+ <metadata name="BambuStudio:3mfVersion">1</metadata>
+ <metadata name="Title">PartJoin</metadata>
+ <metadata name="Designer">PartJoin</metadata>
+ <resources>
+  <object id="${objId}" p:UUID="${uuid(3, objId)}" type="model">
+   <components>
+${components.join('\n')}
+   </components>
+  </object>
+ </resources>
+ <build p:UUID="${uuid(4, 1)}">
+  <item objectid="${objId}" p:UUID="${uuid(5, objId)}" transform="1 0 0 0 1 0 0 0 1 ${f5(bx)} ${f5(by)} 0" printable="1"/>
+ </build>
+</model>`;
+  const objects = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" ${ns}>
+ <metadata name="BambuStudio:3mfVersion">1</metadata>
+ <resources>
+${sub.join('\n')}
+ </resources>
+ <build/>
+</model>`;
+  const config = `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="${objId}">
+    <metadata key="name" value="PartJoin"/>
+    <metadata key="extruder" value="1"/>
+${settings.join('\n')}
+  </object>
+  <plate>
+    <metadata key="plater_id" value="1"/>
+    <metadata key="plater_name" value=""/>
+    <metadata key="locked" value="false"/>
+    <model_instance>
+      <metadata key="object_id" value="${objId}"/>
+      <metadata key="instance_id" value="0"/>
+      <metadata key="identify_id" value="${100 + objId}"/>
+    </model_instance>
+  </plate>
+  <assemble>
+   <assemble_item object_id="${objId}" instance_id="0" transform="1 0 0 0 1 0 0 0 1 ${f5(bx)} ${f5(by)} 0" offset="0 0 0" />
+  </assemble>
+</config>
+`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+ <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+ <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+ <Default Extension="png" ContentType="image/png"/>
+ <Default Extension="gcode" ContentType="text/x.gcode"/>
+</Types>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>`;
+  const modelRels = `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Target="/3D/Objects/object_1.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>`;
+  return zipSync({
+    '[Content_Types].xml': strToU8(contentTypes),
+    '_rels/.rels': strToU8(rels),
+    '3D/3dmodel.model': strToU8(main),
+    '3D/_rels/3dmodel.model.rels': strToU8(modelRels),
+    '3D/Objects/object_1.model': strToU8(objects),
+    'Metadata/model_settings.config': strToU8(config),
+  });
+}
+
 function concat(list: Float32Array[]): Float32Array {
   const out = new Float32Array(list.reduce((s, p) => s + p.length, 0));
   let o = 0;

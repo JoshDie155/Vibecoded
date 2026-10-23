@@ -36,8 +36,9 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
 5. **Exportieren**
-   - **3MF mehrfarbig**: ein Objekt aus mehreren Teilen, jedes mit eigenem Namen, eigener Farbe und
-     eigenem Extruder je Farbe – im Slicer jedem Extruder ein Filament zuordnen.
+   - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu) und **3MF für PrusaSlicer**: ein
+     Objekt aus mehreren Teilen mit eigenem Namen; Teile gleicher Farbe bekommen dieselbe
+     Filament-/Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen.
    - **STL, OBJ, 3MF (ein Körper)**: mit „Zu einem Körper vereinigen" werden die Teile per
      boolescher Vereinigung zu einem geschlossenen Netz (Überlappungen und Innenflächen verschwinden).
      Nicht geschlossene Teile werden unverändert angehängt und genannt.
@@ -47,8 +48,13 @@ zusammengesetzt (Basis in der Teileliste wählbar).
 
 Bedienung: Linksklick wählt aus (nochmal klicken hebt eine Fläche wieder auf) · Rechtsklick auf eine
 Markierung oder Fläche löscht sie · Strg+Z nimmt die letzte Auswahl zurück · P/F wechselt Punkte/Flächen ·
-im Gizmo G = verschieben, R = drehen, Esc = fertig · Ziehen dreht die Ansicht, Mausrad zoomt.
-Jedes Teil lässt sich über ✥ in der Teileliste auch frei von Hand bewegen.
+im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
+rechte verschiebt sie, Mausrad zoomt.
+Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick zeigt es in der Teileliste,
+Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
+am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).
+Jedes Teil lässt sich über ✥ in der Teileliste frei von Hand bewegen, „Gesamtes Modell bewegen" verschiebt
+oder dreht das ganze zusammengesetzte Modell.
 
 ## Runde Teile
 

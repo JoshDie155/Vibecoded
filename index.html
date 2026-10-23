@@ -57,16 +57,18 @@
           <div id="checkResult"></div>
           <div class="row wrap">
             <button data-export="stl">STL</button>
-            <button data-export="3mf-color" title="Ein Objekt aus mehreren Teilen, jedes mit eigener Farbe und eigenem Extruder – für Mehrfarbdruck (PrusaSlicer, Bambu Studio, OrcaSlicer).">3MF mehrfarbig</button>
+            <button data-export="3mf-bambu" title="Projektformat von Bambu Studio und OrcaSlicer: ein Objekt aus mehreren Teilen, Teile gleicher Farbe bekommen dieselbe Filament-Nummer.">3MF für Bambu Studio / OrcaSlicer</button>
+            <button data-export="3mf-color" title="Format von PrusaSlicer: ein Objekt aus mehreren Teilen mit eigenem Extruder je Farbe.">3MF für PrusaSlicer</button>
             <button data-export="3mf" title="Alle Teile als ein Körper, ohne Farben.">3MF (ein Körper)</button>
             <button data-export="obj">OBJ</button>
           </div>
           <label class="check small" title="Boolesche Vereinigung: Überlappungen und innenliegende Flächen verschwinden, der Slicer bekommt ein einziges geschlossenes Netz. Gilt für STL, OBJ und 3MF (ein Körper).">
             <input type="checkbox" id="unionExport" checked /> Zu einem Körper vereinigen (STL, OBJ, 3MF ein Körper)
           </label>
-          <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. „3MF mehrfarbig" behält Teile und Farben: Jede Farbe bekommt einen eigenen Extruder, den du im Slicer einem Filament zuordnest.</p>
+          <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. Die mehrfarbigen 3MF-Varianten behalten Teile und Farben: Jede Farbe bekommt eine eigene Filament-/Extrudernummer, der du im Slicer das passende Filament zuordnest.</p>
         </section>
       </aside>
+      <div id="resizer" role="separator" aria-orientation="vertical" title="Breite der Seitenleiste ändern (Doppelklick: zurücksetzen)"></div>
 
       <main id="view">
         <div id="toolbar">
@@ -76,7 +78,9 @@
           </span>
           <label class="check small"><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
+          <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen">Gesamtes Modell bewegen</button>
         </div>
+        <div id="tip" hidden></div>
         <div id="gizmoBar" hidden>
           <strong data-g="title"></strong>
           <span class="seg" role="group" aria-label="Gizmo-Modus">

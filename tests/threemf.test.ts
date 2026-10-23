@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { colorSlots, read3MF, write3MF } from '../src/io/threemf';
+import { colorSlots, read3MF, write3MF, write3MFBambu } from '../src/io/threemf';
 import { box, cylinder, transformPositions } from './helpers/meshes';
 import * as THREE from 'three';
 
@@ -231,4 +231,38 @@ describe('read3MF: Bambu-Projekt mit mehreren Druckplatten', () => {
       expect(bbox(parts[2].positions).min[0]).toBeCloseTo(420.6, 3);
     });
   }
+});
+
+describe('write3MFBambu', () => {
+  const parts = [
+    { name: 'Körper', positions: box(20, 20, 10), color: '#ff0000' },
+    { name: 'Kopf & Hut', positions: transformPositions(cylinder(5, 6, 24), new THREE.Matrix4().makeTranslation(0, 0, 10)), color: '#00aa00' },
+    { name: 'Fuß', positions: transformPositions(box(6, 6, 2), new THREE.Matrix4().makeTranslation(0, 0, -2)), color: '#FF0000' },
+  ];
+
+  it('schreibt das Projektformat von Bambu Studio: Kennung, Unterdatei, Filament je Teil', () => {
+    const files = unzipSync(write3MFBambu(parts));
+    const main = strFromU8(files['3D/3dmodel.model']);
+    expect(main).toMatch(/<metadata name="Application">BambuStudio-\d{2}\.\d{2}\.\d{2}\.\d{2}<\/metadata>/);
+    expect(main).toContain('<metadata name="BambuStudio:3mfVersion">1</metadata>');
+    expect(main.match(/<component p:path="\/3D\/Objects\/object_1.model" objectid="\d"/g)).toHaveLength(3);
+    expect(files['3D/_rels/3dmodel.model.rels']).toBeDefined();
+    const cfg = strFromU8(files['Metadata/model_settings.config']);
+    expect([...cfg.matchAll(/key="extruder" value="(\d+)"/g)].map((m) => Number(m[1]))).toEqual([1, 1, 2, 1]);
+    expect(cfg).toContain('value="Kopf &amp; Hut"');
+    expect(cfg).toContain('<plate>');
+  });
+
+  it('wird vom eigenen Leser als drei Teile mit Namen, Lage zueinander und Filament-Gruppen gelesen', () => {
+    const back = read3MF(write3MFBambu(parts));
+    expect(back.map((p) => p.name)).toEqual(['Körper', 'Kopf & Hut', 'Fuß']);
+    expect(new Set(back.map((p) => p.group)).size).toBe(1);
+    // Mittig auf der Platte, Unterseite auf z = 0, Abstände zueinander unverändert
+    const all = new Float32Array([...back[0].positions, ...back[1].positions, ...back[2].positions]);
+    const bb = bbox(all);
+    expect((bb.min[0] + bb.max[0]) / 2).toBeCloseTo(128, 4);
+    expect((bb.min[1] + bb.max[1]) / 2).toBeCloseTo(128, 4);
+    expect(bb.min[2]).toBeCloseTo(0, 4);
+    expect(bbox(back[1].positions).min[2] - bbox(back[0].positions).min[2]).toBeCloseTo(10, 4);
+  });
 });

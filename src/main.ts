@@ -20,7 +20,7 @@ import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag, planMate } from './math/mate';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
-import { write3MF } from './io/threemf';
+import { colorSlots, write3MF, write3MFBambu } from './io/threemf';
 import { unionParts } from './io/union';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
@@ -133,10 +133,14 @@ const FEATURE_OPTS = { maxTris: 4_000_000 };
 let pickMode: 'point' | 'face' = 'point';
 /** Welches Teil wird von welcher Verbindung bewegt (nach dem letzten solveAll). */
 const movedBy = new Map<number, number>();
+/** Von welchem Ausgangsteil aus wurde jedes Teil platziert (Teile mit gleichem Wert hängen zusammen). */
+const seedOf = new Map<number, number>();
 
 // ---------------------------------------------------------------- Szene
 
 const view = document.getElementById('view')!;
+const partsEl = document.getElementById('parts')!;
+const jointsEl = document.getElementById('joints')!;
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 view.prepend(renderer.domElement);
@@ -146,6 +150,8 @@ const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
 camera.position.set(120, -160, 120);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+// Mittlere Maustaste verschiebt die Ansicht (wie in den meisten Slicern), gezoomt wird mit dem Mausrad
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x445066, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -514,6 +520,8 @@ function markersChanged(j: Joint) {
 function solveAll() {
   const placed = new Map<number, THREE.Matrix4>();
   movedBy.clear();
+  seedOf.clear();
+  let currentSeed = -1;
   for (const j of joints) {
     j.result = undefined;
     j.fixedSide = undefined;
@@ -532,6 +540,7 @@ function solveAll() {
     for (const q of groupOf(p)) {
       if (placed.has(q.id)) continue;
       placed.set(q.id, q === p ? M.clone() : delta.clone().multiply(q.layout));
+      seedOf.set(q.id, currentSeed);
       if (jointId !== undefined) movedBy.set(q.id, jointId);
       queue.push(q.id);
     }
@@ -539,6 +548,7 @@ function solveAll() {
 
   for (const seed of seeds) {
     if (placed.has(seed)) continue;
+    currentSeed = seed;
     const queue: number[] = [];
     place(seed, getPart(seed)!.layout.clone(), queue);
     while (queue.length) {
@@ -961,7 +971,7 @@ scene.add(tc.getHelper());
 const gizmoAnchor = new THREE.Object3D();
 gizmoAnchor.matrixAutoUpdate = true;
 scene.add(gizmoAnchor);
-let gizmoTarget: { kind: 'joint' | 'part'; id: number } | null = null;
+let gizmoTarget: { kind: 'joint' | 'part'; id: number; assembly?: boolean } | null = null;
 let gizmoMode: 'translate' | 'rotate' = 'rotate';
 let gizmoFreeOnly = true;
 let gizmoSnapDeg = 0;
@@ -1045,6 +1055,12 @@ function placeGizmo() {
     }
   }
   if (!moving) { closeGizmo(); return; }
+  if (!pivot && gizmoTarget.assembly) {
+    // Drehpunkt in der Mitte des ganzen zusammengesetzten Modells
+    const box = new THREE.Box3();
+    for (const p of assemblyOf(moving)) box.expandByObject(p.mesh);
+    pivot = box.getCenter(new THREE.Vector3());
+  }
   if (!pivot) pivot = new THREE.Box3().setFromObject(moving.mesh).getCenter(new THREE.Vector3());
   const z = (zAxis ?? new THREE.Vector3(0, 0, 1)).normalize();
   let x = xHint ? xHint.clone().addScaledVector(z, -xHint.dot(z)) : new THREE.Vector3(1, 0, 0).addScaledVector(z, -z.x);
@@ -1088,7 +1104,13 @@ function updateGizmoAxes() {
       : 'Verschieben ist durch die Verbindung festgelegt. Für freies Verschieben den Haken bei „Nur freie Richtungen" entfernen.';
 }
 
-function openGizmo(target: { kind: 'joint' | 'part'; id: number }, mode?: 'translate' | 'rotate') {
+/** Alle Teile, die (über Verbindungen und Gruppen) zusammen mit diesem platziert werden. */
+function assemblyOf(p: Part): Part[] {
+  const seed = seedOf.get(p.id);
+  return parts.filter((q) => seedOf.get(q.id) === seed);
+}
+
+function openGizmo(target: { kind: 'joint' | 'part'; id: number; assembly?: boolean }, mode?: 'translate' | 'rotate') {
   gizmoTarget = target;
   if (target.kind === 'joint') {
     const j = joints.find((x) => x.id === target.id);
@@ -1110,7 +1132,9 @@ function renderGizmoBar() {
   const bar = document.getElementById('gizmoBar')!;
   if (!gizmoTarget) return;
   const label =
-    gizmoTarget.kind === 'part'
+    gizmoTarget.assembly
+      ? 'Gesamtes Modell bewegen'
+      : gizmoTarget.kind === 'part'
       ? `„${nameOf(gizmoTarget.id)}" bewegen`
       : `Verbindung ${joints.findIndex((x) => x.id === gizmoTarget!.id) + 1} anpassen`;
   bar.querySelector('[data-g="title"]')!.textContent = label;
@@ -1429,12 +1453,112 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   suppressClick = !!(tc.object && tc.axis);
 });
 
+// ---------------------------------------------------------------- Namen zeigen (Überfahren, Shift+Klick, Liste)
+
+const tip = document.getElementById('tip')!;
+let tipPart: number | null = null;
+let tipTimer = 0;
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tip.hidden = true;
+  tipPart = null;
+  highlightRow(null);
+}
+
+/** Zeigt nach kurzem Verweilen den Namen des Teils unter dem Mauszeiger. */
+function hoverName(e: PointerEvent, part: Part | null) {
+  if (!part) { hideTip(); return; }
+  const rect = view.getBoundingClientRect();
+  const place = () => {
+    const x = Math.min(e.clientX - rect.left + 16, rect.width - tip.offsetWidth - 8);
+    const y = Math.min(e.clientY - rect.top + 18, rect.height - tip.offsetHeight - 8);
+    tip.style.left = `${Math.max(8, x)}px`;
+    tip.style.top = `${Math.max(8, y)}px`;
+  };
+  if (tipPart === part.id) {
+    if (!tip.hidden) place();
+    return;
+  }
+  hideTip();
+  tipPart = part.id;
+  tipTimer = window.setTimeout(() => {
+    const size = groupOf(part).length;
+    tip.innerHTML = `<span class="dot" style="background:#${part.color.getHexString()}"></span><span>${esc(part.name)}${size > 1 ? ` <small>· Gruppe aus ${size} Teilen</small>` : ''}</span>`;
+    tip.hidden = false;
+    place();
+    highlightRow(part.id);
+  }, 350);
+}
+
+function highlightRow(id: number | null) {
+  partsEl.querySelectorAll('li.hl').forEach((li) => li.classList.remove('hl'));
+  if (id !== null) partsEl.querySelector(`li[data-part="${id}"]`)?.classList.add('hl');
+}
+
+/** Teil kurz im 3D-Fenster aufleuchten lassen. */
+function flashPart(p: Part) {
+  const mat = p.mesh.material as THREE.MeshStandardMaterial;
+  mat.emissive.copy(p.color).multiplyScalar(0.6);
+  setTimeout(() => mat.emissive.setRGB(0, 0, 0), 900);
+}
+
+/** Shift+Klick im 3D-Fenster: zugehörige Zeile in der Teileliste zeigen. */
+function revealPart(p: Part) {
+  const li = partsEl.querySelector<HTMLElement>(`li[data-part="${p.id}"]`);
+  if (!li) return;
+  li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  li.classList.remove('flash');
+  void li.offsetWidth;
+  li.classList.add('flash');
+  flashPart(p);
+}
+
+// Zeile in der Teileliste überfahren: Teil im 3D-Fenster hervorheben
+partsEl.addEventListener('pointerover', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-part]');
+  const p = li && getPart(Number(li.dataset.part));
+  for (const q of parts) (q.mesh.material as THREE.MeshStandardMaterial).emissive.setRGB(0, 0, 0);
+  if (p) (p.mesh.material as THREE.MeshStandardMaterial).emissive.copy(p.color).multiplyScalar(0.35);
+});
+partsEl.addEventListener('pointerleave', () => {
+  for (const q of parts) (q.mesh.material as THREE.MeshStandardMaterial).emissive.setRGB(0, 0, 0);
+});
+
+/** Doppelklick auf einen Namen: direkt in der Liste umbenennen. */
+partsEl.addEventListener('dblclick', (e) => {
+  const span = (e.target as HTMLElement).closest<HTMLElement>('[data-act="name"]');
+  const p = span && getPart(Number(span.dataset.id));
+  if (!span || !p) return;
+  const input = document.createElement('input');
+  input.className = 'rename';
+  input.value = p.name;
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (keep: boolean) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (keep && name) p.name = name;
+    renderAll();
+  };
+  input.addEventListener('keydown', (k) => {
+    if (k.key === 'Enter') finish(true);
+    else if (k.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+});
+
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (e.buttons || tc.dragging) {
     cursor.visible = false;
+    hideTip();
     return;
   }
   const h = pick(e);
+  hoverName(e, h?.part ?? null);
   const j = activeJoint();
   const usable = !!h && usableFor(j, h.part) && !(tc.object && tc.axis);
   cursor.visible = usable && pickMode === 'point';
@@ -1449,6 +1573,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 renderer.domElement.addEventListener('pointerleave', () => {
   cursor.visible = false;
   updateHover(null);
+  hideTip();
 });
 
 renderer.domElement.addEventListener('pointerup', (e) => {
@@ -1460,6 +1585,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const h = pick(e);
   if (!h) return;
+  if (e.shiftKey) {
+    revealPart(h.part);
+    return;
+  }
   let j = activeJoint();
   if (!j) {
     if (parts.length < 2) { toast('Lade mindestens zwei Teile.'); return; }
@@ -1551,16 +1680,14 @@ window.addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------- Seitenleiste
 
-const partsEl = document.getElementById('parts')!;
-const jointsEl = document.getElementById('joints')!;
 
 function renderParts() {
   partsEl.innerHTML = parts
     .map(
-      (p) => `<li>
+      (p) => `<li data-part="${p.id}">
         <input type="color" class="swatch" data-act="color" data-id="${p.id}" value="#${p.color.getHexString()}" title="Farbe (wird beim mehrfarbigen 3MF-Export übernommen)" />
         <input type="checkbox" data-act="vis" data-id="${p.id}" ${p.visible ? 'checked' : ''} title="Sichtbar" />
-        <span class="name" title="${esc(p.name)}">${esc(p.name)}</span>
+        <span class="name" data-act="name" data-id="${p.id}" title="${esc(p.name)} – Klick: im Modell zeigen, Doppelklick: umbenennen">${esc(p.name)}</span>
         <label class="base" title="Das Basisteil bleibt liegen, alle anderen werden daran angefügt.">
           <input type="radio" name="base" data-act="base" data-id="${p.id}" ${p.id === baseId ? 'checked' : ''}/> Basis
         </label>
@@ -1736,6 +1863,11 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
     case 'rm-part':
       removePart(id);
       break;
+    case 'name': {
+      const p = getPart(id);
+      if (p) flashPart(p);
+      break;
+    }
     case 'ungroup': {
       const p = getPart(id);
       if (!p) break;
@@ -1909,6 +2041,44 @@ document.getElementById('addJoint')!.addEventListener('click', () => {
 });
 
 document.getElementById('fit')!.addEventListener('click', fitView);
+document.getElementById('moveAll')!.addEventListener('click', () => {
+  const base = getPart(baseId);
+  if (!base) { toast('Lade zuerst ein Modell.'); return; }
+  openGizmo({ kind: 'part', id: base.id, assembly: true }, 'translate');
+  renderAll();
+});
+
+// Seitenleiste in der Breite verstellen; die Breite bleibt im Browser gespeichert
+{
+  const panel = document.getElementById('panel')!;
+  const resizer = document.getElementById('resizer')!;
+  const KEY = 'partjoin.panelWidth';
+  const apply = (w: number) => document.documentElement.style.setProperty('--panel-w', `${Math.round(w)}px`);
+  try {
+    const saved = Number(localStorage.getItem(KEY));
+    if (saved >= 240) apply(Math.min(saved, window.innerWidth * 0.7));
+  } catch {
+    // ohne gespeicherte Breite
+  }
+  resizer.addEventListener('pointerdown', (e) => {
+    resizer.setPointerCapture(e.pointerId);
+    resizer.classList.add('drag');
+    const left = panel.getBoundingClientRect().left;
+    const move = (m: PointerEvent) => apply(Math.max(240, Math.min(window.innerWidth * 0.7, m.clientX - left)));
+    const up = () => {
+      resizer.classList.remove('drag');
+      resizer.removeEventListener('pointermove', move);
+      resizer.removeEventListener('pointerup', up);
+      try { localStorage.setItem(KEY, String(panel.getBoundingClientRect().width)); } catch { /* nicht speicherbar */ }
+    };
+    resizer.addEventListener('pointermove', move);
+    resizer.addEventListener('pointerup', up);
+  });
+  resizer.addEventListener('dblclick', () => {
+    document.documentElement.style.removeProperty('--panel-w');
+    try { localStorage.removeItem(KEY); } catch { /* nicht speicherbar */ }
+  });
+}
 document.getElementById('connectAll')!.addEventListener('click', () => {
   if (parts.length < 2) { toast('Lade zuerst mindestens zwei Teile.'); return; }
   void connectAll();
@@ -2011,8 +2181,11 @@ async function exportAs(kind: string) {
     positions: p.geom.clone().applyMatrix4(p.mesh.matrixWorld).getAttribute('position').array as Float32Array,
   }));
   try {
-    if (kind === '3mf-color') {
-      await download(new Blob([write3MF(world, 'multicolor') as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
+    if (kind === '3mf-color' || kind === '3mf-bambu') {
+      const data = kind === '3mf-bambu' ? write3MFBambu(world) : write3MF(world, 'multicolor');
+      await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
+      const slots = colorSlots(world);
+      toast(`Gespeichert. Im Slicer zuordnen: ${slots.map((c, i) => `${kind === '3mf-bambu' ? 'Filament' : 'Extruder'} ${i + 1} = ${c.toUpperCase()}`).join(' · ')}`, 9000);
       return;
     }
     let body: { name: string; positions: Float32Array }[] = world;
