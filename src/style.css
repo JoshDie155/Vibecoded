@@ -143,7 +143,10 @@ button.icon:hover { color: var(--err); }
 .parts button.icon.move { color: var(--accent); }
 .parts button.icon.move:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .parts button.icon.rm:hover { color: var(--err); }
-.partsbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 6px -4px; }
+.partsbar { display: flex; align-items: center; gap: 8px; margin: 10px 6px -4px 0; }
+.partsbar #partsCount { margin-left: auto; }
+.partsbar button.fold { width: 26px; height: 26px; padding: 0; font-size: 15px; border-radius: 6px; color: var(--text); }
+.partsbar button.fold:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .partsbar .help { margin: 0; font-size: 12px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 

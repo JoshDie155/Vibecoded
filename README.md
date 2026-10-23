@@ -28,10 +28,15 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 3. **Verbinden** – das bewegliche Teil wird exakt an das feste angesetzt. Was die Auswahl offen lässt
    (z. B. die Drehung um einen Zapfen), sucht *Automatisch einpassen* über Flächenkontakt ohne
    Durchdringung: Teile mit Abflachung, Nut oder Lochbild drehen sich so von selbst richtig, und ein
-   Zapfen wird bis zum Anschlag eingeschoben.
+   Zapfen wird bis zum Anschlag eingeschoben. Zwei etwa gleich große ebene Flächen (Schnittflächen,
+   Zapfen-Stirn auf Aussparung) kommen mittig aufeinander; gesucht wird dann nur noch die Drehung.
+   Passt eine andere Drehung genauso gut (z. B. 180° bei rechteckigen Zapfen), wechselt
+   „Um 180° drehen" mit einem Klick.
+   Kommt zu einer fertigen Verbindung eine weitere Fläche oder ein Punkt hinzu, bleibt das Teil an
+   seiner Stelle, bis auch das Gegenstück gewählt ist.
    *Von Hand anpassen* blendet ein Gizmo ein (volle Drehringe, Pfeile zum Verschieben). Standardmäßig
    lassen sich nur die Richtungen greifen, die noch frei sind (z. B. nur der Drehring um die
-   Zapfenachse) – gesperrte Achsen bleiben grau sichtbar. Winkelraster 1°/5°/15°/45°/90°.
+   Zapfenachse) – gesperrte Achsen erscheinen als graue gestrichelte Linie. Winkelraster 1°/5°/15°/45°/90°.
    *Feinausrichtung* zieht die Kontaktflächen genau aufeinander, *Einsinken* schiebt die Teile minimal
    ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
@@ -58,7 +63,8 @@ rechte verschiebt sie, Mausrad zoomt.
 Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick zeigt es in der Teileliste,
 Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
 am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).
-„Alle Teile" über der Teileliste blendet alle Teile aus oder wieder ein.
+„Alle Teile" über der Teileliste blendet alle Teile aus oder wieder ein, der Pfeil davor klappt die
+Liste ein. Die Auswahllisten der Verbindungen zeigen nur sichtbare Teile.
 Jedes Teil lässt sich über das Pfeilkreuz in der Teileliste frei von Hand bewegen, „Gesamtes Modell bewegen" verschiebt
 oder dreht das ganze zusammengesetzte Modell.
 
