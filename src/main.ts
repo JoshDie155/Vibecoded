@@ -13,6 +13,7 @@ import { settleContact } from './math/settle';
 import { alignOutlines } from './math/outline';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
+import { splitLoosePieces } from './math/components';
 import { candidatePairs, placePlanePair, shapeSimilarity } from './math/suggest';
 import { contactScore } from './math/scan';
 import type { FreeMotion } from './math/motion';
@@ -397,13 +398,35 @@ async function loadFiles(files: FileList | File[]) {
     try {
       const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase();
       const mtl = mtls.get(stem) ?? (mtls.size === 1 ? [...mtls.values()][0] : undefined);
-      const loaded: LoadedPart[] = await loadModel(file, { split, mtl });
+      let loaded: LoadedPart[] = await loadModel(file, { split, mtl });
+      // Stecken mehrere lose Teile in einem Netz (z. B. eine ganze Druckplatte), diese trennen
+      let separated = false;
+      if (split) {
+        const members = new Map<string, number>();
+        for (const l of loaded) if (l.group) members.set(l.group, (members.get(l.group) ?? 0) + 1);
+        loaded = loaded.flatMap((l) => {
+          const pieces = splitLoosePieces(l.geom.getAttribute('position').array as Float32Array);
+          if (pieces.length < 2) return [l];
+          separated = true;
+          l.geom.dispose();
+          // Gehörte das Netz zu einem Objekt aus mehreren Teilen, bleiben die Stücke in dessen Gruppe
+          const group = l.group && members.get(l.group)! > 1 ? l.group : undefined;
+          return pieces.map((p, k) => {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+            g.computeVertexNormals();
+            g.computeBoundingBox();
+            g.computeBoundingSphere();
+            return { name: `${l.name} ${k + 1}`, geom: g, color: l.color, group };
+          });
+        });
+      }
       // Teile einer Datei gemeinsam verschieben, damit ihre Lage zueinander erhalten bleibt
       const bb = new THREE.Box3();
       for (const l of loaded) bb.union(l.geom.boundingBox!);
       const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
       for (const l of loaded) addPart(l.name, l.geom, { color: l.color, group: l.group, layout });
-      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen.`);
+      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
     } catch (e) {
       toast(`${file.name}: ${(e as Error).message}`);
     }

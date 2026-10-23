@@ -38,7 +38,7 @@ export interface LoadOptions {
 }
 
 /** Mehr Netze als hier werden nicht mehr einzeln geladen (z. B. ein GLB aus tausenden Einzelteilen). */
-const MAX_SPLIT = 200;
+const MAX_SPLIT = 1000;
 
 const text = (buf: ArrayBuffer) => new TextDecoder().decode(buf);
 

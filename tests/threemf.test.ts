@@ -169,3 +169,66 @@ describe('read3MF: Dateien aus Slicern', () => {
     expect(() => read3MF(zipSync({ 'foo.txt': strToU8('x') }))).toThrow('kein 3D-Modell');
   });
 });
+
+describe('read3MF: Bambu-Projekt mit mehreren Druckplatten', () => {
+  /** Unterdatei wie von Bambu Studio: ein Objekt je Datei, bemalte Dreiecke (paint_color). */
+  const subModel = (id: number, p: Float32Array) => `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">
+ <metadata name="BambuStudio:3mfVersion">1</metadata>
+ <resources>
+  <object id="${id}" p:UUID="0000000${id}-81cb-4c03-9d28-80fed5dfa1dc" type="model">
+   ${meshXml(p, ' paint_color="4"')}
+  </object>
+ </resources>
+ <build/>
+</model>`;
+
+  function project(collidingIds: boolean) {
+    // Vier Objekte auf zwei Druckplatten (Platte 2 liegt in Bambu Studio rechts daneben)
+    const shapes = [box(10, 10, 10), cylinder(3, 20, 24), box(30, 5, 2), cylinder(8, 4, 32)];
+    const names = ['Kopf.stl', 'Arm links.stl', 'Flügel.stl', 'Sockel.stl'];
+    const pos = [[128, 128, 5], [150, 100, 0], [435.6, 128, 1], [460, 160, 2]];
+    const files: Record<string, Uint8Array> = { '_rels/.rels': strToU8(RELS) };
+    let objects = '';
+    let items = '';
+    let settings = '';
+    let rels = '';
+    shapes.forEach((p, i) => {
+      const sub = collidingIds ? 1 : i * 2 + 1;
+      const outer = i * 2 + 2;
+      files[`3D/Objects/object_${i + 1}.model`] = strToU8(subModel(sub, p));
+      rels += `<Relationship Target="/3D/Objects/object_${i + 1}.model" Id="rel-${i + 1}" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>`;
+      objects += `<object id="${outer}" p:UUID="0000000${i}-61cb-4c03-9d28-80fed5dfa1dc" type="model"><components><component p:path="/3D/Objects/object_${i + 1}.model" objectid="${sub}" p:UUID="0001000${i}-b206-40ff-9872-83e8017abed1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/></components></object>`;
+      items += `<item objectid="${outer}" p:UUID="0000000${i}-b1ec-4553-aec9-835e5b724bb4" transform="1 0 0 0 1 0 0 0 1 ${pos[i].join(' ')}" printable="1"/>`;
+      settings += `<object id="${outer}"><metadata key="name" value="${names[i]}"/><metadata key="extruder" value="${(i % 3) + 1}"/>
+<part id="${sub}" subtype="normal_part"><metadata key="name" value="${names[i]}"/><metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/><mesh_stat edges_fixed="0" degenerate_facets="0" facets_reversed="0" backwards_edges="0"/></part></object>`;
+    });
+    const plates = `<plate><metadata key="plater_id" value="1"/><model_instance><metadata key="object_id" value="2"/><metadata key="instance_id" value="0"/></model_instance><model_instance><metadata key="object_id" value="4"/><metadata key="instance_id" value="0"/></model_instance></plate>
+<plate><metadata key="plater_id" value="2"/><model_instance><metadata key="object_id" value="6"/><metadata key="instance_id" value="0"/></model_instance><model_instance><metadata key="object_id" value="8"/><metadata key="instance_id" value="0"/></model_instance></plate>`;
+    files['3D/3dmodel.model'] = strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">
+ <metadata name="Application">BambuStudio-02.02.00.85</metadata>
+ <metadata name="BambuStudio:3mfVersion">1</metadata>
+ <resources>${objects}</resources>
+ <build p:UUID="2c7c17d8-22b5-4d84-8835-1976022ea369">${items}</build>
+</model>`);
+    files['3D/_rels/3dmodel.model.rels'] = strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`);
+    files['Metadata/model_settings.config'] = strToU8(`<?xml version="1.0" encoding="UTF-8"?><config>${settings}${plates}</config>`);
+    files['Metadata/project_settings.config'] = strToU8(JSON.stringify({ filament_colour: ['#F2F2F2', '#1F6FEB', '#E5484D'] }));
+    files['Metadata/plate_1.json'] = strToU8('{}');
+    return { data: zipSync(files), shapes };
+  }
+
+  for (const colliding of [false, true]) {
+    it(`erkennt jedes Objekt auf jeder Platte als eigenes Teil${colliding ? ' (gleiche Objekt-IDs in den Unterdateien)' : ''}`, () => {
+      const { data, shapes } = project(colliding);
+      const parts = read3MF(data);
+      expect(parts.map((p) => p.name)).toEqual(['Kopf', 'Arm links', 'Flügel', 'Sockel']);
+      expect(parts.map((p) => p.color)).toEqual(['#f2f2f2', '#1f6feb', '#e5484d', '#f2f2f2']);
+      expect(new Set(parts.map((p) => p.group)).size).toBe(4);
+      parts.forEach((p, i) => expect(p.positions.length).toBe(shapes[i].length));
+      // Lage auf der zweiten Platte bleibt erhalten
+      expect(bbox(parts[2].positions).min[0]).toBeCloseTo(420.6, 3);
+    });
+  }
+});

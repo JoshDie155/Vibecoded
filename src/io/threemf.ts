@@ -299,7 +299,9 @@ export function read3MF(data: Uint8Array): ImportedPart[] {
 
   const parts: ImportedPart[] = [];
   const names = new Map<string, number>();
-  const uniqueName = (n: string) => {
+  const uniqueName = (raw: string) => {
+    // Slicer übernehmen oft den Dateinamen samt Endung („Kopf.stl")
+    const n = raw.replace(/\.(stl|obj|3mf|amf|ply|step|stp|glb|gltf|fbx)$/i, '') || raw;
     const k = names.get(n) ?? 0;
     names.set(n, k + 1);
     return k ? `${n} (${k + 1})` : n;
