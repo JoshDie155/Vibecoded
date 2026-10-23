@@ -68,7 +68,8 @@ Mehr als zwei Teile: einfach weitere Verbindungen anlegen. Alles wird ausgehend 
 zusammengesetzt (Basis in der Teileliste wählbar).
 
 Bedienung: Linksklick wählt aus (nochmal klicken hebt eine Fläche wieder auf) · Rechtsklick auf eine
-Markierung oder Fläche löscht sie · Strg+Z nimmt die letzte Auswahl zurück · P/F wechselt Punkte/Flächen ·
+Markierung oder Fläche löscht sie · Strg/⌘+Z nimmt die letzte Aktion zurück (Auswahl, Verbinden, Bewegen,
+Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder her · P/F wechselt Punkte/Flächen ·
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.

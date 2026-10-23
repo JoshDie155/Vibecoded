@@ -142,7 +142,6 @@ let baseId: number | null = null;
 let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
-const history: { joint: number; side: Side; kind: 'point' | 'face' }[] = [];
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
 let hiddenFolded = false;
 /** Teileliste eingeklappt (bleibt im Browser gespeichert). */
@@ -283,6 +282,148 @@ renderer.setAnimationLoop(() => {
 
 /** Vier Pfeile: Teil frei bewegen */
 const MOVE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 1.5 15.5 5H13v6h6V8.5l3.5 3.5-3.5 3.5V13h-6v6h2.5L12 22.5 8.5 19H11v-6H5v2.5L1.5 12 5 8.5V11h6V5H8.5z"/></svg>';
+
+// ---------------------------------------------------------------- Rückgängig / Wiederholen
+
+/**
+ * Zustand zum Zurückholen: Teile (Lage, Sichtbarkeit, Farbe, Name, Gruppe) und Verbindungen samt
+ * Auswahl. Geometrie und Zwischenergebnisse werden geteilt, nicht kopiert – sie werden nie verändert,
+ * nur ersetzt.
+ */
+interface Snapshot {
+  parts: { part: Part; layout: THREE.Matrix4; visible: boolean; color: string; name: string; group?: string }[];
+  joints: Joint[];
+  baseId: number | null;
+  activeJointId: number | null;
+  sig: string;
+}
+const UNDO_LIMIT = 60;
+const undoStack: Snapshot[] = [];
+const redoStack: Snapshot[] = [];
+/** Zustand vor der laufenden Aktion; wird erst bei der nächsten Aktion (oder beim Rückgängig) übernommen, wenn sich etwas geändert hat. */
+let pendingUndo: Snapshot | null = null;
+/** Entfernte Teile, die die Historie noch zurückholen kann. */
+const removedParts = new Set<Part>();
+
+const jointCopy = (j: Joint): Joint => ({ ...j, ma: [...j.ma], mb: [...j.mb], fa: [...j.fa], fb: [...j.fb] });
+
+/** Kurzer Fingerabdruck des Zustands: hat eine Aktion wirklich etwas geändert? */
+function stateSig(): string {
+  const r = (x: number) => Math.round(x * 1e4);
+  const fs = (f: PickedFeature) => [f.kind, f.on ?? 0, f.tris[0], f.tris.length, f.pieces?.length ?? 0];
+  return JSON.stringify([
+    baseId,
+    parts.map((p) => [p.id, p.name, p.visible, p.color.getHexString(), p.group ?? '', p.layout.elements.map(r)]),
+    joints.map((j) => [
+      j.id, j.a, j.b, j.applied, j.alt, j.seat, j.ordered, j.normals, j.overlap, j.spin, j.turnIdx ?? 0, j.proposalIdx ?? 0,
+      j.adjust ? [...j.adjust.R, ...j.adjust.t].map(r) : 0,
+      j.ma.map((m) => m.p.map(r)), j.mb.map((m) => m.p.map(r)), j.fa.map(fs), j.fb.map(fs),
+    ]),
+  ]);
+}
+
+function snapshot(): Snapshot {
+  return {
+    parts: parts.map((p) => ({ part: p, layout: p.layout.clone(), visible: p.visible, color: `#${p.color.getHexString()}`, name: p.name, group: p.group })),
+    joints: joints.map(jointCopy),
+    baseId,
+    activeJointId,
+    sig: stateSig(),
+  };
+}
+
+function restoreSnapshot(snap: Snapshot) {
+  closeGizmo();
+  const keep = new Set(snap.parts.map((e) => e.part));
+  for (const p of parts) if (!keep.has(p)) { scene.remove(p.mesh); removedParts.add(p); }
+  parts.length = 0;
+  for (const e of snap.parts) {
+    const p = e.part;
+    if (!p.mesh.parent) scene.add(p.mesh);
+    removedParts.delete(p);
+    p.layout.copy(e.layout);
+    p.visible = e.visible;
+    p.mesh.visible = e.visible;
+    p.color.set(e.color);
+    (p.mesh.material as THREE.MeshStandardMaterial).color.copy(p.color);
+    p.name = e.name;
+    p.group = e.group;
+    parts.push(p);
+  }
+  // Verbindungsobjekte möglichst weiterverwenden (an ihnen hängen zwischengespeicherte Ergebnisse)
+  const next = snap.joints.map((sj) => {
+    const copy = jointCopy(sj);
+    const existing = joints.find((x) => x.id === sj.id);
+    if (!existing) return copy;
+    for (const k of Object.keys(existing) as (keyof Joint)[]) if (!(k in copy)) delete existing[k];
+    return Object.assign(existing, copy);
+  });
+  joints.length = 0;
+  joints.push(...next);
+  baseId = snap.baseId;
+  activeJointId = snap.activeJointId;
+  mergePick.clear();
+  solveAll();
+  renderAll();
+}
+
+/** Teile, die weder angezeigt noch von der Historie gebraucht werden, endgültig freigeben. */
+function releaseUnused() {
+  const used = new Set<Part>(parts);
+  for (const s of [...undoStack, ...redoStack, ...(pendingUndo ? [pendingUndo] : [])]) for (const e of s.parts) used.add(e.part);
+  for (const p of removedParts) {
+    if (used.has(p)) continue;
+    p.geom.disposeBoundsTree();
+    p.geom.dispose();
+    (p.mesh.material as THREE.Material).dispose();
+    removedParts.delete(p);
+  }
+}
+
+/** Vor jeder Bedienung aufrufen: merkt sich den Zustand, damit sie sich zurücknehmen lässt. */
+function beginAction() {
+  commitAction();
+  pendingUndo = snapshot();
+}
+
+function commitAction() {
+  if (pendingUndo && pendingUndo.sig !== stateSig()) {
+    undoStack.push(pendingUndo);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+    pendingUndo = null;
+    releaseUnused();
+  }
+  pendingUndo = null;
+}
+
+function undo() {
+  commitAction();
+  const s = undoStack.pop();
+  if (!s) { toast('Nichts mehr rückgängig zu machen.', 1800); return; }
+  redoStack.push(snapshot());
+  restoreSnapshot(s);
+  toast('Rückgängig gemacht · Strg/⌘+Umschalt+Z stellt es wieder her', 2200);
+}
+
+function redo() {
+  commitAction();
+  const s = redoStack.pop();
+  if (!s) { toast('Nichts zu wiederholen.', 1800); return; }
+  undoStack.push(snapshot());
+  restoreSnapshot(s);
+  toast('Wiederholt', 1500);
+}
+
+// Jede Bedienung beginnt mit Maus oder Tastatur im Fenster, in der Seitenleiste oder mit dem Ablegen von Dateien.
+// Die Erfassung läuft vor allen anderen Handlern (auch vor dem Malen und dem Strg+Ziehen).
+const isUndoKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && ['z', 'y'].includes(e.key.toLowerCase());
+for (const id of ['view', 'panel']) {
+  const el = document.getElementById(id)!;
+  el.addEventListener('pointerdown', () => beginAction(), { capture: true });
+  el.addEventListener('keydown', (e) => { if (!isUndoKey(e)) beginAction(); }, { capture: true });
+}
+window.addEventListener('drop', () => beginAction(), { capture: true });
 
 // ---------------------------------------------------------------- Hilfsfunktionen
 
@@ -500,8 +641,8 @@ function removePart(id: number) {
   if (!p) return;
   if (gizmoTarget && (gizmoTarget.kind === 'part' ? gizmoTarget.id === id : true)) closeGizmo();
   scene.remove(p.mesh);
-  p.geom.disposeBoundsTree();
-  p.geom.dispose();
+  // Nicht freigeben: „Rückgängig" kann das Teil zurückholen (freigegeben wird beim Aufräumen der Historie)
+  removedParts.add(p);
   parts.splice(parts.indexOf(p), 1);
   for (const j of joints) {
     if (j.a === id) { j.a = null; j.ma = []; j.fa = []; j.applied = false; markersChanged(j); }
@@ -1837,7 +1978,6 @@ const endPainting = (e: PointerEvent) => {
   const f: PickedFeature = featureFromTris(topologyOf(part), [...tris]);
   if (on !== undefined) f.on = on;
   (side === 'a' ? j.fa : j.fb).push(f);
-  history.push({ joint: j.id, side, kind: 'face' });
   markersChanged(j);
   solveAll();
   renderAll();
@@ -2016,7 +2156,6 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
   else {
     (side === 'a' ? j.ma : j.mb).push(h.local);
-    history.push({ joint: j.id, side, kind: 'point' });
     markersChanged(j);
     solveAll();
     renderAll();
@@ -2040,7 +2179,6 @@ function toggleFace(j: Joint, side: Side, part: Part, tri: number, on?: number, 
       if (add) toast('Hinzufügen geht nur zu einer ebenen oder Freiformfläche – die Fläche wurde einzeln gewählt.');
       list.push(f);
     }
-    history.push({ joint: j.id, side, kind: 'face' });
   }
   markersChanged(j);
   if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
@@ -2072,7 +2210,6 @@ function toggleEdge(j: Joint, side: Side, part: Part, edge: EdgeFeature, on?: nu
     const f: PickedFeature = edge;
     if (on !== undefined) f.on = on;
     list.push(f);
-    history.push({ joint: j.id, side, kind: 'face' });
   }
   markersChanged(j);
   if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
@@ -2109,18 +2246,23 @@ function setPickMode(mode: PickMode) {
   renderHint();
 }
 
+/** Textfeld mit eigener Rückgängig-Funktion des Browsers? (Kästchen, Regler und Listen gehören nicht dazu.) */
+function editsText(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable || el instanceof HTMLTextAreaElement) return true;
+  return el instanceof HTMLInputElement && ['text', 'number', 'search', 'email', 'url', 'password', 'tel'].includes(el.type);
+}
+
 window.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-    const last = history.pop();
-    const j = last && joints.find((x) => x.id === last.joint);
-    if (!j) return;
+  // In Textfeldern gelten die Tasten dem Feld (auch dessen eigenes Rückgängig)
+  if (editsText(e.target)) return;
+  // Kästchen, Listen usw.: nur Strg+Z/Y übernehmen, Buchstaben-Kürzel nicht
+  if ((e.target as HTMLElement).closest('input, select, textarea') && !isUndoKey(e)) return;
+  // Strg/⌘+Z: letzte Aktion zurücknehmen, Strg/⌘+Umschalt+Z oder Strg+Y: wiederholen
+  if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
     e.preventDefault();
-    if (last!.kind === 'face') (last!.side === 'a' ? j.fa : j.fb).pop();
-    else (last!.side === 'a' ? j.ma : j.mb).pop();
-    markersChanged(j);
-    solveAll();
-    renderAll();
+    if (e.key.toLowerCase() === 'y' || e.shiftKey) redo();
+    else undo();
     return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -2448,7 +2590,6 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
         const merged = mergeOf(j, side, idx.flatMap((i) => list[i].pieces ?? [list[i]]), (id) => getPart(id)!.mesh.matrixWorld);
         for (const i of [...idx].reverse()) list.splice(i, 1);
         list.splice(idx[0], 0, merged);
-        history.push({ joint: j.id, side, kind: 'face' });
       } catch (err) {
         toast(`Zusammenfassen nicht möglich: ${(err as Error).message}`);
       }
@@ -2740,7 +2881,6 @@ function loadDemo(items: { name: string; geom: THREE.BufferGeometry }[], hint: s
   for (const p of [...parts]) removePart(p.id);
   joints.length = 0;
   activeJointId = null;
-  history.length = 0;
   const keep = document.getElementById('keepPos') as HTMLInputElement;
   const wasChecked = keep.checked;
   keep.checked = false;
@@ -2830,6 +2970,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
     checkCount: () => checkGroup.children.length,
     gizmoLocked: () => [...gizmoLocked],
     hoverLineVisible: () => hoverLine.visible,
+    undoInfo: () => ({ undo: undoStack.map((u) => u.parts.map((e) => e.visible)), redo: redoStack.length, pending: pendingUndo?.parts.map((e) => e.visible) ?? null }),
     proposePair: (a: number, b: number) => proposePair(getPart(a)!, getPart(b)!).map((s) => ({ score: s.score, fa: s.fa.kind + ':' + Math.round((s.fa as { area?: number }).area ?? 0), fb: s.fb.kind + ':' + Math.round((s.fb as { area?: number }).area ?? 0) })),
     /** Fläche wie per Klick auswählen (für automatisierte Tests). */
     selectFace: (partId: number, tri: number) => {

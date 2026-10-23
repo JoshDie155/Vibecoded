@@ -3,7 +3,7 @@ import { MeshBVH } from 'three-mesh-bvh';
 import { describe, expect, it } from 'vitest';
 import { IDENTITY, type Vec3, apply, compose, rotationAbout } from '../src/math/align';
 import { type Feature, type PlaneFeature, buildTopology, detectFeature } from '../src/math/features';
-import { fitFeatures, similarPlanes } from '../src/math/fit';
+import { bestPairing, fitFeatures, similarPlanes } from '../src/math/fit';
 import { sampleSurface } from '../src/math/icp';
 import { box, concat, geometryFrom, toPositions, transformPositions } from './helpers/meshes';
 
@@ -104,5 +104,49 @@ describe('fitFeatures', () => {
     const a = apply(fit.rel, centerOf(s.sF));
     const b = apply(turned, centerOf(s.sF));
     expect(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])).toBeLessThan(1e-6);
+  });
+
+  it('ordnet Flächen richtig zu, auch wenn sie auf beiden Teilen in anderer Reihenfolge gewählt wurden', () => {
+    // Stufe: Sockel 20 × 10 × 10 mit Wand rechts; der Klotz sitzt auf dem Sockel und liegt an der Wand an
+    const step = concat(box(20, 10, 10), transformPositions(box(4, 10, 20), new THREE.Matrix4().makeTranslation(12, 0, 0)));
+    const moving = box(20, 10, 6);
+    const M = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0.2, 0.9, -0.3).normalize(), 1.7).setPosition(-40, 30, 12);
+    const movingPos = transformPositions(moving, M);
+    const w = (p: Vec3) => new THREE.Vector3(...p).applyMatrix4(M).toArray() as Vec3;
+    const fTopo = buildTopology(step);
+    const mTopo = buildTopology(movingPos);
+    const top = detectFeature(fTopo, triWhere(step, (c) => Math.abs(c[2] - 10) < 1e-6 && c[0] < 9.9));
+    const wall = detectFeature(fTopo, triWhere(step, (c) => Math.abs(c[0] - 10) < 1e-6 && c[2] > 10));
+    const bottom = detectFeature(mTopo, triWhere(moving, (c) => Math.abs(c[2]) < 1e-6));
+    const right = detectFeature(mTopo, triWhere(moving, (c) => Math.abs(c[0] - 10) < 1e-6));
+    // Klickreihenfolge vertauscht: bewegliches Teil zuerst die rechte Seite, festes Teil zuerst die Oberseite
+    const paired = bestPairing([right, bottom], [top, wall], 30);
+    expect(paired.changed).toBe(true);
+    expect(paired.srcF[0]).toBe(bottom);
+    const fit = fitFeatures({
+      srcF: [right, bottom], dstF: [top, wall], srcM: [], dstM: [], names: { src: 'B', dst: 'A' },
+      alt: 0, seat: true, ordered: false, normals: 'auto', overlap: 0, scale: 30,
+      samples: sampleSurface(geometryFrom(movingPos), 2000), target: { bvh: new MeshBVH(geometryFrom(step)), positions: step, matrix: IDENTITY },
+    });
+    expect(fit.error).toBeUndefined();
+    expect(fit.info).toContain('zugeordnet');
+    // Ecke (10, ·, 0) des Klotzes: an der Wand (x = 10) auf dem Sockel (z = 10)
+    const c = apply(fit.rel, w([10, 5, 0]));
+    expect(c[0]).toBeCloseTo(10, 3);
+    expect(c[2]).toBeCloseTo(10, 3);
+    const top2 = apply(fit.rel, w([0, 0, 6]));
+    expect(top2[2]).toBeCloseTo(16, 3);
+  });
+
+  it('richtige Reihenfolge bleibt unverändert', () => {
+    const step = concat(box(20, 10, 10), transformPositions(box(4, 10, 20), new THREE.Matrix4().makeTranslation(12, 0, 0)));
+    const moving = box(20, 10, 6);
+    const fTopo = buildTopology(step);
+    const mTopo = buildTopology(moving);
+    const top = detectFeature(fTopo, triWhere(step, (c) => Math.abs(c[2] - 10) < 1e-6 && c[0] < 9.9));
+    const wall = detectFeature(fTopo, triWhere(step, (c) => Math.abs(c[0] - 10) < 1e-6 && c[2] > 10));
+    const bottom = detectFeature(mTopo, triWhere(moving, (c) => Math.abs(c[2]) < 1e-6));
+    const right = detectFeature(mTopo, triWhere(moving, (c) => Math.abs(c[0] - 10) < 1e-6));
+    expect(bestPairing([bottom, right], [top, wall], 30).changed).toBe(false);
   });
 });
