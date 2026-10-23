@@ -20,7 +20,7 @@ import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag, planMate } from './math/mate';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
-import { colorSlots, write3MF, write3MFBambu } from './io/threemf';
+import { BAMBU_PRINTERS, colorSlots, write3MF, write3MFBambu } from './io/threemf';
 import { unionParts } from './io/union';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
@@ -236,6 +236,9 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 
+/** Vier Pfeile: Teil frei bewegen */
+const MOVE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 1.5 15.5 5H13v6h6V8.5l3.5 3.5-3.5 3.5V13h-6v6h2.5L12 22.5 8.5 19H11v-6H5v2.5L1.5 12 5 8.5V11h6V5H8.5z"/></svg>';
+
 // ---------------------------------------------------------------- Hilfsfunktionen
 
 const v3 = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
@@ -404,7 +407,10 @@ async function loadFiles(files: FileList | File[]) {
     try {
       const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase();
       const mtl = mtls.get(stem) ?? (mtls.size === 1 ? [...mtls.values()][0] : undefined);
-      let loaded: LoadedPart[] = await loadModel(file, { split, mtl });
+      const info: { printer?: string } = {};
+      let loaded: LoadedPart[] = await loadModel(file, { split, mtl, info });
+      // Drucker eines Bambu-Projekts vorauswählen (die eigene Wahl bleibt gespeichert)
+      if (info.printer) bambuPrinter.value = info.printer;
       // Stecken mehrere lose Teile in einem Netz (z. B. eine ganze Druckplatte), diese trennen
       let separated = false;
       if (split) {
@@ -966,8 +972,72 @@ async function connectAll() {
 
 const tc = new TransformControls(camera, renderer.domElement);
 tc.setSpace('local');
-tc.setSize(0.9);
+tc.setSize(1.25);
+tc.setColors(0xff4d5e, 0x3ddc84, 0x4d8dff, 0xffd23f);
 scene.add(tc.getHelper());
+/** Durch die Verbindung gesperrte Gizmo-Achsen (lokal X, Y, Z): grau und nicht greifbar. */
+let gizmoLocked: [boolean, boolean, boolean] = [false, false, false];
+
+/**
+ * Gizmo gut sichtbar und immer vollständig: volle, kräftige Drehringe statt Halbkreisen, kräftigere
+ * Verschiebeachsen. Gesperrte Richtungen bleiben grau sichtbar, statt zu verschwinden.
+ */
+function setupGizmoLook() {
+  type Handle = THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  const g = (tc as unknown as {
+    _gizmo: THREE.Object3D & { gizmo: Record<string, THREE.Object3D>; picker: Record<string, THREE.Object3D> };
+  })._gizmo;
+  const ring = (axis: string, tube: number) => {
+    const geo = new THREE.TorusGeometry(0.5, tube, 8, 128); // Ring um Z
+    if (axis === 'X') geo.rotateY(Math.PI / 2);
+    if (axis === 'Y') geo.rotateX(Math.PI / 2);
+    return geo;
+  };
+  const shaft = (axis: string) => {
+    const geo = new THREE.CylinderGeometry(0.014, 0.014, 1, 8); // entlang Y, von -0,5 bis 0,5
+    if (axis === 'X') geo.rotateZ(-Math.PI / 2);
+    if (axis === 'Z') geo.rotateX(Math.PI / 2);
+    return geo;
+  };
+  const isAxis = (n: string) => n === 'X' || n === 'Y' || n === 'Z';
+  for (const h of g.gizmo.rotate.children as Handle[]) if (isAxis(h.name)) h.geometry = ring(h.name, 0.016);
+  for (const h of g.picker.rotate.children as Handle[]) if (isAxis(h.name)) h.geometry = ring(h.name, 0.09);
+  for (const h of g.gizmo.translate.children as Handle[]) {
+    const p = (h.geometry as THREE.CylinderGeometry).parameters;
+    if (isAxis(h.name) && h.geometry.type === 'CylinderGeometry' && p?.radiusTop === p?.radiusBottom) h.geometry = shaft(h.name);
+    else if (isAxis(h.name) && h.geometry.type === 'CylinderGeometry') {
+      // Pfeilspitzen an Ort und Stelle vergrößern
+      h.geometry.computeBoundingBox();
+      const c = h.geometry.boundingBox!.getCenter(new THREE.Vector3());
+      h.geometry.translate(-c.x, -c.y, -c.z).scale(1.5, 1.5, 1.5).translate(c.x, c.y, c.z);
+    }
+  }
+  // Eigene Materialien je Griff, damit sich gesperrte Achsen einzeln abblenden lassen
+  for (const mode of ['translate', 'rotate'])
+    for (const h of g.gizmo[mode].children as Handle[]) h.material = h.material.clone();
+  const lockedName = (name: string) => {
+    const axes = ['X', 'Y', 'Z'].filter((a, i) => gizmoLocked[i] && name.includes(a));
+    return axes.length > 0;
+  };
+  const anyLocked = () => gizmoLocked.some(Boolean);
+  const base = g.updateMatrixWorld.bind(g);
+  g.updateMatrixWorld = (force?: boolean) => {
+    base(force);
+    const mode = tc.getMode();
+    if (mode !== 'translate' && mode !== 'rotate') return;
+    for (const h of g.gizmo[mode].children as Handle[]) {
+      // Freies Drehen/Verschieben in Blickrichtung nur, wenn nichts gesperrt ist
+      if ((h.name === 'E' || h.name === 'XYZE' || h.name === 'XYZ') && anyLocked()) h.visible = false;
+      else if (lockedName(h.name)) {
+        h.material.color.set(0x9aa0aa);
+        h.material.opacity = 0.35;
+      }
+    }
+    for (const h of g.picker[mode].children)
+      if (lockedName(h.name) || ((h.name === 'E' || h.name === 'XYZE' || h.name === 'XYZ') && anyLocked())) h.visible = false;
+  };
+}
+setupGizmoLook();
 const gizmoAnchor = new THREE.Object3D();
 gizmoAnchor.matrixAutoUpdate = true;
 scene.add(gizmoAnchor);
@@ -1080,8 +1150,9 @@ function updateGizmoAxes() {
   tc.setRotationSnap(gizmoSnapDeg ? THREE.MathUtils.degToRad(gizmoSnapDeg) : null);
   const motions = gizmoMotions();
   const hint = document.getElementById('gizmoHint')!;
+  tc.showX = tc.showY = tc.showZ = true;
   if (!motions) {
-    tc.showX = tc.showY = tc.showZ = true;
+    gizmoLocked = [false, false, false];
     hint.textContent = '';
     return;
   }
@@ -1096,12 +1167,13 @@ function updateGizmoAxes() {
     if (v.length() > 1e-3) basis.push(v.normalize());
   }
   const inSpan = (a: THREE.Vector3) => Math.hypot(...basis.map((b) => a.dot(b))) > 0.98;
-  [tc.showX, tc.showY, tc.showZ] = axes.map(inSpan);
-  hint.textContent = basis.length
-    ? ''
-    : gizmoMode === 'rotate'
-      ? 'Drehen ist durch die Verbindung festgelegt. Für freies Drehen den Haken bei „Nur freie Richtungen" entfernen.'
-      : 'Verschieben ist durch die Verbindung festgelegt. Für freies Verschieben den Haken bei „Nur freie Richtungen" entfernen.';
+  gizmoLocked = axes.map((a) => !inSpan(a)) as [boolean, boolean, boolean];
+  const what = gizmoMode === 'rotate' ? 'Drehen' : 'Verschieben';
+  hint.textContent = gizmoLocked.every(Boolean)
+    ? `${what} ist durch die Verbindung festgelegt (alles grau). Für freies ${what} den Haken bei „Nur freie Richtungen" entfernen.`
+    : gizmoLocked.some(Boolean)
+      ? 'Graue Achsen sind durch die Verbindung gesperrt.'
+      : '';
 }
 
 /** Alle Teile, die (über Verbindungen und Gruppen) zusammen mit diesem platziert werden. */
@@ -1692,12 +1764,26 @@ function renderParts() {
           <input type="radio" name="base" data-act="base" data-id="${p.id}" ${p.id === baseId ? 'checked' : ''}/> Basis
         </label>
         ${p.group && groupOf(p).length > 1 ? `<button class="icon" data-act="ungroup" data-id="${p.id}" title="Gehört zu einer Gruppe (${groupOf(p).length} Teile, bewegen sich gemeinsam). Klicken, um dieses Teil aus der Gruppe zu lösen.">⛓</button>` : ''}
-        <button class="icon" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen">✥</button>
-        <button class="icon" data-act="rm-part" data-id="${p.id}" title="Entfernen">✕</button>
+        <button class="icon move" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen" aria-label="Teil von Hand bewegen/drehen">${MOVE_ICON}</button>
+        <button class="icon rm" data-act="rm-part" data-id="${p.id}" title="Entfernen" aria-label="Entfernen">✕</button>
       </li>`,
     )
     .join('');
+  // Alle ein-/ausblenden
+  const shown = parts.filter((p) => p.visible).length;
+  const bar = document.getElementById('partsBar')!;
+  bar.hidden = parts.length < 2;
+  const all = document.getElementById('allVis') as HTMLInputElement;
+  all.checked = shown === parts.length;
+  all.indeterminate = shown > 0 && shown < parts.length;
+  document.getElementById('partsCount')!.textContent = `${shown} von ${parts.length} sichtbar`;
 }
+
+document.getElementById('allVis')!.addEventListener('change', (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  for (const p of parts) { p.visible = on; p.mesh.visible = on; }
+  renderAll();
+});
 
 function partOptions(sel: number | null, exclude: number | null) {
   return (
@@ -2167,6 +2253,17 @@ document.getElementById('demoRound')!.addEventListener('click', () =>
   loadDemo(makeRoundDemo(), 'Beispiel „Zapfen": Klicke den runden Teil des Zapfens und die runde Bohrungswand der Kappe an, dann „Verbinden". Die Drehung findet PartJoin über die Abflachung selbst.', 'face'),
 );
 
+// Drucker für das Bambu-Projekt: zuletzt gewählter oder der eines geladenen Bambu-Projekts
+const bambuPrinter = document.getElementById('bambuPrinter') as HTMLSelectElement;
+bambuPrinter.innerHTML = BAMBU_PRINTERS.map((p) => `<option value="${p.id}">${p.label}</option>`).join('');
+try { bambuPrinter.value = localStorage.getItem('partjoin.bambuPrinter') ?? 'X1C'; } catch { /* ohne Speicher */ }
+if (!bambuPrinter.value) bambuPrinter.value = 'X1C';
+function setBambuPrinter(id: string) {
+  bambuPrinter.value = id;
+  try { localStorage.setItem('partjoin.bambuPrinter', id); } catch { /* ohne Speicher */ }
+}
+bambuPrinter.addEventListener('change', () => setBambuPrinter(bambuPrinter.value));
+
 document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
   b.addEventListener('click', () => void exportAs(b.dataset.export ?? 'stl')),
 );
@@ -2182,10 +2279,12 @@ async function exportAs(kind: string) {
   }));
   try {
     if (kind === '3mf-color' || kind === '3mf-bambu') {
-      const data = kind === '3mf-bambu' ? write3MFBambu(world) : write3MF(world, 'multicolor');
+      const data = kind === '3mf-bambu' ? write3MFBambu(world, { printer: bambuPrinter.value }) : write3MF(world, 'multicolor');
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
       const slots = colorSlots(world);
-      toast(`Gespeichert. Im Slicer zuordnen: ${slots.map((c, i) => `${kind === '3mf-bambu' ? 'Filament' : 'Extruder'} ${i + 1} = ${c.toUpperCase()}`).join(' · ')}`, 9000);
+      toast(kind === '3mf-bambu'
+        ? `Gespeichert – ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben, Drucker ${bambuPrinter.selectedOptions[0]?.text ?? ''}.`
+        : `Gespeichert. Im Slicer zuordnen: ${slots.map((c, i) => `Extruder ${i + 1} = ${c.toUpperCase()}`).join(' · ')}`, 9000);
       return;
     }
     let body: { name: string; positions: Float32Array }[] = world;
@@ -2221,6 +2320,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
     parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor,
     checkCount: () => checkGroup.children.length,
+    gizmoLocked: () => [...gizmoLocked],
     proposePair: (a: number, b: number) => proposePair(getPart(a)!, getPart(b)!).map((s) => ({ score: s.score, fa: s.fa.kind + ':' + Math.round(s.fa.area), fb: s.fb.kind + ':' + Math.round(s.fb.area) })),
     /** Fläche wie per Klick auswählen (für automatisierte Tests). */
     selectFace: (partId: number, tri: number) => {

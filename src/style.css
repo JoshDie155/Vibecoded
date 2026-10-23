@@ -72,7 +72,7 @@ body {
   padding: 5px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
   display: flex; align-items: center; gap: 7px;
 }
-#tip[hidden] { display: none; }
+[hidden] { display: none !important; }
 #tip small { color: var(--muted); }
 .parts li.hl { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .parts li.flash { animation: flash 1.4s ease-out; }
@@ -134,6 +134,17 @@ button.icon:hover { color: var(--err); }
 .parts li:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .parts .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .parts .base { font-size: 11px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.parts input[type="checkbox"] { width: 16px; height: 16px; flex: none; }
+.parts button.icon {
+  flex: none; width: 30px; height: 28px; padding: 0; border-radius: 6px;
+  display: inline-grid; place-items: center; font-size: 16px; line-height: 1;
+}
+.parts button.icon:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.parts button.icon.move { color: var(--accent); }
+.parts button.icon.move:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.parts button.icon.rm:hover { color: var(--err); }
+.partsbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 6px -4px; }
+.partsbar .help { margin: 0; font-size: 12px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 
 .joint {
@@ -168,7 +179,6 @@ button.icon:hover { color: var(--err); }
 }
 #toolbar { top: 10px; }
 #gizmoBar { top: 58px; font-size: 12.5px; }
-#gizmoBar[hidden] { display: none; }
 #checkResult { margin: 8px 0 12px; font-size: 12.5px; display: grid; gap: 6px; }
 #checkResult:empty { display: none; }
 #checkResult .legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); }

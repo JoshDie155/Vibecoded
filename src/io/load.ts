@@ -35,6 +35,8 @@ export interface LoadOptions {
   split: boolean;
   /** Inhalt einer passenden .mtl-Datei (Farben für OBJ). */
   mtl?: string;
+  /** Bekommt den Bambu-Drucker, falls die Datei ein Bambu-Projekt ist. */
+  info?: { printer?: string };
 }
 
 /** Mehr Netze als hier werden nicht mehr einzeln geladen (z. B. ein GLB aus tausenden Einzelteilen). */
@@ -117,7 +119,7 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
   const buf = await file.arrayBuffer();
 
   if (ext === '3mf') {
-    const parts = read3MF(new Uint8Array(buf));
+    const parts = read3MF(new Uint8Array(buf), opts.info);
     const list = opts.split && parts.length <= MAX_SPLIT ? parts : [{ ...parts[0], positions: concat(parts.map((p) => p.positions)) }];
     return list.map((p) => {
       const g = new THREE.BufferGeometry();

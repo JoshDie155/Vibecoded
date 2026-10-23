@@ -29,16 +29,21 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    (z. B. die Drehung um einen Zapfen), sucht *Automatisch einpassen* über Flächenkontakt ohne
    Durchdringung: Teile mit Abflachung, Nut oder Lochbild drehen sich so von selbst richtig, und ein
    Zapfen wird bis zum Anschlag eingeschoben.
-   *Von Hand anpassen* blendet ein Gizmo ein – standardmäßig nur für die Richtungen, die noch frei
-   sind (z. B. nur der Drehring um die Zapfenachse), mit Winkelraster 1°/5°/15°/45°/90°.
+   *Von Hand anpassen* blendet ein Gizmo ein (volle Drehringe, Pfeile zum Verschieben). Standardmäßig
+   lassen sich nur die Richtungen greifen, die noch frei sind (z. B. nur der Drehring um die
+   Zapfenachse) – gesperrte Achsen bleiben grau sichtbar. Winkelraster 1°/5°/15°/45°/90°.
    *Feinausrichtung* zieht die Kontaktflächen genau aufeinander, *Einsinken* schiebt die Teile minimal
    ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
 5. **Exportieren**
-   - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu) und **3MF für PrusaSlicer**: ein
-     Objekt aus mehreren Teilen mit eigenem Namen; Teile gleicher Farbe bekommen dieselbe
-     Filament-/Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen.
+   - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): ein Objekt aus mehreren Teilen
+     mit eigenem Namen; jede Teilefarbe wird ein Filament in genau dieser Farbe. Die Datei bringt
+     Projekteinstellungen für den gewählten Drucker mit (System-Profile von Bambu Studio: 0,4-mm-Düse,
+     0,20 mm Standard, Bambu PLA Basic) – ohne sie lädt Bambu Studio ab 2.8.2 nur die Geometrie.
+     Der Drucker eines geladenen Bambu-Projekts wird vorausgewählt.
+   - **3MF für PrusaSlicer**: ein Objekt aus mehreren Teilen; Teile gleicher Farbe bekommen dieselbe
+     Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen.
    - **STL, OBJ, 3MF (ein Körper)**: mit „Zu einem Körper vereinigen" werden die Teile per
      boolescher Vereinigung zu einem geschlossenen Netz (Überlappungen und Innenflächen verschwinden).
      Nicht geschlossene Teile werden unverändert angehängt und genannt.
@@ -53,7 +58,8 @@ rechte verschiebt sie, Mausrad zoomt.
 Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick zeigt es in der Teileliste,
 Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
 am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).
-Jedes Teil lässt sich über ✥ in der Teileliste frei von Hand bewegen, „Gesamtes Modell bewegen" verschiebt
+„Alle Teile" über der Teileliste blendet alle Teile aus oder wieder ein.
+Jedes Teil lässt sich über das Pfeilkreuz in der Teileliste frei von Hand bewegen, „Gesamtes Modell bewegen" verschiebt
 oder dreht das ganze zusammengesetzte Modell.
 
 ## Runde Teile

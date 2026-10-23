@@ -29,6 +29,10 @@
               <input type="checkbox" id="splitParts" checked /> Mehrteilige Dateien in Teile zerlegen
             </label>
           </div>
+          <div id="partsBar" class="partsbar" hidden>
+            <label class="check small" title="Alle Teile ein- oder ausblenden"><input type="checkbox" id="allVis" checked /> Alle Teile</label>
+            <span id="partsCount" class="help"></span>
+          </div>
           <ul id="parts" class="parts"></ul>
           <div class="row wrap">
             <button id="demo" class="ghost small">Beispiel: Haus</button>
@@ -57,15 +61,18 @@
           <div id="checkResult"></div>
           <div class="row wrap">
             <button data-export="stl">STL</button>
-            <button data-export="3mf-bambu" title="Projektformat von Bambu Studio und OrcaSlicer: ein Objekt aus mehreren Teilen, Teile gleicher Farbe bekommen dieselbe Filament-Nummer.">3MF für Bambu Studio / OrcaSlicer</button>
+            <button data-export="3mf-bambu" title="Projektformat von Bambu Studio und OrcaSlicer: ein Objekt aus mehreren Teilen, Teile gleicher Farbe bekommen dasselbe Filament in dieser Farbe.">3MF für Bambu Studio / OrcaSlicer</button>
             <button data-export="3mf-color" title="Format von PrusaSlicer: ein Objekt aus mehreren Teilen mit eigenem Extruder je Farbe.">3MF für PrusaSlicer</button>
             <button data-export="3mf" title="Alle Teile als ein Körper, ohne Farben.">3MF (ein Körper)</button>
             <button data-export="obj">OBJ</button>
           </div>
+          <label class="check small" title="Drucker, Prozess- und Filamentprofil im Bambu-Projekt (System-Profile von Bambu Studio, 0,4-mm-Düse, Bambu PLA Basic). Die Teilefarben werden die Filamentfarben.">
+            Drucker im Bambu-Projekt <select id="bambuPrinter"></select>
+          </label>
           <label class="check small" title="Boolesche Vereinigung: Überlappungen und innenliegende Flächen verschwinden, der Slicer bekommt ein einziges geschlossenes Netz. Gilt für STL, OBJ und 3MF (ein Körper).">
             <input type="checkbox" id="unionExport" checked /> Zu einem Körper vereinigen (STL, OBJ, 3MF ein Körper)
           </label>
-          <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. Die mehrfarbigen 3MF-Varianten behalten Teile und Farben: Jede Farbe bekommt eine eigene Filament-/Extrudernummer, der du im Slicer das passende Filament zuordnest.</p>
+          <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. Die mehrfarbigen 3MF-Varianten behalten Teile und Farben: Jede Farbe bekommt eine eigene Filament-/Extrudernummer. Bambu Studio übernimmt die Teilefarben direkt als Filamentfarben (Profil: Bambu PLA Basic, im Slicer änderbar); in PrusaSlicer ordnest du jedem Extruder das passende Filament zu.</p>
         </section>
       </aside>
       <div id="resizer" role="separator" aria-orientation="vertical" title="Breite der Seitenleiste ändern (Doppelklick: zurücksetzen)"></div>

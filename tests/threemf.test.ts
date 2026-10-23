@@ -264,5 +264,49 @@ describe('write3MFBambu', () => {
     expect((bb.min[1] + bb.max[1]) / 2).toBeCloseTo(128, 4);
     expect(bb.min[2]).toBeCloseTo(0, 4);
     expect(bbox(back[1].positions).min[2] - bbox(back[0].positions).min[2]).toBeCloseTo(10, 4);
+    // Farben kommen über die Filamente der Projekteinstellungen zurück
+    expect(back.map((p) => p.color)).toEqual(['#ff0000', '#00aa00', '#ff0000']);
+  });
+
+  it('legt gültige Projekteinstellungen bei: System-Profile, Filamentfarben, gleich lange Filament-Listen', () => {
+    const files = unzipSync(write3MFBambu(parts));
+    const json = JSON.parse(strFromU8(files['Metadata/project_settings.config']));
+    // Bambu Studio 2.8.2 verwirft Projekte ohne Bambu-Drucker oder ohne nozzle_diameter
+    expect(json.printer_model).toBe('Bambu Lab X1 Carbon');
+    expect(json.nozzle_diameter).toEqual(['0.4']);
+    expect(json.printer_settings_id).toBe('Bambu Lab X1 Carbon 0.4 nozzle');
+    expect(json.print_settings_id).toBe('0.20mm Standard @BBL X1C');
+    expect(json.filament_colour).toEqual(['#FF0000', '#00AA00']);
+    for (const key of ['filament_settings_id', 'filament_multi_colour', 'filament_colour_type', 'filament_type', 'filament_ids',
+      'filament_diameter', 'filament_extruder_variant', 'filament_self_index', 'filament_map'])
+      expect(json[key], key).toHaveLength(2);
+    expect(json.filament_self_index).toEqual(['1', '2']);
+    expect(json.inherits_group).toHaveLength(4);
+    expect(json.different_settings_to_system).toHaveLength(4);
+    // Alle Werte als Zeichenketten bzw. Listen von Zeichenketten (Format von Bambu Studio)
+    for (const [k, v] of Object.entries(json)) {
+      if (Array.isArray(v)) v.forEach((x) => expect(typeof x, k).toBe('string'));
+      else expect(typeof v, k).toBe('string');
+    }
+  });
+
+  it('nimmt die Profile und die Plattenmitte des gewählten Druckers', () => {
+    const data = write3MFBambu(parts, { printer: 'A1M' });
+    const json = JSON.parse(strFromU8(unzipSync(data)['Metadata/project_settings.config']));
+    expect(json.printer_settings_id).toBe('Bambu Lab A1 mini 0.4 nozzle');
+    expect(json.filament_settings_id).toEqual(['Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M']);
+    const back = read3MF(data);
+    const bb = bbox(new Float32Array([...back[0].positions, ...back[1].positions, ...back[2].positions]));
+    expect((bb.min[0] + bb.max[0]) / 2).toBeCloseTo(90, 4);
+    expect((bb.min[1] + bb.max[1]) / 2).toBeCloseTo(90, 4);
+  });
+
+  it('erkennt beim Lesen den Drucker eines Bambu-Projekts', () => {
+    const info: { printer?: string } = {};
+    read3MF(write3MFBambu(parts, { printer: 'P1S' }), info);
+    expect(info.printer).toBe('P1S');
+    const none: { printer?: string } = {};
+    read3MF(write3MF(parts, 'multicolor'), none);
+    expect(none.printer).toBeUndefined();
   });
 });

@@ -279,9 +279,13 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
   return { objects, colors };
 }
 
-/** Liest alle Teile einer 3MF-Datei. */
-export function read3MF(data: Uint8Array): ImportedPart[] {
+/**
+ * Liest alle Teile einer 3MF-Datei.
+ * @param info bekommt den Bambu-Drucker des Projekts (Kennung aus BAMBU_PRINTERS), falls erkennbar
+ */
+export function read3MF(data: Uint8Array, info?: { printer?: string }): ImportedPart[] {
   const files = unzipSync(data);
+  if (info) info.printer = bambuPrinterOf(files);
   const root = rootModelPath(files);
   const models = new Map<string, RawModel>();
   const modelAt = (path: string | undefined): RawModel | undefined => {
@@ -523,18 +527,90 @@ function uuid(kind: number, n: number): string {
   return `${h(n, 8)}-${h(kind, 4)}-4000-8000-${h(n * 7919 + kind, 12)}`;
 }
 
+/** Bambu-Drucker mit genau einer Düse: Namen der System-Profile (Bambu Studio ab 2.0). */
+export interface BambuPrinter {
+  id: string;
+  label: string;
+  /** printer_model in Bambu Studio */
+  model: string;
+  printer: string;
+  process: string;
+  filament: string;
+  /** Druckbereich in mm */
+  bed: [number, number];
+}
+
+export const BAMBU_PRINTERS: BambuPrinter[] = [
+  { id: 'X1C', label: 'X1 Carbon', model: 'Bambu Lab X1 Carbon', printer: 'Bambu Lab X1 Carbon 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1C', bed: [256, 256] },
+  { id: 'X1', label: 'X1', model: 'Bambu Lab X1', printer: 'Bambu Lab X1 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1', bed: [256, 256] },
+  { id: 'X1E', label: 'X1E', model: 'Bambu Lab X1E', printer: 'Bambu Lab X1E 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1C', bed: [256, 256] },
+  { id: 'P1S', label: 'P1S', model: 'Bambu Lab P1S', printer: 'Bambu Lab P1S 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL P1S 0.4 nozzle', bed: [256, 256] },
+  { id: 'P1P', label: 'P1P', model: 'Bambu Lab P1P', printer: 'Bambu Lab P1P 0.4 nozzle', process: '0.20mm Standard @BBL P1P', filament: 'Bambu PLA Basic @BBL P1P', bed: [256, 256] },
+  { id: 'P2S', label: 'P2S', model: 'Bambu Lab P2S', printer: 'Bambu Lab P2S 0.4 nozzle', process: '0.20mm Standard @BBL P2S', filament: 'Bambu PLA Basic @BBL P2S', bed: [256, 256] },
+  { id: 'A1', label: 'A1', model: 'Bambu Lab A1', printer: 'Bambu Lab A1 0.4 nozzle', process: '0.20mm Standard @BBL A1', filament: 'Bambu PLA Basic @BBL A1', bed: [256, 256] },
+  { id: 'A1M', label: 'A1 mini', model: 'Bambu Lab A1 mini', printer: 'Bambu Lab A1 mini 0.4 nozzle', process: '0.20mm Standard @BBL A1M', filament: 'Bambu PLA Basic @BBL A1M', bed: [180, 180] },
+  { id: 'A2L', label: 'A2L', model: 'Bambu Lab A2L', printer: 'Bambu Lab A2L 0.4 nozzle', process: '0.20mm Standard @BBL A2L', filament: 'Bambu PLA Basic @BBL A2L 0.4 nozzle', bed: [330, 320] },
+  { id: 'H2S', label: 'H2S', model: 'Bambu Lab H2S', printer: 'Bambu Lab H2S 0.4 nozzle', process: '0.20mm Standard @BBL H2S', filament: 'Bambu PLA Basic @BBL H2S', bed: [340, 320] },
+];
+
 export interface BambuOptions {
-  /** Mitte der Druckplatte (mm), Standard 128/128 (X1, P1, A1). */
-  bedCenter?: [number, number];
+  /** Kennung aus BAMBU_PRINTERS, Standard X1C. */
+  printer?: string;
   /** Versionsangabe für Bambu Studio (Format „BambuStudio-xx.xx.xx.xx"). */
   version?: string;
 }
 
 /**
+ * Projekteinstellungen (Metadata/project_settings.config). Ohne sie lädt Bambu Studio ab 2.8.2 nur
+ * die Geometrie („ungültige Konfiguration"). Es genügen die Namen der System-Profile – Bambu Studio
+ * übernimmt alle übrigen Werte aus diesen Profilen – plus die Filamentfarben, die Projektsache sind.
+ * Die Listen je Filament müssen gleich lang sein, sonst kürzt Bambu Studio die Filamente.
+ */
+function bambuProjectSettings(printer: BambuPrinter, colors: string[], version: string): string {
+  const n = Math.max(1, colors.length);
+  const list = colors.length ? colors.map((c) => c.toUpperCase()) : ['#FFFFFF'];
+  const each = (v: string) => Array.from({ length: n }, () => v);
+  return JSON.stringify({
+    name: 'project_settings',
+    from: 'project',
+    version,
+    printer_technology: 'FFF',
+    printer_model: printer.model,
+    printer_settings_id: printer.printer,
+    print_settings_id: printer.process,
+    nozzle_diameter: ['0.4'],
+    filament_settings_id: each(printer.filament),
+    filament_colour: list,
+    filament_multi_colour: list,
+    filament_colour_type: each('1'),
+    filament_type: each('PLA'),
+    filament_ids: each('GFA00'),
+    filament_diameter: each('1.75'),
+    filament_extruder_variant: each('Direct Drive Standard'),
+    filament_self_index: list.map((_, i) => String(i + 1)),
+    filament_map: each('1'),
+    inherits_group: Array.from({ length: n + 2 }, () => ''),
+    different_settings_to_system: Array.from({ length: n + 2 }, () => ''),
+  }, null, 4);
+}
+
+/** Bambu-Drucker eines Projekts (printer_model aus den Projekteinstellungen), falls bekannt. */
+export function bambuPrinterOf(files: Record<string, Uint8Array>): string | undefined {
+  const project = files['Metadata/project_settings.config'];
+  if (!project) return undefined;
+  try {
+    const model = JSON.parse(strFromU8(project)).printer_model;
+    return BAMBU_PRINTERS.find((p) => p.model === model)?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Projektformat von Bambu Studio / OrcaSlicer: ein Objekt aus mehreren Teilen (je Teil ein Netz in
- * 3D/Objects/object_1.model), Filament je Teil in Metadata/model_settings.config. Ohne diese
- * Kennzeichnung laden beide Slicer nur die Geometrie. Die Farben selbst übernimmt der Slicer aus den
- * eingestellten Filamenten – Teile gleicher Farbe bekommen dieselbe Filament-Nummer.
+ * 3D/Objects/object_1.model), Filament je Teil in Metadata/model_settings.config, Drucker,
+ * Profile und Filamentfarben in Metadata/project_settings.config. Teile gleicher Farbe bekommen
+ * dieselbe Filament-Nummer.
  */
 export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Uint8Array {
   const slots = colorSlots(parts);
@@ -548,7 +624,8 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
         max[k] = Math.max(max[k], p.positions[i + k]);
       }
   const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]];
-  const [bx, by] = opts.bedCenter ?? [128, 128];
+  const printer = BAMBU_PRINTERS.find((p) => p.id === opts.printer) ?? BAMBU_PRINTERS[0];
+  const [bx, by] = [printer.bed[0] / 2, printer.bed[1] / 2];
   const objId = parts.length + 1;
 
   const sub: string[] = [];
@@ -575,7 +652,8 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
     </part>`);
   });
   const ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
-  const version = opts.version ?? 'BambuStudio-01.09.00.70';
+  // Ab 2.0, sonst passt Bambu Studio die Einstellungen alter Projekte an (Prime Tower)
+  const version = opts.version ?? 'BambuStudio-02.00.00.00';
   const main = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US" ${ns}>
  <metadata name="Application">${version}</metadata>
@@ -645,6 +723,7 @@ ${settings.join('\n')}
     '3D/_rels/3dmodel.model.rels': strToU8(modelRels),
     '3D/Objects/object_1.model': strToU8(objects),
     'Metadata/model_settings.config': strToU8(config),
+    'Metadata/project_settings.config': strToU8(bambuProjectSettings(printer, slots, version.replace(/^BambuStudio-/, ''))),
   });
 }
 
