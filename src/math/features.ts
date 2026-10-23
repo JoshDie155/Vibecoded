@@ -1859,3 +1859,37 @@ export function featureFromTris(topo: Topology, tris: number[]): Feature {
   if (flat) return planeFeature(ctx, list, verts, FEATURE_DEFAULTS.smoothAngleDeg * DEG);
   return { kind: 'surface', tris: list, centroid, normal, area };
 }
+
+/** Teilfläche für das Zusammenfassen: Dreiecke eines Netzes und dessen Lage im gemeinsamen Koordinatensystem. */
+export interface MergePiece {
+  positions: Float32Array;
+  tris: number[];
+  T: Rigid;
+}
+
+/**
+ * Mehrere gewählte Flächen zu einer zusammenfassen – auch über mehrere Teile hinweg (z. B. ein
+ * Aussparungsgrund, der halb zu den Haaren und halb zum Kopf gehört). Die Dreiecke werden in ein
+ * gemeinsames Koordinatensystem übertragen und wie bemalte Dreiecke ausgewertet: eben, wenn alles in
+ * einer Ebene liegt, sonst Freiformfläche. Die Dreiecksliste des Ergebnisses bezieht sich auf das
+ * zusammengesetzte Hilfsnetz.
+ */
+export function mergeFeatures(pieces: MergePiece[]): Feature {
+  const total = pieces.reduce((n, p) => n + p.tris.length, 0);
+  if (!total) throw new RangeError('Keine Flächen zum Zusammenfassen.');
+  const out = new Float32Array(total * 9);
+  let o = 0;
+  for (const p of pieces) {
+    for (const t of p.tris) {
+      for (let k = 0; k < 3; k++) {
+        const i = t * 9 + k * 3;
+        const v = apply(p.T, [p.positions[i], p.positions[i + 1], p.positions[i + 2]]);
+        out[o++] = v[0];
+        out[o++] = v[1];
+        out[o++] = v[2];
+      }
+    }
+  }
+  const topo = buildTopology(out);
+  return featureFromTris(topo, Array.from({ length: total }, (_, i) => i));
+}

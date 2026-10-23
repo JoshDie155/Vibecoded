@@ -7,7 +7,7 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } fro
 import { type Rigid, type Vec3, IDENTITY, compose, rotate, rotationAbout } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
-import { type EdgeFeature, type Feature, type Topology, buildTopology, detectFeature, featureFromTris, transformFeature } from './math/features';
+import { type EdgeFeature, type Feature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, transformFeature } from './math/features';
 import { detectEdge } from './math/edges';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
@@ -79,8 +79,11 @@ interface FeatureCache {
   turn?: { point: Vec3; axis: Vec3; angles: number[] };
 }
 
-/** Fläche einer Verbindung; `on`: Teil, auf dem sie liegt, falls nicht das Teil der Seite selbst. */
-type PickedFeature = Feature & { on?: number };
+/**
+ * Fläche einer Verbindung; `on`: Teil, auf dem sie liegt, falls nicht das Teil der Seite selbst.
+ * `pieces`: zusammengefasste Fläche aus diesen Einzelflächen (Geometrie dann im Teil der Seite).
+ */
+type PickedFeature = Feature & { on?: number; pieces?: PickedFeature[] };
 
 interface Joint {
   id: number;
@@ -561,6 +564,7 @@ function removeJoint(id: number) {
 
 /** Auswahl hat sich geändert → alte Alternativen, Korrekturen und Zwischenergebnisse verwerfen. */
 function markersChanged(j: Joint) {
+  mergePick.delete(j.id);
   j.alt = 0;
   j.turnIdx = 0;
   j.adjust = undefined;
@@ -702,10 +706,42 @@ function solveAll() {
   }
 }
 
-/** Nachbarteile, auf denen Flächen dieser Seite liegen. */
+/** Nachbarteile, auf denen Flächen dieser Seite liegen (auch Teilflächen zusammengefasster Flächen). */
 function helperParts(j: Joint, side: Side): number[] {
   const own = side === 'a' ? j.a : j.b;
-  return [...new Set((side === 'a' ? j.fa : j.fb).map((f) => f.on).filter((id): id is number => id !== undefined && id !== own))];
+  return [...new Set((side === 'a' ? j.fa : j.fb).flatMap((f) => f.pieces ?? [f]).map((f) => f.on).filter((id): id is number => id !== undefined && id !== own))];
+}
+
+/** Zum Zusammenfassen angehakte Flächen je Verbindung (eine Seite). */
+const mergePick = new Map<number, { side: Side; idx: Set<number> }>();
+const mergeable = (f: Feature) => f.kind === 'plane' || f.kind === 'surface';
+
+/**
+ * Fasst Einzelflächen einer Seite zu einer Fläche zusammen – im Koordinatensystem des Teils dieser Seite,
+ * Teilflächen auf Nachbarteilen über deren Lage `worldOf`.
+ */
+function mergeOf(j: Joint, side: Side, pieces: PickedFeature[], worldOf: (id: number) => THREE.Matrix4): PickedFeature {
+  const own = getPart(side === 'a' ? j.a : j.b)!;
+  const inv = worldOf(own.id).clone().invert();
+  const merged = mergeFeatures(pieces.map((f) => {
+    const part = featurePart(j, side, f)!;
+    return { positions: positionsOf(part), tris: f.tris, T: matrixToRigid(inv.clone().multiply(worldOf(part.id))) };
+  }));
+  return { ...merged, tris: pieces[0].tris, pieces };
+}
+
+/** Zusammengefasste Flächen auf Nachbarteilen mit deren aktueller Lage neu berechnen (zwischengespeichert). */
+const mergedCache = new WeakMap<PickedFeature, { key: string; f: PickedFeature }>();
+function currentMerge(j: Joint, side: Side, f: PickedFeature, worldOf: (id: number) => THREE.Matrix4): PickedFeature {
+  const own = side === 'a' ? j.a : j.b;
+  if (!f.pieces?.some((p) => p.on !== undefined && p.on !== own)) return f;
+  const inv = worldOf(own!).clone().invert();
+  const key = JSON.stringify(f.pieces.map((p) => [p.on ?? 0, inv.clone().multiply(worldOf(p.on ?? own!)).elements.map((x) => Math.round(x * 1e4))]));
+  const hit = mergedCache.get(f);
+  if (hit?.key === key) return hit.f;
+  const g = mergeOf(j, side, f.pieces, worldOf);
+  mergedCache.set(f, { key, f: g });
+  return g;
 }
 
 /** Teil, auf dem eine Fläche liegt. */
@@ -799,11 +835,13 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid, place
   // Flächen auf Nachbarteilen in das Koordinatensystem des festen Teils übertragen
   const helpers = helperRelations(j, fixedSide, fixed, (id) => placed.get(id)!);
   const dstF = (fixedSide === 'a' ? j.fa : j.fb).map((f) => {
+    if (f.pieces) return currentMerge(j, fixedSide, f, (id) => placed.get(id)!);
     const rel = f.on !== undefined ? helpers.find((h) => h.id === f.on)?.rel : undefined;
     return rel ? transformFeature(f, matrixToRigid(rel)) : f;
   });
+  const sig = (f: PickedFeature) => [f.on ?? 0, f.tris[0], f.tris.length, (f.pieces ?? []).map((p) => [p.on ?? 0, p.tris[0], p.tris.length])];
   const key = JSON.stringify([
-    fixed.id, moving.id, srcF.map((f) => [f.tris[0], f.tris.length]), dstF.map((f) => [f.on ?? 0, f.tris[0], f.tris.length]),
+    fixed.id, moving.id, srcF.map(sig), dstF.map(sig),
     helpers.map((h) => [h.id, h.rel.elements.map((x) => Math.round(x * 1e4))]),
     srcM, dstM, j.alt, j.seat, j.ordered, j.normals, j.overlap,
   ]);
@@ -1456,20 +1494,24 @@ function rebuildMarkers() {
         counters[group] = (counters[group] ?? 0) + 1;
         const part = featurePart(j, side, f);
         if (!part?.visible) return;
-        const overlay = f.kind === 'edge'
-          ? new THREE.Mesh(edgeTube(f), new THREE.MeshBasicMaterial({ color: j.color, transparent: true, opacity: active ? 1 : 0.5, depthTest: false }))
-          : new THREE.Mesh(
-            subGeometry(part, f.tris),
-            new THREE.MeshBasicMaterial({
-              color: j.color, transparent: true, opacity: active ? 0.55 : 0.25, side: THREE.DoubleSide, depthWrite: false,
-              polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
-            }),
-          );
-        if (f.kind === 'edge') overlay.renderOrder = 12;
-        overlay.matrixAutoUpdate = false;
-        overlay.matrix.copy(part.mesh.matrixWorld);
-        overlay.userData = { joint: j.id, side, index: i, kind: 'face' };
-        faceGroup.add(overlay);
+        for (const piece of f.pieces ?? [f]) {
+          const on = featurePart(j, side, piece);
+          if (!on?.visible) continue;
+          const overlay = piece.kind === 'edge'
+            ? new THREE.Mesh(edgeTube(piece), new THREE.MeshBasicMaterial({ color: j.color, transparent: true, opacity: active ? 1 : 0.5, depthTest: false }))
+            : new THREE.Mesh(
+              subGeometry(on, piece.tris),
+              new THREE.MeshBasicMaterial({
+                color: j.color, transparent: true, opacity: active ? 0.55 : 0.25, side: THREE.DoubleSide, depthWrite: false,
+                polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+              }),
+            );
+          if (piece.kind === 'edge') overlay.renderOrder = 12;
+          overlay.matrixAutoUpdate = false;
+          overlay.matrix.copy(on.mesh.matrixWorld);
+          overlay.userData = { joint: j.id, side, index: i, kind: 'face' };
+          faceGroup.add(overlay);
+        }
 
         const label = labelSprite(`${featureTag(f)}${counters[group]}`, j.color);
         label.material.opacity = active ? 1 : 0.5;
@@ -1966,7 +2008,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     return;
   }
   if (pickMode === 'brush') return; // Pinsel arbeitet beim Ziehen
-  if (pickMode === 'face') toggleFace(j, side, h.part, h.tri, helper ? h.part.id : undefined);
+  if (pickMode === 'face') toggleFace(j, side, h.part, h.tri, helper ? h.part.id : undefined, e.altKey);
   else if (pickMode === 'edge') {
     const edge = edgeAt(h);
     if (!edge) { toast('Hier ist keine gerade Kante – näher an eine Kante klicken.'); return; }
@@ -1982,14 +2024,22 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 });
 
 /** Wählt die Fläche unter einem Dreieck aus – oder hebt die Auswahl auf, wenn sie schon gewählt ist. */
-function toggleFace(j: Joint, side: Side, part: Part, tri: number, on?: number) {
+function toggleFace(j: Joint, side: Side, part: Part, tri: number, on?: number, add = false) {
   const list = side === 'a' ? j.fa : j.fb;
-  const existing = list.findIndex((f) => f.kind !== 'edge' && featurePart(j, side, f) === part && f.tris.includes(tri));
+  const has = (f: PickedFeature) => (f.pieces ?? [f]).some((p) => featurePart(j, side, p) === part && p.tris.includes(tri));
+  const existing = list.findIndex((f) => f.kind !== 'edge' && has(f));
   if (existing >= 0) list.splice(existing, 1);
   else {
     const f: PickedFeature = detectFeature(topologyOf(part), tri, FEATURE_OPTS);
     if (on !== undefined) f.on = on;
-    list.push(f);
+    // Alt/⌥ + Klick: zur zuletzt gewählten Fläche dieser Seite hinzufügen
+    const last = add ? list[list.length - 1] : undefined;
+    if (last && mergeable(last) && mergeable(f)) {
+      list[list.length - 1] = mergeOf(j, side, [...(last.pieces ?? [last]), f], (id) => getPart(id)!.mesh.matrixWorld);
+    } else {
+      if (add) toast('Hinzufügen geht nur zu einer ebenen oder Freiformfläche – die Fläche wurde einzeln gewählt.');
+      list.push(f);
+    }
     history.push({ joint: j.id, side, kind: 'face' });
   }
   markersChanged(j);
@@ -2158,11 +2208,22 @@ function featureChips(j: Joint, side: Side) {
     .map((f, i) => {
       const group = f.kind === 'cylinder' ? 'round' : f.kind === 'edge' ? 'edge' : 'flat';
       counters[group] = (counters[group] ?? 0) + 1;
-      const on = f.on !== undefined && f.on !== (side === 'a' ? j.a : j.b) ? `<small>auf „${esc(nameOf(f.on))}"</small>` : '';
-      return `<li><b>${featureTag(f)}${counters[group]}</b> <span class="desc">${esc(describeFeature(f))}${on}</span>
+      const own = side === 'a' ? j.a : j.b;
+      // Auf welchen Teilen die Fläche liegt – nur nennen, wenn nicht ausschließlich auf dem Teil der Seite
+      const where = [...new Set((f.pieces ?? [f]).map((p) => p.on ?? own))];
+      const on = where.some((x) => x !== own) ? `<small>auf „${where.map((x) => esc(nameOf(x))).join('" und „')}"</small>` : '';
+      const merged = f.pieces ? `<small>aus ${f.pieces.length} Flächen zusammengefasst</small>` : '';
+      const pick = mergePick.get(j.id);
+      const checked = pick?.side === side && pick.idx.has(i);
+      return `<li>${mergeable(f) && list.filter(mergeable).length > 1
+        ? `<input type="checkbox" data-act="merge-pick" data-side="${side}" data-idx="${i}" data-id="${j.id}" ${checked ? 'checked' : ''} title="Zum Zusammenfassen auswählen" />`
+        : ''}<b>${featureTag(f)}${counters[group]}</b> <span class="desc">${esc(describeFeature(f))}${merged}${on}</span>
+        ${f.pieces ? `<button class="icon" data-act="split-face" data-side="${side}" data-idx="${i}" data-id="${j.id}" title="Wieder in die Einzelflächen trennen">⇹</button>` : ''}
         <button class="icon" data-act="rm-face" data-side="${side}" data-idx="${i}" data-id="${j.id}" title="Fläche abwählen">✕</button></li>`;
     })
-    .join('')}</ul>`;
+    .join('')}</ul>${mergePick.get(j.id)?.side === side && mergePick.get(j.id)!.idx.size > 1
+    ? `<button class="ghost small merge" data-act="merge-faces" data-side="${side}" data-id="${j.id}" title="Die angehakten Flächen zählen danach als eine Fläche – z. B. ein Aussparungsgrund aus zwei Teilen.">${mergePick.get(j.id)!.idx.size} Flächen zu einer zusammenfassen</button>`
+    : ''}`;
 }
 
 /** Knopf für weitere, gleich gut passende Drehungen (z. B. rechteckiger Zapfen um 180° gedreht). */
@@ -2376,6 +2437,38 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
       solveAll();
       renderAll();
       break;
+    case 'merge-faces': {
+      const pick = j && mergePick.get(j.id);
+      if (!j || !pick) break;
+      const side = pick.side;
+      const list = side === 'a' ? j.fa : j.fb;
+      const idx = [...pick.idx].sort((x, y) => x - y).filter((i) => list[i] && mergeable(list[i]));
+      if (idx.length < 2) break;
+      try {
+        const merged = mergeOf(j, side, idx.flatMap((i) => list[i].pieces ?? [list[i]]), (id) => getPart(id)!.mesh.matrixWorld);
+        for (const i of [...idx].reverse()) list.splice(i, 1);
+        list.splice(idx[0], 0, merged);
+        history.push({ joint: j.id, side, kind: 'face' });
+      } catch (err) {
+        toast(`Zusammenfassen nicht möglich: ${(err as Error).message}`);
+      }
+      markersChanged(j);
+      solveAll();
+      renderAll();
+      break;
+    }
+    case 'split-face': {
+      if (!j) break;
+      const list = t.dataset.side === 'a' ? j.fa : j.fb;
+      const i = Number(t.dataset.idx);
+      const pieces = list[i]?.pieces;
+      if (!pieces) break;
+      list.splice(i, 1, ...pieces);
+      markersChanged(j);
+      solveAll();
+      renderAll();
+      break;
+    }
     case 'rm-face':
       if (!j) break;
       (t.dataset.side === 'a' ? j.fa : j.fb).splice(Number(t.dataset.idx), 1);
@@ -2470,6 +2563,17 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
   const id = Number(t.dataset.id);
   const j = joints.find((x) => x.id === id);
   switch (t.dataset.act) {
+    case 'merge-pick': {
+      if (!j) break;
+      const side = t.dataset.side as Side;
+      const prev = mergePick.get(j.id);
+      const pick = prev?.side === side ? prev : { side, idx: new Set<number>() };
+      if (t.checked) pick.idx.add(Number(t.dataset.idx));
+      else pick.idx.delete(Number(t.dataset.idx));
+      mergePick.set(j.id, pick);
+      renderJoints();
+      break;
+    }
     case 'vis': {
       const p = getPart(id);
       if (p) { p.visible = t.checked; p.mesh.visible = t.checked; }

@@ -28,6 +28,10 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    - *Kanten:* gerade Kante auf gerade Kante (z. B. bündig an einer Außenkante) – gut kombinierbar mit einer Fläche.
    - *Pinsel:* mit gedrückter Maustaste über die Kontaktstelle streichen; beim Loslassen wird daraus eine
      Fläche (eben oder Freiform). Praktisch, wo die automatische Flächenerkennung nicht passt.
+   - *Flächen zusammenfassen:* in der Flächenliste zwei oder mehr Flächen anhaken und „… zu einer
+     zusammenfassen" klicken – oder mit Alt/⌥ + Klick eine Fläche direkt an die zuletzt gewählte anhängen.
+     Das geht auch über fest verbundene Teile hinweg (z. B. ein Aussparungsgrund, der halb zu den Haaren und
+     halb zum Kopf gehört); „⇹" trennt sie wieder.
    Punkte, Kanten und Flächen lassen sich auch kombinieren. Besteht das Gegenstück aus mehreren Teilen (z. B.
    eine Maske, die auf Kopf *und* Haare passt), dürfen Flächen auch auf Nachbarteilen liegen, die schon fest mit
    Teil 1 verbunden sind – PartJoin rechnet und prüft den Kontakt dann mit allen diesen Teilen.

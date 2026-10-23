@@ -3,7 +3,7 @@ import { MeshBVH } from 'three-mesh-bvh';
 import { describe, expect, it } from 'vitest';
 import { IDENTITY, type Vec3, apply } from '../src/math/align';
 import { detectEdge } from '../src/math/edges';
-import { type EdgeFeature, buildTopology, detectFeature, featureFromTris } from '../src/math/features';
+import { type EdgeFeature, buildTopology, detectFeature, featureFromTris, mergeFeatures } from '../src/math/features';
 import { fitFeatures } from '../src/math/fit';
 import { sampleSurface } from '../src/math/icp';
 import { describeFeature, featureTag } from '../src/math/mate';
@@ -135,5 +135,54 @@ describe('featureFromTris (Pinsel)', () => {
     if (f.kind !== 'surface') return;
     expect(f.normal[0]).toBeGreaterThan(0.3);
     expect(f.normal[2]).toBeGreaterThan(0.3);
+  });
+});
+
+describe('mergeFeatures (Flächen zusammenfassen)', () => {
+  const half = (pos: Float32Array, pred: (x: number) => boolean) => {
+    const tris: number[] = [];
+    for (let t = 0; t < pos.length / 9; t++) {
+      const z = [2, 5, 8].map((k) => pos[t * 9 + k]);
+      const x = (pos[t * 9] + pos[t * 9 + 3] + pos[t * 9 + 6]) / 3;
+      if (z.every((v) => Math.abs(v - 6) < 1e-6) && pred(x)) tris.push(t);
+    }
+    return tris;
+  };
+  const g = new THREE.BoxGeometry(20, 10, 6, 10, 5, 3);
+  g.translate(0, 0, 3);
+  const pos = toPositions(g);
+
+  it('zwei Hälften einer Ebene ergeben wieder die ganze ebene Fläche', () => {
+    const f = mergeFeatures([
+      { positions: pos, tris: half(pos, (x) => x < 0), T: IDENTITY },
+      { positions: pos, tris: half(pos, (x) => x > 0), T: IDENTITY },
+    ]);
+    expect(f.kind).toBe('plane');
+    if (f.kind !== 'plane') return;
+    expect(f.area).toBeCloseTo(200, 3);
+    expect(f.centroid[0]).toBeCloseTo(0, 4);
+    expect(Math.max(...f.axes.size)).toBeCloseTo(20, 2);
+  });
+
+  it('fasst Flächen zweier Teile zusammen (zweites Teil an seiner Lage)', () => {
+    // Zweites Teil: dieselbe Box, um 20 mm verschoben – lokal liegt seine Hälfte bei x < 0
+    const T = { R: IDENTITY.R, t: [20, 0, 0] as Vec3 };
+    const f = mergeFeatures([
+      { positions: pos, tris: half(pos, (x) => x > 0), T: IDENTITY },
+      { positions: pos, tris: half(pos, (x) => x < 0), T },
+    ]);
+    expect(f.kind).toBe('plane');
+    if (f.kind !== 'plane') return;
+    expect(f.area).toBeCloseTo(200, 3);
+    expect(f.centroid[0]).toBeCloseTo(10, 4);
+  });
+
+  it('nicht in einer Ebene: Freiformfläche', () => {
+    const b = box(10, 10, 10);
+    const f = mergeFeatures([
+      { positions: b, tris: [triNear(b, [0, 0, 10])], T: IDENTITY },
+      { positions: b, tris: [triNear(b, [5, 0, 5])], T: IDENTITY },
+    ]);
+    expect(f.kind).toBe('surface');
   });
 });
