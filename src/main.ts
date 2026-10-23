@@ -2353,7 +2353,9 @@ function featureChips(j: Joint, side: Side) {
       const own = side === 'a' ? j.a : j.b;
       // Auf welchen Teilen die Fläche liegt – nur nennen, wenn nicht ausschließlich auf dem Teil der Seite
       const where = [...new Set((f.pieces ?? [f]).map((p) => p.on ?? own))];
-      const on = where.some((x) => x !== own) ? `<small>auf „${where.map((x) => esc(nameOf(x))).join('" und „')}"</small>` : '';
+      // Lange Namen lieber nach einem Unterstrich umbrechen als mitten im Wort
+      const nice = (id: number | null) => esc(nameOf(id)).replace(/_/g, '_<wbr>');
+      const on = where.some((x) => x !== own) ? `<small>auf „${where.map(nice).join('" und „')}"</small>` : '';
       const merged = f.pieces ? `<small>aus ${f.pieces.length} Flächen zusammengefasst</small>` : '';
       const pick = mergePick.get(j.id);
       const checked = pick?.side === side && pick.idx.has(i);
