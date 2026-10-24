@@ -168,6 +168,26 @@
           <button id="cutCancel" class="ghost small">Abbrechen</button>
           <p class="help" id="cutHelp">Lage der Schnittebene unten rechts einstellen.</p>
         </div>
+        <div id="pocketBar" hidden>
+          <strong id="pocketTitle"></strong>
+          <span class="seg" role="group" aria-label="Art der Aussparung">
+            <button data-pkind="magnet" class="on" title="Runde Tasche für einen Scheibenmagneten">Magnet</button>
+            <button data-pkind="insert" title="Loch für einen Gewindeeinsatz zum Einschmelzen">Einsatz</button>
+            <button data-pkind="screw" title="Schraubenloch mit versenktem Kopf">Schraube</button>
+            <button data-pkind="nut" title="Sechskant-Tasche für eine Mutter">Mutter</button>
+            <button data-pkind="hole" title="Runde Bohrung mit freiem Maß">Bohrung</button>
+          </span>
+          <select id="pocketPreset" aria-label="Größe"></select>
+          <label class="small"><span id="pocketDiaLabel">⌀</span> <input type="number" id="pocketDia" min="0.5" step="0.1" /> mm</label>
+          <label class="small"><span id="pocketDepthLabel">Tiefe</span> <input type="number" id="pocketDepth" min="0.2" step="0.1" /> mm</label>
+          <label class="small" data-for="screw">Kopf ⌀ <input type="number" id="pocketHead" min="1" step="0.1" /> mm</label>
+          <label class="check small" data-for="screw"><input type="checkbox" id="pocketSunk" /> Senkkopf</label>
+          <label class="check small" data-for="hole screw nut"><input type="checkbox" id="pocketThrough" /> <span id="pocketThroughLabel">ganz durch</span></label>
+          <label class="small" title="Spiel je Seite">Spiel <input type="number" id="pocketGap" min="0" max="1" step="0.05" /> mm</label>
+          <button id="pocketApply" class="small">Einsetzen</button>
+          <button id="pocketClose" class="ghost small">Fertig</button>
+          <p class="help" id="pocketHelp"></p>
+        </div>
         <div id="splitBar" hidden>
           <strong id="splitTitle"></strong>
           <span class="row counts">
@@ -276,6 +296,7 @@
             <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
             <dt><kbd>S</kbd></dt><dd>Skalieren/Spiegeln: Teil unter dem Zeiger oder Auswahl</dd>
+            <dt><kbd>E</kbd></dt><dd>Aussparung: Magnet, Gewindeeinsatz, Schraube, Mutter, Bohrung an der Klickstelle</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
             <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie in Bambu Studio</dd>
             <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden, sonst Auswahl aufheben</dd>

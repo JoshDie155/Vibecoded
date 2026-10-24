@@ -96,3 +96,25 @@ describe('Zerschneiden', () => {
     await expect(cutMesh(box(10, 10, 10), { normal: [0, 0, 1], offset: 50, connector: 'none' })).rejects.toThrow('geht nicht durch');
   });
 });
+
+describe('Zerschneiden: Herkunft der Dreiecke', () => {
+  it('jedes Ergebnisdreieck kennt sein Ausgangsdreieck (gleiche Ebene), Schnittflächen −1', async () => {
+    const src = box(20, 20, 20);
+    const r = await cutMesh(src, { normal: [0, 0, 1], offset: 8, connector: 'pin', diameter: 4 });
+    const normal = (p: Float32Array, t: number) => {
+      const a = new THREE.Vector3().fromArray(p, 9 * t), b = new THREE.Vector3().fromArray(p, 9 * t + 3), c = new THREE.Vector3().fromArray(p, 9 * t + 6);
+      return b.sub(a).cross(c.sub(a)).normalize();
+    };
+    for (const [pos, source] of [[r.a, r.aSource], [r.b, r.bSource]] as const) {
+      expect(source.length).toBe(pos.length / 9);
+      let tracked = 0;
+      for (let t = 0; t < source.length; t++) {
+        if (source[t] < 0) continue;
+        tracked++;
+        expect(normal(pos, t).dot(normal(src, source[t]))).toBeGreaterThan(0.999);
+      }
+      expect(tracked).toBeGreaterThan(5);
+      expect([...source].some((s) => s < 0)).toBe(true);
+    }
+  });
+});

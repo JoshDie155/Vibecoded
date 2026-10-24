@@ -8,7 +8,7 @@
  */
 import type { CrossSection, Manifold, ManifoldToplevel, Mat4, SimplePolygon } from 'manifold-3d';
 import { type Vec3, cross, len, normalize } from '../math/align';
-import { loadManifold, positionsOfSolid, solidOf } from './union';
+import { loadManifold, originalIdOf, positionsOfSolid, solidOf, trackedPositions } from './union';
 
 export type Connector = 'none' | 'pin' | 'dowel';
 
@@ -38,6 +38,9 @@ export interface CutResult {
   /** Hälfte gegen die Normale (A) und in Richtung der Normale (B), nicht indizierte Dreiecke. */
   a: Float32Array;
   b: Float32Array;
+  /** Je Dreieck der Hälften: Dreieck des Ausgangsnetzes, aus dem es stammt (−1 = Schnittfläche, Verbinder). */
+  aSource: Int32Array;
+  bSource: Int32Array;
   /** Getrennt gedruckte Dübel, an ihrer Stelle im Schnitt. */
   dowels: Float32Array[];
   connectors: Placed[];
@@ -79,7 +82,7 @@ function inside(polys: SimplePolygon[], x: number, y: number): boolean {
 }
 
 /** Erster Schnittpunkt eines Strahls mit dem Netz (Abstand) – für die Wandstärke hinter einem Verbinder. */
-function rayDistance(positions: Float32Array, o: Vec3, dir: Vec3): number {
+export function rayDistance(positions: Float32Array, o: Vec3, dir: Vec3): number {
   let best = Infinity;
   for (let t = 0; t < positions.length; t += 9) {
     const ax = positions[t], ay = positions[t + 1], az = positions[t + 2];
@@ -297,7 +300,10 @@ export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: C
       if (toolsB.length) B = keep(B.subtract(place(toolsB)));
       for (const t of dowelTools) dowels.push(positionsOfSolid(keep(t.transform(pl.frame.fromPlane))));
     }
-    return { a: positionsOfSolid(A), b: positionsOfSolid(B), dowels, connectors, notes };
+    const id = originalIdOf(solid);
+    const ta = trackedPositions(A, id);
+    const tb = trackedPositions(B, id);
+    return { a: ta.positions, b: tb.positions, aSource: ta.source, bSource: tb.source, dowels, connectors, notes };
   } finally {
     for (const x of live) x.delete();
   }

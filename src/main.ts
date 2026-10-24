@@ -31,6 +31,8 @@ import { unionParts } from './io/union';
 import { type Connector, CutError, cutMesh, planConnectors, releaseCut } from './io/cut';
 import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
+import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, PocketError, type PocketSpec, addPocket, pocketPreview } from './io/pocket';
+import { carryPaint } from './io/paint';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -167,8 +169,10 @@ let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
 /** Werkzeug im 3D-Fenster (siehe setTool) und die im Passungs-Werkzeug gewählte Fläche. */
-let tool: 'lay' | 'fit' | 'measure' | null = null;
+let tool: 'lay' | 'fit' | 'measure' | 'pocket' | null = null;
 let fitTarget: { part: Part; f: CylinderFeature | PlaneFeature } | null = null;
+/** Ort der Aussparung (Werkzeug „Aussparung“, Koordinaten des Teils). */
+let pocketPlace: { partId: number; point: Vec3; normal: Vec3 } | null = null;
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
 let hiddenFolded = false;
 /** Ausgewählte Teile (Mehrfachauswahl) und die zuletzt angeklickte Zeile für Umschalt+Klick. */
@@ -2532,6 +2536,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     pickMeasure(h);
     return;
   }
+  if (tool === 'pocket') {
+    pickPocket(h);
+    return;
+  }
   // Umschalt+Klick: Teil zur Auswahl hinzufügen (oder herausnehmen) und in der Liste zeigen
   if (e.shiftKey) {
     toggleSelected(h.part.id);
@@ -2712,6 +2720,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'l') setTool(tool === 'lay' ? null : 'lay');
   else if (k === 't') setTool(tool === 'fit' ? null : 'fit');
   else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
+  else if (k === 'e') setTool(tool === 'pocket' ? null : 'pocket');
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (k === 'c') setSection(!section);
@@ -2911,6 +2920,9 @@ function renderHint() {
   const j = activeJoint();
   const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
   if (tool === 'lay') el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
+  else if (tool === 'pocket') el.textContent = pocketPlace
+    ? 'Art und Größe oben wählen, dann „Einsetzen“ – oder eine andere Stelle anklicken. Esc beendet.'
+    : 'Klicke die Stelle an, an der die Aussparung sitzen soll (auf runden Flächen rastet sie in der Mitte ein). Esc beendet.';
   else if (tool === 'measure') el.textContent = measure.length === 1
     ? 'Zweite Stelle anklicken – oder Esc zum Beenden.'
     : 'Klicke eine Stelle an (Ecken rasten ein). Rundung: Durchmesser, zwei Stellen: Abstand, zwei parallele Flächen: ihr Abstand. Esc beendet.';
@@ -3529,6 +3541,7 @@ function setTool(t: typeof tool) {
   measureBtn.classList.toggle('on', tool === 'measure');
   if (tool !== 'fit') closeFit();
   if (tool !== 'measure') clearMeasure();
+  if (tool !== 'pocket') closePocket();
   if (!tool) updateHover(null);
   renderHint();
 }
@@ -3840,6 +3853,45 @@ document.getElementById('sectionFlip')!.addEventListener('click', () => {
 });
 document.getElementById('sectionClose')!.addEventListener('click', () => setSection(false));
 
+// ---------------------------------------------------------------- Neue Netze, alte Auswahl
+
+/**
+ * Gewählte Flächen eines Teils auf ein neues Netz übertragen: next(t) = die Dreiecke im neuen Netz, die
+ * aus Dreieck t hervorgegangen sind. Flächen ohne Nachfolger fallen weg.
+ */
+function carryFeatures(partId: number, next: (t: number) => number[]) {
+  for (const j of joints) {
+    const owner = (f: PickedFeature, side: Side) => f.on ?? (side === 'a' ? j.a : j.b);
+    const conv = (f: PickedFeature, side: Side): PickedFeature | null => {
+      const pieces = f.pieces?.map((q) => conv(q, side)).filter((q): q is PickedFeature => !!q);
+      if (owner(f, side) !== partId) return pieces ? { ...f, pieces } : f;
+      const tris = [...new Set(f.tris.flatMap(next))];
+      return tris.length ? { ...f, tris, ...(pieces ? { pieces } : {}) } : null;
+    };
+    const fa = j.fa.map((f) => conv(f, 'a')).filter((f): f is PickedFeature => !!f);
+    const fb = j.fb.map((f) => conv(f, 'b')).filter((f): f is PickedFeature => !!f);
+    if (fa.some((f, i) => f !== j.fa[i]) || fb.some((f, i) => f !== j.fb[i]) || fa.length !== j.fa.length || fb.length !== j.fb.length) {
+      if (fa.length !== j.fa.length || fb.length !== j.fb.length) markersChanged(j);
+      j.fa = fa;
+      j.fb = fb;
+      j.proposals = undefined;
+      mergePick.delete(j.id);
+    }
+  }
+}
+
+/** Herkunft (neu → alt) umkehren: je altem Dreieck die neuen. */
+function successors(source: Int32Array): (t: number) => number[] {
+  const m = new Map<number, number[]>();
+  source.forEach((s, i) => {
+    if (s < 0) return;
+    const l = m.get(s);
+    if (l) l.push(i);
+    else m.set(s, [i]);
+  });
+  return (t) => m.get(t) ?? [];
+}
+
 // ---------------------------------------------------------------- Netz reparieren
 
 /**
@@ -3885,23 +3937,7 @@ async function repairParts(list: Part[]) {
       }));
     }
     // Gewählte Flächen auf diesem Teil: neue Dreiecksnummern
-    for (const j of joints) {
-      const owner = (f: PickedFeature, side: Side) => f.on ?? (side === 'a' ? j.a : j.b);
-      const conv = (f: PickedFeature, side: Side): PickedFeature | null => {
-        const pieces = f.pieces?.map((q) => conv(q, side)).filter((q): q is PickedFeature => !!q);
-        if (owner(f, side) !== p.id) return pieces ? { ...f, pieces } : f;
-        const tris = f.tris.map((t) => r.map[t]).filter((t) => t >= 0);
-        return tris.length ? { ...f, tris, ...(pieces ? { pieces } : {}) } : null;
-      };
-      const fa = j.fa.map((f) => conv(f, 'a')).filter((f): f is PickedFeature => !!f);
-      const fb = j.fb.map((f) => conv(f, 'b')).filter((f): f is PickedFeature => !!f);
-      if (fa.some((f, i) => f !== j.fa[i]) || fb.some((f, i) => f !== j.fb[i]) || fa.length !== j.fa.length || fb.length !== j.fb.length) {
-        j.fa = fa;
-        j.fb = fb;
-        j.proposals = undefined;
-        mergePick.delete(j.id);
-      }
-    }
+    carryFeatures(p.id, (t) => (r.map[t] >= 0 ? [r.map[t]] : []));
     const fresh = replaceGeometry(p, r.positions, { paint, modifiers: p.modifiers });
     fresh.health = rep.after;
     changed++;
@@ -4086,9 +4122,13 @@ async function applyCut() {
   // Alles, was am Teil hängt, bleibt, wo es ist – die Verbindungen zum Teil selbst entfallen
   for (const q of unitMembers(p)) q.layout.copy(q.mesh.matrixWorld);
   const wasBase = baseId === p.id;
-  const lost = [p.paint ? 'Bemalung' : '', p.modifiers?.length ? 'Modifier/Text' : ''].filter(Boolean);
+  // Bemalung: die Hälften stammen Dreieck für Dreieck aus dem Teil
+  const carry = (pos: Float32Array, source: Int32Array) => (p.paint ? carryPaint(positionsOf(p), p.paint, pos, source) : { positions: pos, paint: undefined, lost: 0 });
+  const ca = carry(res.a, res.aSource);
+  const cb = carry(res.b, res.bSource);
+  const lost = [p.modifiers?.length ? 'Modifier/Text entfernt' : '', ca.lost + cb.lost ? 'Feine Bemalung an der Schnittkante entfernt' : ''].filter(Boolean);
   const color = `#${p.color.getHexString()}`;
-  const extras = { settings: p.settings, objectSettings: p.objectSettings };
+  const extras = { settings: p.settings, objectSettings: p.objectSettings, palette: p.palette };
   const geo = (pos: Float32Array) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -4098,8 +4138,8 @@ async function applyCut() {
     return g;
   };
   removePart(p.id);
-  const kept = addPart(`${p.name} (${halfName(k)})`, geo(res.a), { color, layout: W, extras });
-  const other = addPart(`${p.name} (${halfName(k.clone().negate())})`, geo(res.b), { color, layout: W, extras });
+  const kept = addPart(`${p.name} (${halfName(k)})`, geo(ca.positions), { color, layout: W, extras: { ...extras, paint: ca.paint } });
+  const other = addPart(`${p.name} (${halfName(k.clone().negate())})`, geo(cb.positions), { color, layout: W, extras: { ...extras, paint: cb.paint } });
   const dowels = res.dowels.map((d, i) => addPart(`${p.name} Dübel ${i + 1}`, geo(d), { color, layout: W }));
   if (wasBase) baseId = kept.id;
   solveAll();
@@ -4135,7 +4175,7 @@ async function applyCut() {
   fitView();
   const nc = res.connectors.length;
   const what = nc ? ` mit ${nc} ${cutConnector === 'pin' ? 'Zapfen' : nc > 1 ? 'Dübeln' : 'Dübel'} ⌀ ${mmc(res.connectors[0].diameter)} mm` : '';
-  toast(`„${p.name}“ zerschnitten${what}.${lost.length ? ` ${lost.join(' und ')} entfernt.` : ''}${res.notes.length ? ` ${res.notes.join(' ')}` : ''}`, 6000);
+  toast(`„${p.name}“ zerschnitten${what}.${lost.length ? ` ${lost.join(', ')}.` : ''}${res.notes.length ? ` ${res.notes.join(' ')}` : ''}`, 6000);
 }
 
 cutBar.querySelectorAll<HTMLElement>('[data-conn]').forEach((b) => b.addEventListener('click', () => {
@@ -4150,6 +4190,192 @@ cutHelp.addEventListener('click', (e) => {
   if (p && (e.target as HTMLElement).closest('[data-cut-repair]')) void repairParts([p]);
 });
 document.getElementById('cutCancel')!.addEventListener('click', () => setSection(false));
+
+// ---------------------------------------------------------------- Aussparungen
+
+/**
+ * Aussparung an der angeklickten Stelle: Magnet, Gewindeeinsatz, Schraube (Zylinder-/Senkkopf), Mutter
+ * oder Bohrung – senkrecht in die Fläche. Gewählte Flächen und Bemalung bleiben, wo die Aussparung sie
+ * nicht wegnimmt.
+ */
+let pocketKind: PocketKind = 'magnet';
+let pocketBusy = false;
+const pocketBar = document.getElementById('pocketBar')!;
+const pocketPreset = document.getElementById('pocketPreset') as HTMLSelectElement;
+const pocketDia = document.getElementById('pocketDia') as HTMLInputElement;
+const pocketDepth = document.getElementById('pocketDepth') as HTMLInputElement;
+const pocketHead = document.getElementById('pocketHead') as HTMLInputElement;
+const pocketSunk = document.getElementById('pocketSunk') as HTMLInputElement;
+const pocketThrough = document.getElementById('pocketThrough') as HTMLInputElement;
+const pocketGap = document.getElementById('pocketGap') as HTMLInputElement;
+const pocketHelp = document.getElementById('pocketHelp')!;
+const pocketGroup = new THREE.Group();
+pocketGroup.matrixAutoUpdate = false;
+scene.add(pocketGroup);
+let pocketTimer = 0;
+let pocketSeq = 0;
+
+const DIA_LABEL: Record<PocketKind, string> = { magnet: '⌀', insert: 'Loch ⌀', screw: 'Loch ⌀', nut: 'Schlüsselweite', hole: '⌀' };
+const DEPTH_LABEL: Record<PocketKind, string> = { magnet: 'Tiefe', insert: 'Tiefe', screw: 'Kopftiefe', nut: 'Höhe', hole: 'Tiefe' };
+
+function pickPocket(h: Hit) {
+  // Runde ebene Fläche (Zapfen, Dom): in die Mitte
+  const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
+  let point: Vec3 = h.raw;
+  let normal: Vec3 = [...topologyOf(h.part).normals.subarray(3 * h.tri, 3 * h.tri + 3)] as Vec3;
+  if (f.kind === 'plane') {
+    normal = f.normal;
+    if (f.circle) point = f.circle.center;
+  }
+  pocketPlace = { partId: h.part.id, point, normal };
+  pocketBar.hidden = false;
+  document.getElementById('pocketTitle')!.textContent = `Aussparung in „${h.part.name}“`;
+  renderPocket();
+  renderHint();
+}
+
+function closePocket() {
+  if (!pocketPlace && document.getElementById('pocketBar')!.hidden) return;
+  pocketPlace = null;
+  pocketBar.hidden = true;
+  clearPocketPreview();
+}
+
+function clearPocketPreview() {
+  for (const o of [...pocketGroup.children]) {
+    pocketGroup.remove(o);
+    (o as THREE.Mesh).geometry.dispose();
+    ((o as THREE.Mesh).material as THREE.Material).dispose();
+  }
+}
+
+/** Voreinstellungen der gewählten Art in die Felder. */
+function applyPreset() {
+  const pre = PRESETS[pocketKind][Number(pocketPreset.value)];
+  if (!pre) return;
+  const sp = pre.spec;
+  pocketDia.value = String(sp.diameter);
+  pocketDepth.value = String(+sp.depth.toFixed(2));
+  pocketGap.value = String(sp.clearance ?? 0);
+  if (pocketKind === 'screw') pocketHead.value = String(pocketSunk.checked ? COUNTERSUNK_HEAD[pre.label] ?? sp.head : sp.head);
+  pocketThrough.checked = pocketKind === 'hole' ? false : !!sp.through;
+}
+
+function renderPocket() {
+  pocketBar.querySelectorAll<HTMLElement>('[data-pkind]').forEach((b) => b.classList.toggle('on', b.dataset.pkind === pocketKind));
+  document.getElementById('pocketDiaLabel')!.textContent = DIA_LABEL[pocketKind];
+  document.getElementById('pocketDepthLabel')!.textContent = DEPTH_LABEL[pocketKind];
+  for (const el of pocketBar.querySelectorAll<HTMLElement>('[data-for]')) el.hidden = !el.dataset.for!.split(' ').includes(pocketKind);
+  document.getElementById('pocketThroughLabel')!.textContent = pocketKind === 'hole' ? 'ganz durch' : 'Schraubenloch durch';
+  schedulePocketPreview();
+}
+
+function pocketSpec(): PocketSpec {
+  const pre = PRESETS[pocketKind][Number(pocketPreset.value)];
+  return {
+    kind: pocketKind,
+    diameter: Math.max(0.5, Number(pocketDia.value) || 1),
+    depth: Math.max(0.2, Number(pocketDepth.value) || 1),
+    clearance: Math.max(0, Number(pocketGap.value) || 0),
+    head: Number(pocketHead.value) || undefined,
+    countersunk: pocketKind === 'screw' && pocketSunk.checked,
+    through: pocketThrough.checked,
+    bolt: pocketKind === 'nut' ? pre?.spec.bolt ?? Number(pocketDia.value) * 0.6 : undefined,
+  };
+}
+
+function schedulePocketPreview() {
+  clearTimeout(pocketTimer);
+  pocketTimer = window.setTimeout(() => void updatePocketPreview(), 90);
+}
+
+async function updatePocketPreview() {
+  const p = pocketPlace && getPart(pocketPlace.partId);
+  if (!p || !pocketPlace) { clearPocketPreview(); return; }
+  const seq = ++pocketSeq;
+  const place = { point: pocketPlace.point, normal: pocketPlace.normal };
+  const spec = pocketSpec();
+  let res;
+  try {
+    res = await pocketPreview(positionsOf(p), place, spec, manifoldWasm);
+  } catch {
+    return;
+  }
+  if (seq !== pocketSeq || !pocketPlace) return;
+  clearPocketPreview();
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(res.tool, 3));
+  g.computeVertexNormals();
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde';
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.55, depthTest: false }));
+  m.renderOrder = 8;
+  m.raycast = () => {};
+  pocketGroup.add(m);
+  p.mesh.updateMatrixWorld();
+  pocketGroup.matrix.copy(p.mesh.matrixWorld);
+  pocketGroup.matrixWorldNeedsUpdate = true;
+  const t = res.thickness;
+  const blind = pocketKind === 'magnet' || pocketKind === 'insert' || (pocketKind === 'hole' && !spec.through);
+  const mm = (x: number) => x.toFixed(1).replace('.', ',');
+  pocketHelp.innerHTML = [
+    Number.isFinite(t) ? `Material hier: ${mm(t)} mm.` : '',
+    blind && Number.isFinite(t) && spec.depth > t - 0.6
+      ? `<span class="warn">${spec.depth >= t ? 'Die Aussparung geht durch.' : `Hinten bleiben nur ${mm(t - spec.depth)} mm.`}</span>` : '',
+    pocketKind === 'insert' ? 'Werte für gängige Einsätze – mit dem Datenblatt abgleichen.' : '',
+    pocketKind === 'magnet' ? 'Tiefe mit 0,2 mm Zugabe; Spiel je Seite.' : '',
+  ].filter(Boolean).join(' ');
+}
+
+async function applyPocket() {
+  const p = pocketPlace && getPart(pocketPlace.partId);
+  if (!p || !pocketPlace || pocketBusy) return;
+  pocketBusy = true;
+  let r;
+  try {
+    r = await addPocket(positionsOf(p), { point: pocketPlace.point, normal: pocketPlace.normal }, pocketSpec(), manifoldWasm);
+  } catch (err) {
+    toast(err instanceof PocketError ? err.message : `Aussparung nicht möglich: ${(err as Error).message}`, 6000);
+    return;
+  } finally {
+    pocketBusy = false;
+  }
+  if (getPart(p.id) !== p) return;
+  let positions = r.positions;
+  let paint = p.paint;
+  let lost = 0;
+  if (paint) {
+    const c = carryPaint(positionsOf(p), paint, positions, r.source);
+    ({ paint, positions } = c);
+    lost = c.lost;
+  }
+  carryFeatures(p.id, successors(r.source));
+  const fresh = replaceGeometry(p, positions, { paint, modifiers: p.modifiers });
+  pocketPlace.partId = fresh.id;
+  solveAll();
+  renderAll();
+  clearPocketPreview();
+  const what = { magnet: 'Magnettasche', insert: 'Loch für den Gewindeeinsatz', screw: 'Schraubenloch', nut: 'Muttertasche', hole: 'Bohrung' }[pocketKind];
+  toast(`${what} eingesetzt.${r.notes.length ? ` ${r.notes.join(' ')}` : ''}${lost ? ` Feine Bemalung an ${lost} Dreiecken entfernt.` : ''} Nächste Stelle anklicken oder Esc.`, 6000);
+}
+
+pocketBar.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-pkind]');
+  if (!b) return;
+  pocketKind = b.dataset.pkind as PocketKind;
+  pocketPreset.innerHTML = PRESETS[pocketKind].map((pr, i) => `<option value="${i}">${pr.label}</option>`).join('');
+  pocketPreset.value = String(pocketKind === 'magnet' ? 2 : pocketKind === 'hole' ? 2 : Math.min(2, PRESETS[pocketKind].length - 1));
+  applyPreset();
+  renderPocket();
+});
+pocketPreset.addEventListener('change', () => { applyPreset(); renderPocket(); });
+pocketSunk.addEventListener('change', () => { applyPreset(); renderPocket(); });
+for (const el of [pocketDia, pocketDepth, pocketHead, pocketGap]) el.addEventListener('input', schedulePocketPreview);
+pocketThrough.addEventListener('change', schedulePocketPreview);
+document.getElementById('pocketApply')!.addEventListener('click', () => void applyPocket());
+document.getElementById('pocketClose')!.addEventListener('click', () => setTool(null));
+pocketPreset.innerHTML = PRESETS.magnet.map((pr, i) => `<option value="${i}">${pr.label}</option>`).join('');
+pocketPreset.value = '2';
+applyPreset();
 
 // ---------------------------------------------------------------- Auf Druckplattengröße zerteilen
 
@@ -4271,7 +4497,8 @@ async function applySplit() {
   for (let a = 0; a < 3; a++) for (const v of splitPlanes(box.min.getComponent(a), box.max.getComponent(a), counts[a])) planes.push({ axis: a, value: v });
   if (!planes.length) return;
   const clearance = Math.max(0, Number(splitGap.value) || 0);
-  let pieces: { positions: Float32Array; cell: number[] }[] = [{ positions: positionsOf(p), cell: [0, 0, 0] }];
+  const orig = positionsOf(p);
+  let pieces: { positions: Float32Array; cell: number[]; source: Int32Array }[] = [{ positions: orig, cell: [0, 0, 0], source: new Int32Array(orig.length / 9).map((_, i) => i) }];
   const dowels: Float32Array[] = [];
   const notes = new Set<string>();
   splitBusy = true;
@@ -4291,7 +4518,9 @@ async function applySplit() {
         for (const n of r.notes) notes.add(n);
         const up = [...piece.cell];
         up[pl.axis]++;
-        next.push({ positions: r.a, cell: piece.cell }, { positions: r.b, cell: up });
+        // Herkunft bis zum Ausgangsteil verketten (für die Bemalung)
+        const chain = (src: Int32Array) => src.map((t) => (t >= 0 ? piece.source[t] : -1));
+        next.push({ positions: r.a, cell: piece.cell, source: chain(r.aSource) }, { positions: r.b, cell: up, source: chain(r.bSource) });
         dowels.push(...r.dowels);
         done++;
       }
@@ -4321,7 +4550,10 @@ async function applySplit() {
   removePart(p.id);
   // Reihenfolge: von unten nach oben, vorne nach hinten, links nach rechts
   pieces.sort((a, b) => a.cell[2] - b.cell[2] || a.cell[1] - b.cell[1] || a.cell[0] - b.cell[0]);
-  const made = pieces.map((pc, i) => ({ part: addPart(`${p.name} ${i + 1}/${pieces.length}`, geo(pc.positions), { color, layout: W, extras }), cell: pc.cell }));
+  const made = pieces.map((pc, i) => {
+    const c = p.paint ? carryPaint(orig, p.paint, pc.positions, pc.source) : { positions: pc.positions, paint: undefined };
+    return { part: addPart(`${p.name} ${i + 1}/${pieces.length}`, geo(c.positions), { color, layout: W, extras: { ...extras, paint: c.paint, palette: p.palette } }), cell: pc.cell };
+  });
   if (wasBase) baseId = made[0].part.id;
   solveAll();
   // Auseinanderrücken; höhere Lagen kommen hinter die unteren auf die Platte
@@ -4826,6 +5058,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
     entries.push(
       { label: 'Mit dieser Fläche auf die Platte legen', run: () => layOnFace(h), title: 'Dreht die Baugruppe so, dass die angeklickte ebene Fläche unten liegt.' },
       { label: 'Passung an dieser Stelle …', run: () => { setTool('fit'); pickFit(h); }, title: 'Zapfen dünner, Bohrung weiter oder Fläche versetzen.' },
+      { label: 'Aussparung hier …', run: () => { setTool('pocket'); pickPocket(h); }, title: 'Magnet, Gewindeeinsatz, Schraube, Mutter oder Bohrung an dieser Stelle (Taste E)' },
     );
   }
   entries.push(

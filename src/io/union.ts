@@ -65,18 +65,58 @@ export function indexed(p: Float32Array): { verts: Float32Array; tris: Uint32Arr
   return { verts: Float32Array.from(verts), tris };
 }
 
-/** Geschlossener Körper aus nicht indizierten Dreiecken – oder null, wenn das Netz nicht wasserdicht ist. */
+/**
+ * Geschlossener Körper aus nicht indizierten Dreiecken – oder null, wenn das Netz nicht wasserdicht ist.
+ * Jedes Dreieck trägt seine Nummer (faceID): So lässt sich nach Schnitten und Bohrungen nachsehen, aus
+ * welchem Dreieck ein Ergebnisdreieck stammt (siehe trackedPositions).
+ */
+const originals = new WeakMap<Manifold, number>();
+/** Kennung des Ausgangskörpers für trackedPositions (−1, wenn nicht mit solidOf gebaut). */
+export const originalIdOf = (m: Manifold) => originals.get(m) ?? -1;
+
 export function solidOf(wasm: ManifoldToplevel, positions: Float32Array): Manifold | null {
   const { verts, tris } = indexed(positions);
-  const mesh = new wasm.Mesh({ numProp: 3, vertProperties: verts, triVerts: tris });
+  const faceID = new Uint32Array(tris.length / 3).map((_, i) => i);
+  const id = wasm.Manifold.reserveIDs(1);
+  const mesh = new wasm.Mesh({
+    numProp: 3, vertProperties: verts, triVerts: tris, faceID,
+    runIndex: new Uint32Array([0, tris.length]), runOriginalID: new Uint32Array([id]),
+  });
   // Fast deckungsgleiche Ränder (Nähte) schließen
   mesh.merge();
   try {
     const m = new wasm.Manifold(mesh);
-    if (!m.isEmpty()) return m;
+    if (!m.isEmpty()) {
+      originals.set(m, id);
+      return m;
+    }
     m.delete();
   } catch { /* nicht geschlossen */ }
   return null;
+}
+
+/**
+ * Nicht indizierte Dreiecke eines Ergebnisses und je Dreieck die Nummer des Dreiecks im Ausgangskörper
+ * (originalID), aus dem es stammt – −1 für neue Flächen (Bohrungen, Schnittflächen, Zapfen).
+ */
+export function trackedPositions(m: Manifold, originalID: number): { positions: Float32Array; source: Int32Array } {
+  const res = m.getMesh();
+  const np = res.numProp;
+  const n = res.triVerts.length / 3;
+  const positions = new Float32Array(n * 9);
+  for (let i = 0; i < res.triVerts.length; i++) {
+    const v = res.triVerts[i] * np;
+    positions[i * 3] = res.vertProperties[v];
+    positions[i * 3 + 1] = res.vertProperties[v + 1];
+    positions[i * 3 + 2] = res.vertProperties[v + 2];
+  }
+  const source = new Int32Array(n).fill(-1);
+  const runs = res.runOriginalID ?? new Uint32Array(0);
+  for (let r = 0; r < runs.length; r++) {
+    if (runs[r] !== originalID) continue;
+    for (let t = res.runIndex[r] / 3; t < res.runIndex[r + 1] / 3; t++) source[t] = res.faceID[t];
+  }
+  return { positions, source };
 }
 
 /** Nicht indizierte Dreiecke eines Körpers. */

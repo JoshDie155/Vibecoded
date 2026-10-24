@@ -127,3 +127,43 @@ export function paintLeaves(root: PaintNode, a: V3, b: V3, c: V3, out: (state: n
   };
   visit(root, [a, b, c]);
 }
+
+/**
+ * Bemalung auf ein neues Netz übertragen, dessen Dreiecke aus dem alten stammen (source[i] = Dreieck im
+ * alten Netz oder −1 für neue Flächen, z. B. nach einer Bohrung oder einem Schnitt). Einfarbige Dreiecke
+ * behalten ihre Farbe auch zerteilt; fein bemalte nur, wenn sie unverändert blieben – deren Ecken kommen
+ * dafür in die alte Reihenfolge (die Kodierung bezieht sich auf sie), positions wird entsprechend
+ * umgeschrieben. lost zählt Dreiecke, deren feine Bemalung nicht übertragbar war.
+ */
+export function carryPaint(
+  oldPositions: Float32Array, paint: Record<string, string[]>, positions: Float32Array, source: Int32Array,
+): { paint: Record<string, string[]>; positions: Float32Array; lost: number } {
+  const n = source.length;
+  const out = positions.slice();
+  const layers = Object.entries(paint);
+  const result: Record<string, string[]> = Object.fromEntries(layers.map(([k]) => [k, new Array<string>(n).fill('')]));
+  const same = (i: number, a: number, j: number, b: number) => Math.abs(positions[9 * i + 3 * a] - oldPositions[9 * j + 3 * b]) < 1e-4
+    && Math.abs(positions[9 * i + 3 * a + 1] - oldPositions[9 * j + 3 * b + 1]) < 1e-4
+    && Math.abs(positions[9 * i + 3 * a + 2] - oldPositions[9 * j + 3 * b + 2]) < 1e-4;
+  let lost = 0;
+  for (let i = 0; i < n; i++) {
+    const j = source[i];
+    if (j < 0) continue;
+    const fine = layers.some(([, codes]) => codes[j] && !('state' in (decodePaint(codes[j]) ?? { state: 0 })));
+    let rot = -1;
+    if (fine) {
+      // Unverändert? Dann Ecke k des neuen = Ecke (k + r) des alten
+      for (let r = 0; r < 3 && rot < 0; r++) if (same(i, 0, j, r) && same(i, 1, j, (1 + r) % 3) && same(i, 2, j, (2 + r) % 3)) rot = r;
+      if (rot > 0) for (let k = 0; k < 3; k++) for (let c = 0; c < 3; c++) out[9 * i + 3 * ((k + rot) % 3) + c] = positions[9 * i + 3 * k + c];
+      if (rot < 0) lost++;
+    }
+    for (const [k, codes] of layers) {
+      const code = codes[j];
+      if (!code) continue;
+      const node = decodePaint(code);
+      if (node && 'state' in node) result[k][i] = code;
+      else if (rot >= 0) result[k][i] = code;
+    }
+  }
+  return { paint: result, positions: out, lost };
+}
