@@ -16,6 +16,7 @@ import { type PocketPlace, type PocketResult, type PocketSpec, addPocket } from 
 import { type BoolInput, type BoolOp, type BoolResult, booleanParts } from '../io/boolean';
 import { type UnionInput, type UnionResult, unionParts } from '../io/union';
 import { type ToleranceOptions, makeToleranceTest } from '../io/testpiece';
+import { type SimplifyResult, simplifyCounts, simplifyMesh } from '../io/simplify';
 
 /** OpenCascade einmal je Thread starten. */
 let occt: ReturnType<typeof occtImport> | null = null;
@@ -96,6 +97,14 @@ export const TASKS = {
   async toleranceTest(a: { opts: ToleranceOptions; wasm: string }): Promise<TaskResult<{ plate: Float32Array; pin: Float32Array }>> {
     const r = await makeToleranceTest(a.opts, a.wasm);
     return { result: r, transfer: buffers([r.plate, r.pin]) };
+  },
+  /** Netz vereinfachen; groups: Grenzen, die bleiben sollen (Bemalung, gewählte Flächen). */
+  async simplifyMesh(a: { positions: Float32Array; tolerance: number; groups?: Uint32Array; wasm: string }): Promise<TaskResult<SimplifyResult>> {
+    const r = await simplifyMesh(a.positions, a.tolerance, a.groups, a.wasm);
+    return { result: r, transfer: buffers([r.positions, r.source]) };
+  },
+  async simplifyCounts(a: { positions: Float32Array; tolerances: number[]; groups?: Uint32Array; wasm: string }): Promise<TaskResult<number[]>> {
+    return { result: await simplifyCounts(a.positions, a.tolerances, a.groups, a.wasm) };
   },
   packProject(a: { data: ProjectData; blobs: Blobs }): TaskResult<Uint8Array> {
     const r = packProject(a.data, a.blobs);

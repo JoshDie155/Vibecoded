@@ -193,14 +193,14 @@ button.icon:hover { color: var(--err); }
 button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
-#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar {
+#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar {
   position: absolute; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   max-width: calc(100% - 20px);
   background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
 }
 #toolbar { top: 10px; }
 /* Platz für den Ansichtswürfel oben rechts */
-#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar { max-width: calc(100% - 130px); }
+#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { max-width: calc(100% - 130px); }
 #viewCube { position: absolute; top: 6px; right: 6px; width: 108px; height: 108px; z-index: 3; user-select: none; -webkit-user-select: none; touch-action: none; }
 #viewCube .cube { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; }
 #viewCube .face {
@@ -217,7 +217,7 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 }
 #viewCube #viewHome:hover { color: var(--accent); border-color: var(--accent); }
 /* Unter der Werkzeugleiste – auch wenn sie in zwei Zeilen umbricht (--bar-top setzt main.ts) */
-#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar { top: var(--bar-top, 58px); font-size: 12.5px; }
+#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { top: var(--bar-top, 58px); font-size: 12.5px; }
 #anaBar input[type='number'] { width: 54px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #anaBar .help { margin: 0; flex-basis: 100%; }
 #anaBar .chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
@@ -242,6 +242,8 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #status button.linkish { pointer-events: auto; font: inherit; padding: 0 4px; border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; }
 #cutBar input[type='number'] { width: 58px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #cutBar select { font: inherit; }
+#simpBar select { font: inherit; }
+#simpBar .help { margin: 0; flex-basis: 100%; }
 #cutBar .help { margin: 0; flex-basis: 100%; }
 #scaleBar input[type='number'] { width: 64px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #scaleBar .dims input[type='number'] { width: 58px; }

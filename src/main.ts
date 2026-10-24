@@ -32,7 +32,7 @@ import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
 import { overhangs, pickTriangles, thinWalls } from './math/printcheck';
 import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, type PocketSpec, pocketPreview } from './io/pocket';
-import { carryPaint } from './io/paint';
+import { carryPaint, decodePaint } from './io/paint';
 import { clearanceLabel } from './io/testpiece';
 import type { BoolOp } from './io/boolean';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
@@ -2895,6 +2895,7 @@ window.addEventListener('keydown', (e) => {
   } else if (scaleTarget && k === 'escape') closeScale();
   else if (cutTarget && k === 'escape') setSection(false);
   else if (splitTarget && k === 'escape') closeSplit();
+  else if (simpTarget && k === 'escape') closeSimplify();
   else if (!tolBar.hidden && k === 'escape') tolBar.hidden = true;
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
@@ -4492,6 +4493,186 @@ async function repairParts(list: Part[]) {
   if (cutTarget && list.some((q) => q.id === cutTarget!.partId)) scheduleCutPreview();
 }
 
+/** Millimeter mit Komma, höchstens zwei Nachkommastellen. */
+const mmc = (x: number) => String(+x.toFixed(2)).replace('.', ',');
+
+// ---------------------------------------------------------------- Netz vereinfachen
+
+/**
+ * Netz vereinfachen (im Hintergrund): weniger Dreiecke – etwa für Scans oder fein modellierte Figuren,
+ * die PartJoin und den Slicer bremsen. Die Form weicht höchstens um die gewählte Abweichung ab. Bemalung
+ * und gewählte Flächen bleiben genau erhalten: ihre Ränder bleiben stehen, fein bemalte Dreiecke unverändert.
+ */
+const SIMPLIFY_TOLS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5];
+let simpTarget: { ids: number[]; counts?: number[]; open: string[] } | null = null;
+let simpBusy = false;
+const simpBar = document.getElementById('simpBar')!;
+const simpTol = document.getElementById('simpTol') as HTMLSelectElement;
+const simpHelp = document.getElementById('simpHelp')!;
+const triCount = (p: Part) => positionsOf(p).length / 9;
+const countText = (n: number) => n.toLocaleString('de-DE');
+simpTol.innerHTML = SIMPLIFY_TOLS.map((t) => `<option value="${t}">${mmc(t)} mm</option>`).join('');
+simpTol.value = '0.05';
+
+/** Dreiecke der gewählten Flächen, die auf diesem Teil liegen (je Fläche eine Liste). */
+function featureTrisOf(partId: number): number[][] {
+  const out: number[][] = [];
+  const visit = (f: PickedFeature, owner: number | null) => {
+    if ((f.on ?? owner) === partId && f.tris.length) out.push(f.tris);
+    for (const q of f.pieces ?? []) visit(q, owner);
+  };
+  for (const j of joints) {
+    for (const f of j.fa) visit(f, j.a);
+    for (const f of j.fb) visit(f, j.b);
+  }
+  return out;
+}
+
+/** Gruppe je Dreieck: gleiche Bemalung und dieselben gewählten Flächen – fein bemalte Dreiecke einzeln. */
+function simplifyGroups(p: Part): Uint32Array | undefined {
+  const feats = featureTrisOf(p.id);
+  const layers = p.paint ? Object.values(p.paint) : [];
+  if (!feats.length && !layers.some((codes) => codes.some(Boolean))) return undefined;
+  const n = triCount(p);
+  const member: string[] = new Array(n).fill('');
+  feats.forEach((tris, k) => { for (const t of tris) member[t] += `${k},`; });
+  const uniform = new Map<string, boolean>();
+  const isUniform = (c: string) => {
+    let u = uniform.get(c);
+    if (u === undefined) {
+      const node = decodePaint(c);
+      uniform.set(c, (u = !!node && 'state' in node));
+    }
+    return u;
+  };
+  const ids = new Map<string, number>();
+  const out = new Uint32Array(n);
+  for (let t = 0; t < n; t++) {
+    let key = member[t];
+    for (const codes of layers) {
+      const c = codes[t];
+      key += !c ? '|' : isUniform(c) ? `|${c}` : `|#${t}`;
+    }
+    let id = ids.get(key);
+    if (id === undefined) ids.set(key, (id = ids.size));
+    out[t] = id;
+  }
+  return out;
+}
+
+function openSimplify(list: Part[]) {
+  if (!list.length) return;
+  setTool(null);
+  closeScale();
+  closeSplit();
+  if (section) setSection(false);
+  if (gizmoTarget) closeGizmo();
+  simpTarget = { ids: list.map((q) => q.id), open: [] };
+  simpBar.hidden = false;
+  renderSimplify();
+  void countSimplify();
+}
+
+function closeSimplify() {
+  simpTarget = null;
+  simpBar.hidden = true;
+}
+
+const simpParts = () => (simpTarget?.ids ?? []).map(getPart).filter((q): q is Part => !!q);
+
+function renderSimplify() {
+  const list = simpParts();
+  if (!simpTarget || !list.length) { closeSimplify(); return; }
+  const total = list.reduce((s, q) => s + triCount(q), 0);
+  document.getElementById('simpTitle')!.textContent = list.length > 1 ? `${list.length} Netze vereinfachen` : `„${list[0].name}“ vereinfachen`;
+  const c = simpTarget.counts;
+  simpTol.querySelectorAll('option').forEach((o, i) => {
+    o.textContent = `${mmc(SIMPLIFY_TOLS[i])} mm${c ? ` – ${countText(c[i])} Dreiecke (−${Math.max(0, Math.round((1 - c[i] / total) * 100))} %)` : ''}`;
+  });
+  const keep = list.some((q) => simplifyGroups(q));
+  simpHelp.textContent = [
+    `Jetzt ${countText(total)} Dreiecke.`,
+    c ? 'Die Form weicht höchstens um die gewählte Abweichung ab – 0,05 mm sieht man im Druck nicht; für enge Passungen (Bohrungen, Zapfen) lieber 0,01–0,02 mm.' : 'Berechne, wie viele übrig bleiben …',
+    keep ? 'Bemalung und gewählte Flächen bleiben erhalten.' : '',
+    simpTarget.open.length ? `Nicht geschlossen und deshalb ausgelassen: ${simpTarget.open.join(', ')} – erst „Netz reparieren“.` : '',
+  ].filter(Boolean).join(' ');
+  (document.getElementById('simpApply') as HTMLButtonElement).disabled = simpBusy || simpTarget.open.length === list.length;
+}
+
+/** Dreieckszahl je Abweichung (für die Auswahl), alle Teile zusammen. */
+async function countSimplify() {
+  const t = simpTarget;
+  if (!t) return;
+  const sums = SIMPLIFY_TOLS.map(() => 0);
+  const open: string[] = [];
+  for (const p of simpParts()) {
+    try {
+      const c = await compute('simplifyCounts', { positions: positionsOf(p), tolerances: SIMPLIFY_TOLS, groups: simplifyGroups(p), wasm: manifoldUrl });
+      c.forEach((n, i) => (sums[i] += n));
+    } catch (err) {
+      if (!userError(err, 'SimplifyError')) { if (simpTarget === t) simpHelp.textContent = `Vereinfachen nicht möglich: ${(err as Error).message}`; return; }
+      open.push(`„${p.name}“`);
+      // Bleibt, wie es ist
+      SIMPLIFY_TOLS.forEach((_, i) => (sums[i] += triCount(p)));
+    }
+  }
+  if (simpTarget !== t) return;
+  t.counts = sums;
+  t.open = open;
+  renderSimplify();
+}
+
+async function applySimplify() {
+  const t = simpTarget;
+  if (!t || simpBusy) return;
+  const tol = Number(simpTol.value);
+  const list = simpParts();
+  simpBusy = true;
+  renderSimplify();
+  toast(list.length > 1 ? `Vereinfache ${list.length} Netze …` : `Vereinfache „${list[0].name}“ …`, 30000);
+  const notes: string[] = [];
+  let before = 0;
+  let after = 0;
+  let changed = 0;
+  let lost = 0;
+  try {
+    for (const p of list) {
+      let r;
+      try {
+        r = await compute('simplifyMesh', { positions: positionsOf(p), tolerance: tol, groups: simplifyGroups(p), wasm: manifoldUrl });
+      } catch (err) {
+        notes.push(userError(err, 'SimplifyError') ? `„${p.name}“ ist nicht geschlossen – erst „Netz reparieren“.` : `„${p.name}“: ${(err as Error).message}`);
+        continue;
+      }
+      if (getPart(p.id) !== p) continue;
+      if (r.after >= r.before) { notes.push(`„${p.name}“ lässt sich so nicht weiter vereinfachen.`); continue; }
+      const c = p.paint ? carryPaint(positionsOf(p), p.paint, r.positions, r.source) : { positions: r.positions, paint: undefined, lost: 0 };
+      lost += c.lost;
+      carryFeatures(p.id, successors(r.source));
+      const fresh = replaceGeometry(p, c.positions, { paint: c.paint, modifiers: p.modifiers });
+      checkHealth(fresh);
+      before += r.before;
+      after += r.after;
+      changed++;
+    }
+  } finally {
+    simpBusy = false;
+  }
+  closeSimplify();
+  if (changed) {
+    solveAll();
+    renderAll();
+  }
+  toast([
+    changed ? `${changed > 1 ? `${changed} Netze` : 'Netz'} vereinfacht: ${countText(before)} → ${countText(after)} Dreiecke (−${Math.round((1 - after / before) * 100)} %), Abweichung höchstens ${mmc(tol)} mm.` : '',
+    lost ? `Feine Bemalung an ${lost} Dreieck${lost > 1 ? 'en' : ''} zu je einer Farbe vereinfacht.` : '',
+    ...notes,
+  ].filter(Boolean).join(' '), 7000);
+}
+
+document.getElementById('simpApply')!.addEventListener('click', () => void applySimplify());
+document.getElementById('simpCancel')!.addEventListener('click', closeSimplify);
+
 // ---------------------------------------------------------------- Zerschneiden
 
 /**
@@ -4517,6 +4698,7 @@ let cutBusy = false;
 function openCut(p: Part) {
   setTool(null);
   closeScale();
+  closeSimplify();
   if (gizmoTarget) closeGizmo();
   cutTarget = { partId: p.id };
   document.getElementById('cutTitle')!.textContent = `„${p.name}“ zerschneiden`;
@@ -4581,7 +4763,6 @@ function scheduleCutPreview() {
   cutTimer = window.setTimeout(() => void updateCutPreview(), 180);
 }
 
-const mmc = (x: number) => String(+x.toFixed(2)).replace('.', ',');
 
 async function updateCutPreview() {
   const p = cutTarget && getPart(cutTarget.partId);
@@ -4681,7 +4862,7 @@ async function applyCut() {
   const carry = (pos: Float32Array, source: Int32Array) => (p.paint ? carryPaint(positionsOf(p), p.paint, pos, source) : { positions: pos, paint: undefined, lost: 0 });
   const ca = carry(res.a, res.aSource);
   const cb = carry(res.b, res.bSource);
-  const lost = [p.modifiers?.length ? 'Modifier/Text entfernt' : '', ca.lost + cb.lost ? 'Feine Bemalung an der Schnittkante entfernt' : ''].filter(Boolean);
+  const lost = [p.modifiers?.length ? 'Modifier/Text entfernt' : '', ca.lost + cb.lost ? 'Feine Bemalung an der Schnittkante zu je einer Farbe vereinfacht' : ''].filter(Boolean);
   const color = `#${p.color.getHexString()}`;
   const extras = { settings: p.settings, objectSettings: p.objectSettings, palette: p.palette };
   const geo = (pos: Float32Array) => {
@@ -4913,7 +5094,7 @@ async function applyPocket() {
   renderAll();
   clearPocketPreview();
   const what = { magnet: 'Magnettasche', insert: 'Loch für den Gewindeeinsatz', screw: 'Schraubenloch', nut: 'Muttertasche', hole: 'Bohrung' }[pocketKind];
-  toast(`${what} eingesetzt.${r.notes.length ? ` ${r.notes.join(' ')}` : ''}${lost ? ` Feine Bemalung an ${lost} Dreiecken entfernt.` : ''} Nächste Stelle anklicken oder Esc.`, 6000);
+  toast(`${what} eingesetzt.${r.notes.length ? ` ${r.notes.join(' ')}` : ''}${lost ? ` Feine Bemalung an ${lost} Dreiecken zu je einer Farbe vereinfacht.` : ''} Nächste Stelle anklicken oder Esc.`, 6000);
 }
 
 pocketBar.addEventListener('click', (e) => {
@@ -4964,6 +5145,7 @@ function fitsBed(size: THREE.Vector3, margin = 0): boolean {
 function openSplit(p: Part) {
   setTool(null);
   closeScale();
+  closeSimplify();
   if (section) setSection(false);
   if (gizmoTarget) closeGizmo();
   const printer = currentPrinter();
@@ -5227,7 +5409,7 @@ async function combineParts(target: Part, others: Part[], op: BoolOp) {
   toast((op === 'union' ? `${names} mit „${target.name}“ vereinigt.`
     : op === 'subtract' ? `${names} aus „${target.name}“ ausgeschnitten – ${others.length > 1 ? 'die Werkzeuge sind' : 'das Werkzeug ist'} ausgeblendet.`
     : `Nur die Überschneidung von „${target.name}“ mit ${names} bleibt – die anderen sind ausgeblendet.`)
-    + (lost ? ` Feine Bemalung an ${lost} Dreiecken entfernt.` : '') + (otherPaint ? ' Die Bemalung der anderen Teile entfällt.' : ''), 7000);
+    + (lost ? ` Feine Bemalung an ${lost} Dreiecken zu je einer Farbe vereinfacht.` : '') + (otherPaint ? ' Die Bemalung der anderen Teile entfällt.' : ''), 7000);
 }
 
 /** Einträge fürs Verrechnen der Auswahl (Ziel: zuletzt angeklicktes Teil, sonst das erste). */
@@ -5426,6 +5608,7 @@ function scaleMembers(): Part[] {
 function openScale(target: NonNullable<typeof scaleTarget>) {
   if (!('sel' in target) && !getPart(target.partId)) return;
   setTool(null);
+  closeSimplify();
   scaleTarget = target;
   scaleBar.hidden = false;
   renderScaleBar();
@@ -5796,6 +5979,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
     { label: section && !cutTarget ? 'Hier zerschneiden …' : 'Zerschneiden …', run: () => openCut(p), title: 'In zwei Teile schneiden, auf Wunsch mit Zapfen oder Dübeln zum Zusammenstecken' },
     ...(fitsBed(partBox(p).getSize(new THREE.Vector3())) ? [] : [{ label: 'Auf Druckplattengröße zerteilen …', run: () => openSplit(p), title: `Zu groß für den ${currentPrinter().label}: in Stücke teilen, die auf die Platte passen` }]),
     { label: p.health && !p.health.closed ? 'Netz reparieren ⚠' : 'Netz prüfen und reparieren', run: () => void repairParts([p]), title: p.health ? `Netz: ${healthText(p.health)}` : 'Löcher schließen, verdrehte Flächen umdrehen, Duplikate entfernen' },
+    { label: 'Netz vereinfachen …', run: () => openSimplify([p]), title: `${countText(triCount(p))} Dreiecke – weniger machen PartJoin und den Slicer schneller; die Form weicht höchstens um die gewählte Abweichung ab` },
     { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
   );
   if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });
@@ -5824,6 +6008,7 @@ function selectionMenu(x: number, y: number) {
     { label: 'Farbe für alle …', run: () => pickColor(list, x, y) },
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ sel: list.map((q) => q.id) }) },
     { label: 'Netze reparieren', run: () => void repairParts(list) },
+    { label: 'Netze vereinfachen …', run: () => openSimplify(list) },
     'sep',
     ...boolEntries(list),
     'sep',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodePaint, encodePaint, paintLeaves, paintStates, remapPaint } from '../src/io/paint';
+import { carryPaint, decodePaint, encodePaint, paintLeaves, paintStates, remapPaint } from '../src/io/paint';
 
 // Zeichenketten aus einem echten Bambu-Studio-Projekt (Farbbemalung und Fuzzy-Skin-Bemalung)
 const REAL = ['4', '8', '0C', '1C', '400A', '400200A', '40446400A200A', '000400344000344043303', '00004A2', '44440AA', '40446405A', '0400606'];
@@ -50,5 +50,30 @@ describe('Bemalung (TriangleSelector-Kodierung)', () => {
     const leaves: number[][][] = [];
     paintLeaves({ split: 1, special: 0, children: [{ state: 1 }, { state: 2 }] }, [0, 0, 0], [4, 0, 0], [0, 4, 0], (_, a, b, c) => leaves.push([a, b, c]));
     expect(leaves).toEqual([[[0, 0, 0], [4, 0, 0], [2, 2, 0]], [[2, 2, 0], [0, 4, 0], [0, 0, 0]]]);
+  });
+});
+
+describe('carryPaint: geteilte fein bemalte Dreiecke', () => {
+  // Ein Dreieck, links Filament 1, rechts Filament 2 (geteilt an der Mitte der Seite B–C)
+  const old = new Float32Array([0, 0, 0, 4, 0, 0, 0, 4, 0]);
+  const code = encodePaint({ split: 1, special: 0, children: [{ state: 1 }, { state: 2 }] });
+
+  it('unverändert: feine Bemalung bleibt, auch mit gedrehten Ecken', () => {
+    const turned = new Float32Array([4, 0, 0, 0, 4, 0, 0, 0, 0]);
+    const r = carryPaint(old, { paint_color: [code] }, turned, new Int32Array([0]));
+    expect(r.paint.paint_color[0]).toBe(code);
+    expect(Array.from(r.positions)).toEqual(Array.from(old));
+    expect(r.lost).toBe(0);
+  });
+
+  it('geteilt: jedes Stück bekommt die Farbe, die an seiner Stelle lag', () => {
+    // Stücke A–B–m und m–C–A (m = Mitte von B–C)
+    const pieces = new Float32Array([0, 0, 0, 4, 0, 0, 2, 2, 0, 2, 2, 0, 0, 4, 0, 0, 0, 0]);
+    const r = carryPaint(old, { paint_color: [code] }, pieces, new Int32Array([0, 0]));
+    expect(r.paint.paint_color.map((c) => decodePaint(c))).toEqual([{ state: 1 }, { state: 2 }]);
+    expect(r.lost).toBe(2);
+    // Ein kleines Stück ganz in der rechten Hälfte
+    const small = new Float32Array([0.2, 3, 0, 0.2, 3.5, 0, 0.5, 3.2, 0]);
+    expect(decodePaint(carryPaint(old, { paint_color: [code] }, small, new Int32Array([0])).paint.paint_color[0])).toEqual({ state: 2 });
   });
 });

@@ -149,6 +149,14 @@ Innenwände, gleicht den Umlaufsinn an, dreht nach innen zeigende Netze nach au�
 (ebene Ränder sauber abgetragen, verwinkelte mit einem Fächer). Gewählte Flächen und Bemalung bleiben
 erhalten. Zerschneiden und Vereinigen brauchen ein geschlossenes Netz – beim Zerschneiden gibt es dafür
 direkt einen Knopf. Zusammengefallene Dreiecke ohne Fläche gelten nicht als Fehler.
+
+**Netz vereinfachen** (Rechtsklick, auch für mehrere ausgewählte Teile): weniger Dreiecke – etwa für Scans
+oder fein modellierte Figuren, die PartJoin und den Slicer bremsen. Man wählt, wie weit die Oberfläche
+höchstens abweichen darf (0,01 bis 0,5 mm); die Auswahl zeigt für jede Stufe, wie viele Dreiecke übrig
+bleiben. 0,05 mm sieht man im Druck nicht, für enge Passungen lieber 0,01–0,02 mm. Bemalung und gewählte
+Flächen bleiben genau erhalten (ihre Ränder bleiben stehen, fein bemalte Dreiecke unverändert; teilt die
+Rechnung ausnahmsweise eines, bekommt jedes Stück die Farbe an seiner Stelle). Braucht ein geschlossenes
+Netz; Strg+Z macht es rückgängig.
 **Toleranz-Test** (links unter den Beispielen): erzeugt eine Platte mit Löchern in steigendem Spiel (0,1 bis
 0,4 mm, beschriftet) und einen Zapfen mit Griff – beides drucken, den Zapfen der Reihe nach in die Löcher
 stecken; das erste Loch, in das er ohne Gewalt ganz hineingeht, nennt das passende Spiel für deinen Drucker.

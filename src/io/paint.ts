@@ -128,12 +128,50 @@ export function paintLeaves(root: PaintNode, a: V3, b: V3, c: V3, out: (state: n
   visit(root, [a, b, c]);
 }
 
+/** Kleinster Schwerpunktanteil von p im Dreieck x, y, z (in dessen Ebene; ≥ 0 heißt: liegt darin). */
+function insideness(p: V3, x: V3, y: V3, z: V3): number {
+  const v0 = [y[0] - x[0], y[1] - x[1], y[2] - x[2]];
+  const v1 = [z[0] - x[0], z[1] - x[1], z[2] - x[2]];
+  const v2 = [p[0] - x[0], p[1] - x[1], p[2] - x[2]];
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const d00 = dot(v0, v0), d01 = dot(v0, v1), d11 = dot(v1, v1), d20 = dot(v2, v0), d21 = dot(v2, v1);
+  const den = d00 * d11 - d01 * d01;
+  if (!(Math.abs(den) > 1e-30)) return -Infinity;
+  const v = (d11 * d20 - d01 * d21) / den;
+  const w = (d00 * d21 - d01 * d20) / den;
+  return Math.min(1 - v - w, v, w);
+}
+
+/**
+ * Häufigster Zustand einer fein bemalten Fläche (Dreieck a, b, c) auf dem Stück p0, p1, p2, das in ihr
+ * liegt – abgelesen an einigen Punkten des Stücks.
+ */
+export function paintStateOn(root: PaintNode, a: V3, b: V3, c: V3, p0: V3, p1: V3, p2: V3): number {
+  const leaves: { state: number; v: [V3, V3, V3] }[] = [];
+  paintLeaves(root, a, b, c, (state, x, y, z) => leaves.push({ state, v: [x, y, z] }));
+  const at = (u: number, v: number, w: number): V3 => [0, 1, 2].map((k) => u * p0[k] + v * p1[k] + w * p2[k]) as V3;
+  const samples = [at(1 / 3, 1 / 3, 1 / 3), at(2 / 3, 1 / 6, 1 / 6), at(1 / 6, 2 / 3, 1 / 6), at(1 / 6, 1 / 6, 2 / 3), at(0.5, 0.5, 0), at(0, 0.5, 0.5), at(0.5, 0, 0.5)];
+  const votes = new Map<number, number>();
+  samples.forEach((q, i) => {
+    let best = -Infinity;
+    let state = 0;
+    for (const l of leaves) {
+      const w = insideness(q, l.v[0], l.v[1], l.v[2]);
+      if (w > best) { best = w; state = l.state; }
+    }
+    // Mitte zählt doppelt (entscheidet bei Gleichstand)
+    votes.set(state, (votes.get(state) ?? 0) + (i === 0 ? 2 : 1));
+  });
+  return [...votes].sort((x, y) => y[1] - x[1])[0][0];
+}
+
 /**
  * Bemalung auf ein neues Netz übertragen, dessen Dreiecke aus dem alten stammen (source[i] = Dreieck im
  * alten Netz oder −1 für neue Flächen, z. B. nach einer Bohrung oder einem Schnitt). Einfarbige Dreiecke
- * behalten ihre Farbe auch zerteilt; fein bemalte nur, wenn sie unverändert blieben – deren Ecken kommen
- * dafür in die alte Reihenfolge (die Kodierung bezieht sich auf sie), positions wird entsprechend
- * umgeschrieben. lost zählt Dreiecke, deren feine Bemalung nicht übertragbar war.
+ * behalten ihre Farbe auch zerteilt; fein bemalte bleiben fein, wenn sie unverändert blieben – deren Ecken
+ * kommen dafür in die alte Reihenfolge (die Kodierung bezieht sich auf sie), positions wird entsprechend
+ * umgeschrieben. Geteilte oder veränderte fein bemalte Dreiecke bekommen die Farbe, die an ihrer Stelle lag.
+ * lost zählt Dreiecke, deren feine Bemalung so vereinfacht wurde.
  */
 export function carryPaint(
   oldPositions: Float32Array, paint: Record<string, string[]>, positions: Float32Array, source: Int32Array,
@@ -161,8 +199,12 @@ export function carryPaint(
       const code = codes[j];
       if (!code) continue;
       const node = decodePaint(code);
-      if (node && 'state' in node) result[k][i] = code;
-      else if (rot >= 0) result[k][i] = code;
+      if (!node) continue;
+      if ('state' in node || rot >= 0) result[k][i] = code;
+      else {
+        const v = (arr: Float32Array, t: number, c: number): V3 => [arr[9 * t + 3 * c], arr[9 * t + 3 * c + 1], arr[9 * t + 3 * c + 2]];
+        result[k][i] = encodePaint({ state: paintStateOn(node, v(oldPositions, j, 0), v(oldPositions, j, 1), v(oldPositions, j, 2), v(positions, i, 0), v(positions, i, 1), v(positions, i, 2)) });
+      }
     }
   }
   return { paint: result, positions: out, lost };
