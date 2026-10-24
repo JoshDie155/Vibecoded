@@ -51,7 +51,9 @@ export interface CutResult {
   notes: string[];
 }
 
-export class CutError extends Error {}
+export class CutError extends Error {
+  name = 'CutError';
+}
 
 /** Material, das um eine Bohrung mindestens stehen bleibt (mm). */
 const WALL = 1.2;
@@ -150,12 +152,16 @@ function spots(inset: CrossSection, k: number): [number, number][][] {
   return out;
 }
 
-/** Körper des zuletzt geschnittenen bzw. angesehenen Netzes – die Vorschau fragt bei jedem Schieben. */
-let cached: { positions: Float32Array; solid: Manifold | null } | null = null;
-function solidFor(wasm: ManifoldToplevel, positions: Float32Array): Manifold | null {
-  if (cached?.positions !== positions) {
+/**
+ * Körper des zuletzt geschnittenen bzw. angesehenen Netzes – die Vorschau fragt bei jedem Schieben.
+ * key: Kennung des Netzes, wenn es jedes Mal als Kopie ankommt (Hintergrund-Thread).
+ */
+let cached: { id: Float32Array | string; solid: Manifold | null } | null = null;
+function solidFor(wasm: ManifoldToplevel, positions: Float32Array, key?: string): Manifold | null {
+  const id = key ?? positions;
+  if (cached?.id !== id) {
     cached?.solid?.delete();
-    cached = { positions, solid: solidOf(wasm, positions) };
+    cached = { id, solid: solidOf(wasm, positions) };
   }
   return cached.solid;
 }
@@ -321,9 +327,9 @@ function planDovetail(wasm: ManifoldToplevel, solid: Manifold, positions: Float3
 }
 
 /** Nur die Lage der Verbinder (Vorschau), ohne zu schneiden. */
-export async function planConnectors(positions: Float32Array, opts: CutOptions, wasmUrl?: string): Promise<{ connectors: Placed[]; notes: string[]; closed: boolean; shape?: Float32Array }> {
+export async function planConnectors(positions: Float32Array, opts: CutOptions, wasmUrl?: string, key?: string): Promise<{ connectors: Placed[]; notes: string[]; closed: boolean; shape?: Float32Array }> {
   const wasm = await loadManifold(wasmUrl);
-  const solid = solidFor(wasm, positions);
+  const solid = solidFor(wasm, positions, key);
   if (!solid) return { connectors: [], notes: [], closed: false };
   const live: { delete(): void }[] = [];
   const keep = <T extends { delete(): void }>(x: T): T => {
@@ -344,13 +350,13 @@ export async function planConnectors(positions: Float32Array, opts: CutOptions, 
   }
 }
 
-export async function cutMesh(positions: Float32Array, opts: CutOptions, wasmUrl?: string): Promise<CutResult> {
+export async function cutMesh(positions: Float32Array, opts: CutOptions, wasmUrl?: string, key?: string): Promise<CutResult> {
   const wasm = await loadManifold(wasmUrl);
-  return cutWith(wasm, positions, opts);
+  return cutWith(wasm, positions, opts, key);
 }
 
-export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: CutOptions): CutResult {
-  const solid = solidFor(wasm, positions);
+export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: CutOptions, key?: string): CutResult {
+  const solid = solidFor(wasm, positions, key);
   if (!solid) throw new CutError('Das Teil ist kein geschlossener Körper (nicht wasserdicht) – so lässt es sich nicht zerschneiden.');
   const live: { delete(): void }[] = [];
   const keep = <T extends { delete(): void }>(x: T): T => {

@@ -21,7 +21,9 @@ export interface BoolResult {
   source: Int32Array;
 }
 
-export class BoolError extends Error {}
+export class BoolError extends Error {
+  name = 'BoolError';
+}
 
 /** target ⊕ others: Vereinigung, Differenz (target − others) oder Schnittmenge. */
 export async function booleanParts(target: BoolInput, others: BoolInput[], op: BoolOp, wasmUrl?: string): Promise<BoolResult> {

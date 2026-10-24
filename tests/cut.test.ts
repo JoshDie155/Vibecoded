@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { CutError, cutMesh } from '../src/io/cut';
+import { CutError, cutMesh, planConnectors, releaseCut } from '../src/io/cut';
 import { box, transformPositions } from './helpers/meshes';
 
 /** Volumen eines geschlossenen Netzes (Divergenzsatz). */
@@ -94,6 +94,24 @@ describe('Zerschneiden', () => {
     const open = box(10, 10, 10).slice(0, -18); // eine Seite fehlt zur Hälfte
     await expect(cutMesh(open, { normal: [0, 0, 1], offset: 5, connector: 'none' })).rejects.toThrow(CutError);
     await expect(cutMesh(box(10, 10, 10), { normal: [0, 0, 1], offset: 50, connector: 'none' })).rejects.toThrow('geht nicht durch');
+    // Die Art des Fehlers kommt auch aus dem Hintergrund-Thread an (dort zählt nur der Name)
+    await expect(cutMesh(open, { normal: [0, 0, 1], offset: 5, connector: 'none' })).rejects.toMatchObject({ name: 'CutError' });
+  });
+
+  it('hält den Körper je Netz-Kennung zwischen Vorschau und Schnitt (Kopien aus dem Hintergrund-Thread)', async () => {
+    const solid = box(20, 20, 20);
+    const opts = { normal: [0, 0, 1] as [number, number, number], offset: 10, connector: 'dowel' as const, diameter: 5 };
+    const preview = await planConnectors(solid.slice(), opts, undefined, 'netz-a');
+    const cut = await cutMesh(solid.slice(), opts, undefined, 'netz-a');
+    expect(cut.connectors.length).toBe(preview.connectors.length);
+    releaseCut();
+    const fresh = await cutMesh(solid, opts);
+    expect(volume(cut.a)).toBeCloseTo(volume(fresh.a), 6);
+    expect(volume(cut.b)).toBeCloseTo(volume(fresh.b), 6);
+    // Andere Kennung: neues Netz, auch wenn die alte Kopie noch gemerkt ist
+    const other = await cutMesh(box(20, 20, 40), { ...opts, offset: 30 }, undefined, 'netz-b');
+    expect(Math.max(...Array.from(other.b).filter((_, i) => i % 3 === 2))).toBeCloseTo(40, 4);
+    releaseCut();
   });
 });
 

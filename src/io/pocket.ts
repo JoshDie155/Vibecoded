@@ -125,7 +125,9 @@ export interface PocketResult {
   notes: string[];
 }
 
-export class PocketError extends Error {}
+export class PocketError extends Error {
+  name = 'PocketError';
+}
 
 export async function addPocket(positions: Float32Array, place: PocketPlace, spec: PocketSpec, wasmUrl?: string): Promise<PocketResult> {
   const wasm = await loadManifold(wasmUrl);

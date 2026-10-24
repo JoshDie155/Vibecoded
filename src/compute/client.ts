@@ -41,12 +41,15 @@ function getWorker(): Worker | null {
   if (worker !== undefined) return worker;
   try {
     worker = new ComputeWorker();
-    worker.onmessage = (e: MessageEvent<{ id: number; result?: unknown; error?: string }>) => {
+    worker.onmessage = (e: MessageEvent<{ id: number; result?: unknown; error?: string; name?: string }>) => {
       const p = pending.get(e.data.id);
       if (!p) return;
       pending.delete(e.data.id);
-      if (e.data.error !== undefined) p.reject(new Error(e.data.error));
-      else p.resolve(e.data.result);
+      if (e.data.error !== undefined) {
+        const err = new Error(e.data.error);
+        if (e.data.name) err.name = e.data.name;
+        p.reject(err);
+      } else p.resolve(e.data.result);
     };
     worker.onerror = (e) => {
       e.preventDefault();

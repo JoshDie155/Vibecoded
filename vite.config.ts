@@ -37,7 +37,11 @@ const occtWasm: Plugin = {
 export default defineConfig(({ mode }) => ({
   base: './',
   plugins: mode === 'single' ? [manifoldWasmOnce, occtWasm, viteSingleFile()] : [manifoldWasmOnce, occtWasm],
-  worker: { plugins: () => [occtWasm] },
+  worker: {
+    plugins: () => [manifoldWasmOnce, occtWasm],
+    // manifold-3d wird nachgeladen (import()); im Worker gehört es mit in dieselbe Datei
+    rollupOptions: { output: { inlineDynamicImports: true } },
+  },
   build: {
     outDir: mode === 'single' ? 'dist-single' : 'dist',
     chunkSizeWarningLimit: 2000,

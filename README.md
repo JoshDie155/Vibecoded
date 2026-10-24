@@ -263,8 +263,10 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
   und Durchdringungsprüfung (`src/math/suggest.ts`).
 - **Prüfansicht**: Abstand und Vorzeichen zur Oberfläche des anderen Teils je (unterteiltem) Dreieck
   (`src/math/check.ts`).
-- **Rechnen im Hintergrund**: 3MF lesen und schreiben, Projekte packen und die Suche nach markanten
-  Flächen laufen in einem Web Worker (`src/compute/`); lässt der Browser keinen zu, rechnet dieselbe
+- **Rechnen im Hintergrund**: 3MF lesen und schreiben, Projekte packen, die Suche nach markanten
+  Flächen, Netz prüfen/reparieren und alle booleschen Operationen (Zerschneiden samt Vorschau, Zerteilen,
+  Aussparungen, Teile verrechnen, Vereinigen beim Export, Toleranz-Test) laufen in einem Web Worker
+  (`src/compute/`) – die Ansicht bleibt dabei bedienbar. Lässt der Browser keinen zu, rechnet dieselbe
   Aufgabe im Hauptthread. Nach dem Laden werden die Flächen schon im Hintergrund gesucht, damit
   „Vorschlagen" sofort antwortet.
 - **CAD-Import**: `occt-import-js` (OpenCascade als WebAssembly, `src/io/step.ts`); das WebAssembly steckt

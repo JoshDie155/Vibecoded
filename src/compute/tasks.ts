@@ -11,6 +11,11 @@ import { CAD_MESHING, type CadPart, type OcctResult, occtToParts } from '../io/s
 import occtImport from 'occt-import-js';
 import { gunzipSync } from 'fflate';
 import { type MeshHealth, type RepairResult, meshHealth, repairMesh } from '../math/repair';
+import { type CutOptions, type CutResult, cutMesh, planConnectors, releaseCut } from '../io/cut';
+import { type PocketPlace, type PocketResult, type PocketSpec, addPocket } from '../io/pocket';
+import { type BoolInput, type BoolOp, type BoolResult, booleanParts } from '../io/boolean';
+import { type UnionInput, type UnionResult, unionParts } from '../io/union';
+import { type ToleranceOptions, makeToleranceTest } from '../io/testpiece';
 
 /** OpenCascade einmal je Thread starten. */
 let occt: ReturnType<typeof occtImport> | null = null;
@@ -60,6 +65,37 @@ export const TASKS = {
   repairMesh(a: { positions: Float32Array }): TaskResult<RepairResult> {
     const r = repairMesh(a.positions);
     return { result: r, transfer: buffers([r.positions, r.map, r.flippedTris]) };
+  },
+  // Boolesche Operationen (manifold-3d); wasm: Adresse der WASM-Datei (absolut oder data:-URL)
+  /** Lage der Verbinder für die Vorschau; key: Kennung des Netzes, damit der Körper zwischengespeichert bleibt. */
+  async planConnectors(a: { positions: Float32Array; opts: CutOptions; key?: string; wasm: string }): Promise<TaskResult<Awaited<ReturnType<typeof planConnectors>>>> {
+    const r = await planConnectors(a.positions, a.opts, a.wasm, a.key);
+    return { result: r, transfer: buffers([r.shape]) };
+  },
+  async cutMesh(a: { positions: Float32Array; opts: CutOptions; key?: string; wasm: string }): Promise<TaskResult<CutResult>> {
+    const r = await cutMesh(a.positions, a.opts, a.wasm, a.key);
+    return { result: r, transfer: buffers([r.a, r.b, r.aSource, r.bSource, ...r.dowels]) };
+  },
+  /** Zwischengespeicherten Körper freigeben. */
+  releaseCut(): TaskResult<null> {
+    releaseCut();
+    return { result: null };
+  },
+  async addPocket(a: { positions: Float32Array; place: PocketPlace; spec: PocketSpec; wasm: string }): Promise<TaskResult<PocketResult>> {
+    const r = await addPocket(a.positions, a.place, a.spec, a.wasm);
+    return { result: r, transfer: buffers([r.positions, r.source]) };
+  },
+  async booleanParts(a: { target: BoolInput; others: BoolInput[]; op: BoolOp; wasm: string }): Promise<TaskResult<BoolResult>> {
+    const r = await booleanParts(a.target, a.others, a.op, a.wasm);
+    return { result: r, transfer: buffers([r.positions, r.source]) };
+  },
+  async unionParts(a: { parts: UnionInput[]; wasm: string }): Promise<TaskResult<UnionResult>> {
+    const r = await unionParts(a.parts, a.wasm);
+    return { result: r, transfer: buffers([r.positions]) };
+  },
+  async toleranceTest(a: { opts: ToleranceOptions; wasm: string }): Promise<TaskResult<{ plate: Float32Array; pin: Float32Array }>> {
+    const r = await makeToleranceTest(a.opts, a.wasm);
+    return { result: r, transfer: buffers([r.plate, r.pin]) };
   },
   packProject(a: { data: ProjectData; blobs: Blobs }): TaskResult<Uint8Array> {
     const r = packProject(a.data, a.blobs);

@@ -27,15 +27,14 @@ import { decorate, disposeDecor } from './decor';
 import {
   type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, saveSession, sessionInfo, unpackProject,
 } from './io/project';
-import { unionParts } from './io/union';
-import { type Connector, CutError, cutMesh, planConnectors, releaseCut } from './io/cut';
+import type { Connector } from './io/cut';
 import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
 import { overhangs, pickTriangles, thinWalls } from './math/printcheck';
-import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, PocketError, type PocketSpec, addPocket, pocketPreview } from './io/pocket';
+import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, type PocketSpec, pocketPreview } from './io/pocket';
 import { carryPaint } from './io/paint';
-import { clearanceLabel, makeToleranceTest } from './io/testpiece';
-import { type BoolOp, BoolError, booleanParts } from './io/boolean';
+import { clearanceLabel } from './io/testpiece';
+import type { BoolOp } from './io/boolean';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -495,6 +494,19 @@ const activeJoint = () => joints.find((j) => j.id === activeJointId);
 const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]!);
 const hasFeatures = (j: Joint) => j.fa.length > 0 || j.fb.length > 0;
 const positionsOf = (p: Part) => p.geom.getAttribute('position').array as Float32Array;
+
+/** WASM-Datei von manifold-3d als absolute Adresse (oder data:-URL) – der Hintergrund-Thread kennt keine relativen Pfade. */
+const manifoldUrl = new URL(manifoldWasm, location.href).href;
+/** Kennung je Netz: Der Hintergrund-Thread hält den Körper fürs Zerschneiden, solange sich das Netz nicht ändert. */
+const meshKeys = new WeakMap<Float32Array, string>();
+let meshCount = 0;
+function meshKey(positions: Float32Array): string {
+  let k = meshKeys.get(positions);
+  if (!k) meshKeys.set(positions, (k = `netz-${++meshCount}`));
+  return k;
+}
+/** Fehler mit einer Meldung für den Nutzer (aus io/cut, io/pocket, io/boolean – auch aus dem Hintergrund-Thread). */
+const userError = (err: unknown, ...names: string[]) => names.includes((err as Error)?.name);
 
 /** Tiefster Punkt eines Teils in der Lage M (Welt-z); je Drehung zwischengespeichert, Verschieben kostet nichts. */
 const lowCache = new WeakMap<Part, { key: string; z: number }>();
@@ -3758,7 +3770,7 @@ async function exportAs(kind: string) {
       toast('Vereinige die Teile zu einem Körper …', 20000);
       await new Promise((r) => setTimeout(r, 30));
       try {
-        const res = await unionParts(world, manifoldWasm);
+        const res = await compute('unionParts', { parts: world.map((p) => ({ name: p.name, positions: p.positions })), wasm: manifoldUrl });
         body = [{ name: 'PartJoin', positions: res.positions }];
         toast(res.notClosed.length
           ? `Vereinigt. Nicht geschlossen und deshalb nur angehängt: ${res.notClosed.join(', ')} – vorher Rechtsklick › „Netz reparieren“.`
@@ -4531,7 +4543,7 @@ function closeCut() {
   cutTarget = null;
   cutBar.hidden = true;
   clearCutPreview();
-  releaseCut();
+  void compute('releaseCut', undefined);
   if (section) { sectionRange(); updateSection(); }
 }
 
@@ -4583,7 +4595,7 @@ async function updateCutPreview() {
   }
   let res;
   try {
-    res = await planConnectors(positionsOf(p), opts, manifoldWasm);
+    res = await compute('planConnectors', { positions: positionsOf(p), opts, key: meshKey(positionsOf(p)), wasm: manifoldUrl });
   } catch {
     return;
   }
@@ -4651,9 +4663,9 @@ async function applyCut() {
   toast('Schneide …', 20000);
   let res;
   try {
-    res = await cutMesh(positionsOf(p), opts, manifoldWasm);
+    res = await compute('cutMesh', { positions: positionsOf(p), opts, key: meshKey(positionsOf(p)), wasm: manifoldUrl });
   } catch (err) {
-    toast(err instanceof CutError ? `${err.message}${/wasserdicht/.test(err.message) ? ' Erst „Netz reparieren“.' : ''}` : `Zerschneiden fehlgeschlagen: ${(err as Error).message}`, 6000);
+    toast(userError(err, 'CutError') ? `${(err as Error).message}${/wasserdicht/.test((err as Error).message) ? ' Erst „Netz reparieren“.' : ''}` : `Zerschneiden fehlgeschlagen: ${(err as Error).message}`, 6000);
     return;
   } finally {
     cutBusy = false;
@@ -4878,9 +4890,9 @@ async function applyPocket() {
   pocketBusy = true;
   let r;
   try {
-    r = await addPocket(positionsOf(p), { point: pocketPlace.point, normal: pocketPlace.normal }, pocketSpec(), manifoldWasm);
+    r = await compute('addPocket', { positions: positionsOf(p), place: { point: pocketPlace.point, normal: pocketPlace.normal }, spec: pocketSpec(), wasm: manifoldUrl });
   } catch (err) {
-    toast(err instanceof PocketError ? err.message : `Aussparung nicht möglich: ${(err as Error).message}`, 6000);
+    toast(userError(err, 'PocketError') ? (err as Error).message : `Aussparung nicht möglich: ${(err as Error).message}`, 6000);
     return;
   } finally {
     pocketBusy = false;
@@ -5060,7 +5072,7 @@ async function applySplit() {
         await new Promise((r) => setTimeout(r, 20));
         // Ebene in Teilkoordinaten; Hälfte B liegt in Richtung der Achse
         const local = new THREE.Plane(new THREE.Vector3().setComponent(pl.axis, 1), -pl.value).applyMatrix4(inv);
-        const r = await cutMesh(piece.positions, { normal: [local.normal.x, local.normal.y, local.normal.z], offset: -local.constant, connector: splitConnector, clearance }, manifoldWasm);
+        const r = await compute('cutMesh', { positions: piece.positions, opts: { normal: [local.normal.x, local.normal.y, local.normal.z], offset: -local.constant, connector: splitConnector, clearance }, wasm: manifoldUrl });
         for (const n of r.notes) notes.add(n);
         const up = [...piece.cell];
         up[pl.axis]++;
@@ -5073,11 +5085,11 @@ async function applySplit() {
       pieces = next;
     }
   } catch (err) {
-    toast(err instanceof CutError ? `${err.message}${/wasserdicht/.test(err.message) ? ' Erst „Netz reparieren“.' : ''}` : `Zerteilen fehlgeschlagen: ${(err as Error).message}`, 7000);
+    toast(userError(err, 'CutError') ? `${(err as Error).message}${/wasserdicht/.test((err as Error).message) ? ' Erst „Netz reparieren“.' : ''}` : `Zerteilen fehlgeschlagen: ${(err as Error).message}`, 7000);
     return;
   } finally {
     splitBusy = false;
-    releaseCut();
+    void compute('releaseCut', undefined);
   }
   if (getPart(p.id) !== p) return;
   // Was am Teil hängt, bleibt, wo es ist; die Verbindungen zum Teil selbst entfallen
@@ -5171,13 +5183,13 @@ async function combineParts(target: Part, others: Part[], op: BoolOp) {
   toast(op === 'union' ? 'Vereinige …' : op === 'subtract' ? 'Schneide aus …' : 'Berechne die Überschneidung …', 20000);
   let r;
   try {
-    r = await booleanParts(
-      { name: target.name, positions: positionsOf(target) },
-      others.map((q) => ({ name: q.name, positions: transformMesh(positionsOf(q), into(q).elements) })),
-      op, manifoldWasm,
-    );
+    r = await compute('booleanParts', {
+      target: { name: target.name, positions: positionsOf(target) },
+      others: others.map((q) => ({ name: q.name, positions: transformMesh(positionsOf(q), into(q).elements) })),
+      op, wasm: manifoldUrl,
+    });
   } catch (err) {
-    toast(err instanceof BoolError ? err.message : `Nicht möglich: ${(err as Error).message}`, 7000);
+    toast(userError(err, 'BoolError') ? (err as Error).message : `Nicht möglich: ${(err as Error).message}`, 7000);
     return;
   } finally {
     boolBusy = false;
@@ -5281,7 +5293,7 @@ async function generateTolerance() {
   toast('Erzeuge den Testkörper …', 20000);
   let r;
   try {
-    r = await makeToleranceTest({ diameter: d, clearances: list }, manifoldWasm);
+    r = await compute('toleranceTest', { opts: { diameter: d, clearances: list }, wasm: manifoldUrl });
   } catch (err) {
     toast(`Testkörper nicht möglich: ${(err as Error).message}`);
     return;
