@@ -334,7 +334,9 @@ renderer.setAnimationLoop(() => {
   }
   scaleMarkers();
   applySectionClip();
+  const undo = explodeForRender();
   renderer.render(scene, camera);
+  undo();
   updateCube();
 });
 
@@ -1007,7 +1009,10 @@ function markersChanged(j: Joint) {
  * Setzt alle Teile zusammen: Ausgehend vom Basisteil werden die Verbindungen der Reihe nach
  * gelöst (Breitensuche), jedes neu erreichte Teil wird an ein bereits platziertes angefügt.
  */
+/** Zählt jede Neuberechnung der Lage (für Zwischenspeicher, die von ihr abhängen). */
+let solveCount = 0;
 function solveAll() {
+  solveCount++;
   const placed = new Map<number, THREE.Matrix4>();
   movedBy.clear();
   seedOf.clear();
@@ -2310,6 +2315,8 @@ interface Hit {
 
 /** Trifft die Oberfläche eines Teils; rastet im Punktmodus optional an der nächsten Ecke ein. */
 function pick(e: PointerEvent | MouseEvent): Hit | null {
+  // In der Explosionsansicht liegen die Teile nur scheinbar woanders – nichts auswählen
+  if (explode > 0) return null;
   setNdc(e);
   const meshes = parts.filter((p) => p.visible).map((p) => p.mesh);
   // Im Schnitt nur, was zu sehen ist
@@ -2860,6 +2867,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (k === 'c') setSection(!section);
+  else if (k === 'x') setExplode(explode > 0 || explodeAnim?.to ? 0 : 0.8);
+  else if (k === 'escape' && (explode > 0 || explodeAnim?.to)) setExplode(0);
   else if (k === 's') {
     // Auswahl oder das Teil unter dem Mauszeiger (das „s“ soll nicht im Eingabefeld landen)
     e.preventDefault();
@@ -3056,7 +3065,8 @@ function renderHint() {
   const el = document.getElementById('hint')!;
   const j = activeJoint();
   const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
-  if (tool === 'lay') el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
+  if (explodeAnim?.to || explode > 0) el.textContent = 'Explosionsansicht – nur zum Ansehen. Regler unten rechts, X oder ✕ schließt sie.';
+  else if (tool === 'lay') el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
   else if (tool === 'pocket') el.textContent = pocketPlace
     ? 'Art und Größe oben wählen, dann „Einsetzen“ – oder eine andere Stelle anklicken. Esc beendet.'
     : 'Klicke die Stelle an, an der die Aussparung sitzen soll (auf runden Flächen rastet sie in der Mitte ein). Esc beendet.';
@@ -3788,6 +3798,109 @@ function worldPositions(members: Part[]): Float32Array {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- Explosionsansicht
+
+/**
+ * Baugruppen auseinandergezogen zeigen – nur fürs Auge: Die Teile rücken beim Zeichnen von der Mitte
+ * ihrer Baugruppe weg und gleich danach zurück. Lage, Export und Prüfungen bleiben unberührt. Solange
+ * die Ansicht offen ist, sind Markierungen, Auswahlrahmen und das Anklicken aus.
+ */
+let explode = 0;
+let explodeAnim: { from: number; to: number; t0: number } | null = null;
+const explodeBar = document.getElementById('explodeBar')!;
+const explodeRange = document.getElementById('explodeRange') as HTMLInputElement;
+const explodeBtn = document.getElementById('explodeTool')!;
+
+/** Versatz je Teil (Welt) für den Faktor k. */
+function explodeOffsets(k: number): Map<Part, THREE.Vector3> {
+  const out = new Map<Part, THREE.Vector3>();
+  const seen = new Set<number>();
+  for (const p of parts) {
+    if (!p.visible) continue;
+    const key = unitOf.get(p.id) ?? p.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const members = unitMembers(p).filter((q) => q.visible);
+    if (members.length < 2) continue;
+    const box = unitBox(members);
+    const c = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3()).length();
+    members.forEach((q, i) => {
+      const d = partBox(q).getCenter(new THREE.Vector3()).sub(c);
+      // Teile genau in der Mitte (z. B. ineinander gesteckt) nach oben schieben, der Reihe nach
+      if (d.length() < size * 0.05) d.set(0, 0, (i + 1) * size * 0.15);
+      // Weg von der Mitte: so weit wie das Teil von ihr entfernt ist, plus ein Viertel der Baugruppe
+      out.set(q, d.clone().normalize().multiplyScalar(k * (d.length() + size * 0.25)));
+    });
+  }
+  return out;
+}
+
+let explodeCache: { key: string; offsets: Map<Part, THREE.Vector3> } | null = null;
+/** Vor dem Zeichnen auseinanderziehen; gibt zurück, wie es rückgängig geht. */
+function explodeForRender(): () => void {
+  if (explodeAnim) {
+    const t = Math.min(1, (performance.now() - explodeAnim.t0) / 260);
+    explode = explodeAnim.from + (explodeAnim.to - explodeAnim.from) * (1 - (1 - t) ** 3);
+    explodeRange.value = String(Math.round(explode * 100));
+    if (t >= 1) {
+      explode = explodeAnim.to;
+      explodeAnim = null;
+      if (!explode) {
+        setExplodeVisuals(false);
+        renderHint();
+      }
+    }
+  }
+  if (explode <= 0) return () => {};
+  const key = `${explode}|${solveCount}|${parts.length}|${parts.filter((p) => p.visible).length}`;
+  if (explodeCache?.key !== key) explodeCache = { key, offsets: explodeOffsets(explode) };
+  const moved: THREE.Mesh[] = [];
+  for (const [p, d] of explodeCache.offsets) {
+    p.mesh.matrix.premultiply(new THREE.Matrix4().makeTranslation(d.x, d.y, d.z));
+    p.mesh.matrixWorldNeedsUpdate = true;
+    moved.push(p.mesh);
+  }
+  return () => {
+    for (const [p, d] of explodeCache!.offsets) {
+      p.mesh.matrix.premultiply(new THREE.Matrix4().makeTranslation(-d.x, -d.y, -d.z));
+      p.mesh.matrixWorldNeedsUpdate = true;
+      p.mesh.updateMatrixWorld(true);
+    }
+  };
+}
+
+/** Was in der Explosionsansicht nicht passt, ausblenden. */
+function setExplodeVisuals(on: boolean) {
+  for (const g of [markerGroup, faceGroup, selGroup, checkGroup]) g.visible = !on;
+  view.classList.toggle('exploded', on);
+}
+
+function setExplode(target: number) {
+  if (target > 0 && !parts.length) return;
+  if (target > 0) {
+    setTool(null);
+    if (gizmoTarget) closeGizmo();
+    updateHover(null);
+    hideTip();
+    setExplodeVisuals(true);
+  }
+  explodeAnim = { from: explode, to: target, t0: performance.now() };
+  explodeBar.hidden = target <= 0;
+  explodeBtn.classList.toggle('on', target > 0);
+  renderHint();
+}
+
+explodeBtn.addEventListener('click', () => setExplode(explode > 0 || explodeAnim?.to ? 0 : 0.8));
+explodeRange.addEventListener('input', () => {
+  explodeAnim = null;
+  explode = Number(explodeRange.value) / 100;
+  if (explode <= 0) {
+    explode = 0.001;
+  }
+});
+document.getElementById('explodeClose')!.addEventListener('click', () => setExplode(0));
 
 // ---------------------------------------------------------------- Schnittansicht
 

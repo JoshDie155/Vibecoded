@@ -375,3 +375,15 @@ kbd {
 #gizmoBar .gnum input:disabled { opacity: 0.5; }
 #gizmoBar .gsep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
 #selAlign, #selBool { font: inherit; font-size: 12.5px; max-width: 150px; }
+/* Explosionsansicht: Regler unten rechts (über dem Schnitt-Regler, wenn beide offen sind) */
+#explodeBar {
+  position: absolute; right: 10px; bottom: 32px; z-index: 3; display: flex; gap: 8px; align-items: center; font-size: 12.5px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
+}
+#explodeBar input[type='range'] { width: 160px; accent-color: var(--accent); }
+#explodeBar .help { margin: 0; font-size: 12px; }
+#view.cut #explodeBar { bottom: 80px; }
+#view.exploded #hint { bottom: 80px; }
+#view.exploded #toast { bottom: 136px; }
+#view.cut.exploded #hint { bottom: 128px; }
+#view.cut.exploded #toast { bottom: 184px; }

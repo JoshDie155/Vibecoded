@@ -126,6 +126,9 @@ Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder he
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Explosionsansicht** (oben „Explosion", Taste X): zieht jede Baugruppe auseinander, damit man sieht, wie die
+Teile zusammengehören – Regler unten rechts für den Abstand. Nur zum Ansehen: Lage, Export und Prüfungen
+bleiben unverändert, Markierungen und Anklicken ruhen, bis sie wieder zu ist.
 **Schnittansicht** (oben „Schnitt", Taste C): schneidet alles entlang X, Y oder Z auf – Lage per Regler unten
 rechts, „⇄ Seite" zeigt die andere Hälfte. Wo die Ebene durch Material geht, erscheint eine Schnittfläche in
 einem dunkleren Ton des Teils (auch bei aufeinanderliegenden Teilen sauber getrennt), so lassen sich
