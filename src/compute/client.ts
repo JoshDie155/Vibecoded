@@ -19,9 +19,9 @@ const pending = new Map<number, Pending>();
 
 /** Im Hauptthread rechnen – einen Moment später, damit Meldungen vorher noch erscheinen. */
 function local<K extends TaskName>(task: K, args: TaskArgs<K>): Promise<TaskOutput<K>> {
-  return new Promise((resolve, reject) => setTimeout(() => {
+  return new Promise((resolve, reject) => setTimeout(async () => {
     try {
-      resolve((TASKS[task] as (a: TaskArgs<K>) => { result: TaskOutput<K> })(args).result);
+      resolve((await (TASKS[task] as (a: TaskArgs<K>) => { result: TaskOutput<K> })(args)).result);
     } catch (e) {
       reject(e as Error);
     }

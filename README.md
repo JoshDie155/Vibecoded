@@ -8,7 +8,10 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 
 ## So funktioniert's
 
-1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ mit MTL, 3MF, PLY, AMF, GLB/GLTF, FBX, DAE, WRL, 3DS, VTK).
+1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ mit MTL, 3MF, STEP, IGES, BREP, PLY, AMF, GLB/GLTF, FBX,
+   DAE, WRL, 3DS, VTK). CAD-Dateien (STEP/IGES/BREP) liest OpenCascade im Hintergrund und trianguliert sie
+   fein für den Druck (Sehnenfehler 0,02 mm); jeder Körper wird ein Teil mit Name und Farbe aus der Datei,
+   Körper einer Unterbaugruppe bilden eine Gruppe.
    Mehrteilige Dateien werden in einzelne Teile mit ihrer Farbe zerlegt – auch 3MF-Projekte aus
    Bambu Studio, OrcaSlicer und PrusaSlicer (Farbe aus der Filament-Zuordnung). Teile eines Objekts
    bilden eine Gruppe (⛓) und bewegen sich gemeinsam; jedes Teil lässt sich aus seiner Gruppe lösen
@@ -18,7 +21,8 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    Verbindungen oder Gruppen zusammenhängt – steht mit ihrem tiefsten Punkt auf der Druckplatte,
    egal welches Teil die Basis ist. So schwebt im Slicer nichts, obwohl der Export ein einziges
    Objekt ist. Teile, die mit „Lage aus der Datei übernehmen" geladen wurden, stehen gemeinsam auf der
-   Platte und bleiben untereinander, wie sie in den Dateien liegen (z. B. Kopf über Körper). Das Gizmo
+   Platte und bleiben untereinander, wie sie in den Dateien liegen (z. B. Kopf über Körper); ebenso die
+   Körper einer CAD-Baugruppe und die Netze einer mehrteiligen OBJ-, GLB- oder FBX-Datei. Das Gizmo
    verschiebt Teile dann nur über die Platte; zum freien Anheben den Haken entfernen – alles bleibt
    dabei, wo es steht.
    Aus Slicer-Projekten kommen auch **Aufschriften und Logos als Modifier** (z. B. eingelassener Text
@@ -169,6 +173,10 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
   Flächen laufen in einem Web Worker (`src/compute/`); lässt der Browser keinen zu, rechnet dieselbe
   Aufgabe im Hauptthread. Nach dem Laden werden die Flächen schon im Hintergrund gesucht, damit
   „Vorschlagen" sofort antwortet.
+- **CAD-Import**: `occt-import-js` (OpenCascade als WebAssembly, `src/io/step.ts`); das WebAssembly steckt
+  gzip-gepackt in der Datei (`vite.config.ts`) und wird im Hintergrund-Thread entpackt und gestartet.
+  OpenCascade und occt-import-js stehen unter der LGPL-2.1 (Lizenztexte in
+  `node_modules/occt-import-js/dist/`); wer PartJoin weitergibt, legt diese Hinweise bei.
 - **Projekte**: ZIP mit `project.json` und den Netzen als Float32-Daten, Sitzungssicherung in IndexedDB
   (`src/io/project.ts`).
 - **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
@@ -184,7 +192,3 @@ npm test               # Unit-Tests der Mathematik
 npm run build          # Build nach dist/
 npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/index.html
 ```
-
-## Ideen für später
-
-- CAD-Formate STEP/IGES (z. B. über `occt-import-js`)

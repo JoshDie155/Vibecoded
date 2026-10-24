@@ -19,8 +19,9 @@ import { VTKLoader } from 'three/addons/loaders/VTKLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { ImportedPart, SlicerExtras } from './threemf';
 import { compute } from '../compute/client';
+import { CAD_FORMATS } from './step';
 
-export const SUPPORTED = ['stl', 'obj', 'mtl', 'ply', '3mf', 'amf', 'glb', 'gltf', 'fbx', 'dae', 'wrl', '3ds', 'vtk'] as const;
+export const SUPPORTED = ['stl', 'obj', 'mtl', 'ply', '3mf', 'amf', 'glb', 'gltf', 'fbx', 'dae', 'wrl', '3ds', 'vtk', 'step', 'stp', 'iges', 'igs', 'brep', 'brp'] as const;
 
 /** Slicer-Zusätze (Bemalung, Modifier, Einstellungen) gibt es nur bei 3MF-Projekten. */
 export interface LoadedPart extends SlicerExtras {
@@ -30,6 +31,8 @@ export interface LoadedPart extends SlicerExtras {
   color?: string;
   /** Teile desselben Objekts (gleiche Gruppe) bewegen sich gemeinsam. */
   group?: string;
+  /** Netze einer Datei, die richtig zueinander liegen (CAD-Baugruppe, OBJ/GLB): stehen gemeinsam auf der Platte. */
+  together?: string;
 }
 
 export interface LoadOptions {
@@ -138,6 +141,33 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
     });
   }
 
+  if (CAD_FORMATS[ext]) {
+    // CAD: OpenCascade im Hintergrund-Thread (beim ersten Mal wird es entpackt und gestartet)
+    const { occtWasmGz } = await import('./occt-wasm');
+    const parts = await compute('readCad', { data: new Uint8Array(buf), format: CAD_FORMATS[ext], wasmGz: occtWasmGz() });
+    if (!parts.length) throw new Error('Die CAD-Datei enthält keine Körper.');
+    if (!opts.split || parts.length === 1) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(concat(parts.map((p) => p.positions)), 3));
+      return [{ name: base, geom: finish(g), color: parts[0].color }];
+    }
+    const members = new Map<string, number>();
+    for (const p of parts) members.set(p.group, (members.get(p.group) ?? 0) + 1);
+    const seen = new Map<string, number>();
+    const together = loadLabel(file);
+    return parts.map((p) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(p.positions, 3));
+      const k = (seen.get(p.name) ?? 0) + 1;
+      seen.set(p.name, k);
+      // Körper derselben Baugruppe bewegen sich gemeinsam
+      return {
+        name: k > 1 ? `${p.name} (${k})` : p.name, geom: finish(g), color: p.color,
+        group: members.get(p.group)! > 1 ? `${file.name}:${p.group}` : undefined, together,
+      };
+    });
+  }
+
   const res = await parse(ext, buf, opts.mtl);
   if (res instanceof THREE.BufferGeometry) {
     return [{ name: base, geom: finish(toPositionOnly(res)), color: averageVertexColor(res) }];
@@ -160,13 +190,14 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
     return [{ name: base, geom: finish(geom), color: meshes[0].color }];
   }
   const seen = new Map<string, number>();
+  const together = loadLabel(file);
   const tops = [...new Set(meshes.map((m) => m.top))];
   const perTop = new Map(tops.map((t) => [t, meshes.filter((m) => m.top === t).length]));
   return meshes.map((m) => {
     const k = (seen.get(m.name) ?? 0) + 1;
     seen.set(m.name, k);
     const group = perTop.get(m.top)! > 1 ? `${file.name}:${tops.indexOf(m.top)}` : undefined;
-    return { name: k > 1 ? `${m.name} (${k})` : m.name, geom: finish(m.geom), color: m.color, group };
+    return { name: k > 1 ? `${m.name} (${k})` : m.name, geom: finish(m.geom), color: m.color, group, together };
   });
 }
 
@@ -183,6 +214,10 @@ function joinParts(parts: ImportedPart[]): ImportedPart {
   if (modifiers.length) out.modifiers = modifiers;
   return out;
 }
+
+/** Kennung „aus derselben Datei geladen" (jedes Laden eine eigene). */
+let loads = 0;
+const loadLabel = (file: File) => `${file.name}#${++loads}`;
 
 function concat(list: Float32Array[]): Float32Array {
   const out = new Float32Array(list.reduce((s, p) => s + p.length, 0));

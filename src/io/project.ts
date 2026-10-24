@@ -22,6 +22,7 @@ export interface ProjectPart {
   layout: number[];
   visible: boolean;
   fromFile?: boolean;
+  together?: string;
   /** Schlüssel des Netzes (nicht indizierte Dreiecke, mm). */
   geometry: string;
   paint?: Record<string, string[]>;

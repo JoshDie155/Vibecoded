@@ -6,19 +6,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "build:single": "tsc --noEmit && vite build --mode single",
+    "build": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && vite build",
+    "build:single": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && vite build --mode single",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
     "fflate": "^0.8.2",
     "manifold-3d": "^3.5.3",
+    "occt-import-js": "^0.0.23",
     "three": "^0.180.0",
     "three-mesh-bvh": "^0.9.1"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "@types/three": "^0.180.0",
     "typescript": "^5.6.0",
     "vite": "^6.3.0",

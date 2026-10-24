@@ -7,6 +7,12 @@ import { type Blobs, type ProjectData, packProject } from '../io/project';
 import { type Feature, buildTopology } from '../math/features';
 import { findCandidateFaces } from '../math/segment';
 import { type BaseChoice, bestBase } from '../math/orient';
+import { CAD_MESHING, type CadPart, type OcctResult, occtToParts } from '../io/step';
+import occtImport from 'occt-import-js';
+import { gunzipSync } from 'fflate';
+
+/** OpenCascade einmal je Thread starten. */
+let occt: ReturnType<typeof occtImport> | null = null;
 
 export interface TaskResult<R> {
   result: R;
@@ -39,6 +45,13 @@ export const TASKS = {
   bestBase(a: { positions: Float32Array }): TaskResult<BaseChoice> {
     return { result: bestBase(a.positions) };
   },
+  /** CAD-Datei (STEP, IGES, BREP) lesen und triangulieren; wasmGz: OpenCascade gzip-gepackt (nur beim ersten Mal gebraucht). */
+  async readCad(a: { data: Uint8Array; format: 'step' | 'iges' | 'brep'; wasmGz: Uint8Array }): Promise<TaskResult<CadPart[]>> {
+    occt ??= occtImport({ wasmBinary: gunzipSync(a.wasmGz) });
+    const r = (await occt).ReadFile(a.format, a.data, CAD_MESHING) as OcctResult;
+    const parts = occtToParts(r);
+    return { result: parts, transfer: buffers(parts.map((p) => p.positions)) };
+  },
   packProject(a: { data: ProjectData; blobs: Blobs }): TaskResult<Uint8Array> {
     const r = packProject(a.data, a.blobs);
     return { result: r, transfer: buffers([r]) };
@@ -48,4 +61,4 @@ export const TASKS = {
 export type Tasks = typeof TASKS;
 export type TaskName = keyof Tasks;
 export type TaskArgs<K extends TaskName> = Parameters<Tasks[K]>[0];
-export type TaskOutput<K extends TaskName> = ReturnType<Tasks[K]>['result'];
+export type TaskOutput<K extends TaskName> = Awaited<ReturnType<Tasks[K]>>['result'];

@@ -59,6 +59,11 @@ interface Part extends SlicerExtras {
   candidates?: Feature[];
   /** Mit „Lage aus der Datei übernehmen" geladen: steht mit allen so geladenen Teilen gemeinsam auf der Platte. */
   fromFile?: boolean;
+  /**
+   * Teile mit gleichem Wert liegen laut Datei richtig zueinander (z. B. eine CAD-Baugruppe oder die Netze
+   * einer OBJ-Datei): Sie stehen gemeinsam auf der Platte und werden zusammen ein Objekt im Slicer.
+   */
+  together?: string;
 }
 
 /** Vorschlag für eine Verbindung: diese Fläche am einen Teil passt zu jener am anderen. */
@@ -683,7 +688,7 @@ async function loadFiles(files: FileList | File[]) {
             g.computeVertexNormals();
             g.computeBoundingBox();
             g.computeBoundingSphere();
-            return { name: `${l.name} ${k + 1}`, geom: g, color: l.color, group };
+            return { name: `${l.name} ${k + 1}`, geom: g, color: l.color, group, together: l.together };
           });
         });
       }
@@ -708,6 +713,7 @@ async function loadFiles(files: FileList | File[]) {
           color: l.color, group: l.group, layout, samples: samples[i], extras: { paint, palette, modifiers, settings, objectSettings },
         });
         if (keep) part.fromFile = true;
+        if (l.together) part.together = l.together;
       }
       if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
     } catch (e) {
@@ -913,14 +919,28 @@ function solveAll() {
   }
   deferred = [];
 
-  // Baugruppen. Teile mit der Lage aus der Datei bleiben untereinander, wie sie geladen wurden (z. B. Kopf
-  // über Körper): Baugruppen, in denen eins steckt, zählen als eine.
+  // Baugruppen: über Verbindungen und Gruppen platzierte Teile – dazu bleiben Teile, die laut Datei
+  // zusammengehören, untereinander, wie sie geladen wurden (z. B. Kopf über Körper, eine CAD-Baugruppe):
+  // Baugruppen, in denen solche Teile stecken, zählen als eine.
   unitOf.clear();
-  const fileSeed = parts.find((p) => p.fromFile)?.id;
-  const unit = (p: Part) => (p.fromFile && fileSeed !== undefined ? seedOf.get(fileSeed) ?? fileSeed : seedOf.get(p.id) ?? p.id);
-  const merged = new Map<number, number>();
-  for (const p of parts) if (p.fromFile) merged.set(seedOf.get(p.id) ?? p.id, unit(p));
-  for (const p of parts) unitOf.set(p.id, merged.get(seedOf.get(p.id) ?? p.id) ?? unit(p));
+  const root = new Map<number, number>();
+  const find = (x: number): number => {
+    const r = root.get(x) ?? x;
+    if (r === x) return x;
+    const top = find(r);
+    root.set(x, top);
+    return top;
+  };
+  const first = new Map<string, number>();
+  for (const p of parts) {
+    const label = togetherOf(p);
+    if (!label) continue;
+    const seed = seedOf.get(p.id) ?? p.id;
+    const other = first.get(label);
+    if (other === undefined) first.set(label, seed);
+    else if (find(seed) !== find(other)) root.set(find(seed), find(other));
+  }
+  for (const p of parts) unitOf.set(p.id, find(seedOf.get(p.id) ?? p.id));
   const key = (p: Part) => unitOf.get(p.id)!;
   // Fester Boden: jede Baugruppe steht mit ihrem tiefsten Punkt auf der Druckplatte (z = 0)
   floorShift.clear();
@@ -1262,6 +1282,9 @@ function candidatesOf(p: Part): Feature[] {
   p.candidates ??= findCandidateFaces(topologyOf(p));
   return p.candidates;
 }
+
+/** Wer laut Datei zusammengehört (siehe Part.together). */
+const togetherOf = (p: Part) => (p.fromFile ? 'file' : p.together);
 
 /** Laufende Flächensuche je Teil (im Hintergrund-Thread). */
 const candidateJobs = new WeakMap<Part, Promise<Feature[]>>();
@@ -3430,6 +3453,7 @@ function replaceGeometry(old: Part, positions: Float32Array): Part {
   fresh.visible = old.visible;
   fresh.mesh.visible = old.visible;
   if (old.fromFile) fresh.fromFile = true;
+  fresh.together = old.together;
   parts.splice(parts.indexOf(fresh), 1);
   parts.splice(parts.indexOf(old), 1, fresh);
   scene.remove(old.mesh);
@@ -3462,7 +3486,7 @@ function projectState(): { data: ProjectData; blobs: Blobs } {
     blobs.set(key, positionsOf(p));
     return {
       id: p.id, name: p.name, color: `#${p.color.getHexString()}`, group: p.group, layout: p.layout.toArray(),
-      visible: p.visible, fromFile: p.fromFile, geometry: key,
+      visible: p.visible, fromFile: p.fromFile, together: p.together, geometry: key,
       paint: p.paint, palette: p.palette, settings: p.settings, objectSettings: p.objectSettings,
       modifiers: p.modifiers?.map(({ positions, local, ...m }, i) => {
         blobs.set(`${key}-m${i}`, positions);
@@ -3517,6 +3541,7 @@ function openProject(data: ProjectData, blobs: Blobs) {
     p.visible = sp.visible !== false;
     p.mesh.visible = p.visible;
     if (sp.fromFile) p.fromFile = true;
+    if (sp.together) p.together = sp.together;
     geomKeys.set(p, sp.geometry);
     ids.set(sp.id, p.id);
   }
