@@ -157,6 +157,8 @@
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>
+    <div id="ctxMenu" role="menu" hidden></div>
+    <input type="color" id="ctxColor" tabindex="-1" aria-hidden="true" />
     <dialog id="help" aria-labelledby="helpTitle">
       <header>
         <h2 id="helpTitle">PartJoin – Anleitung &amp; Tastenkürzel</h2>
@@ -207,7 +209,7 @@
             <dt>Klick</dt><dd>Fläche, Kante oder Punkt wählen – nochmal: abwählen</dd>
             <dt><kbd>Alt/⌥</kbd> + Klick</dt><dd>Fläche an die zuletzt gewählte anhängen (zusammenfassen)</dd>
             <dt><kbd>⇧</kbd> + Klick</dt><dd>Teil in der Teileliste zeigen</dd>
-            <dt>Rechtsklick</dt><dd>auf eine Markierung: Auswahl entfernen</dd>
+            <dt>Rechtsklick</dt><dd>auf ein Teil: Menü (ausblenden, Farbe, Basis, hinlegen, Passung, bewegen, entfernen …) – auch in der Teileliste; auf einen Punkt: entfernen</dd>
             <dt>Links ziehen</dt><dd>Ansicht drehen</dd>
             <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben</dd>
             <dt>Mausrad</dt><dd>zoomen, dorthin, wo der Zeiger steht</dd>

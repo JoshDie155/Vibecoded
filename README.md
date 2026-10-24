@@ -118,12 +118,17 @@ und Mausaktionen.
 Mehr als zwei Teile: einfach weitere Verbindungen anlegen. Alles wird ausgehend vom **Basisteil**
 zusammengesetzt (Basis in der Teileliste wählbar).
 
-Bedienung: Linksklick wählt aus (nochmal klicken hebt eine Fläche wieder auf) · Rechtsklick auf eine
-Markierung oder Fläche löscht sie · Strg/⌘+Z nimmt die letzte Aktion zurück (Auswahl, Verbinden, Bewegen,
+Bedienung: Linksklick wählt aus (nochmal klicken hebt eine Fläche wieder auf) · Rechtsklick auf einen
+Punkt löscht ihn · Strg/⌘+Z nimmt die letzte Aktion zurück (Auswahl, Verbinden, Bewegen,
 Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder her · P/F wechselt Punkte/Flächen ·
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Rechtsklick auf ein Teil** (im 3D-Fenster oder in der Teileliste) öffnet ein Menü: ausblenden, nur dieses
+Teil oder diese Baugruppe zeigen, Farbe, umbenennen, als Basis festlegen, in der Liste zeigen, mit der
+angeklickten Fläche auf die Platte legen, Passung an dieser Stelle, von Hand bewegen, Baugruppe bewegen,
+aus der Gruppe lösen, entfernen – auf einer gewählten Fläche zuerst „Diese Fläche abwählen". Rechtsklick
+ins Leere: Ansicht anpassen, alle zeigen, anordnen, Hilfe. Rechts ziehen verschiebt weiterhin die Ansicht.
 Der **Ansichtswürfel** oben rechts dreht sich mit: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht
 dorthin (Drehpunkt und Abstand bleiben), Ziehen am Würfel dreht sie, ⌂ zeigt die Schrägansicht. Tasten wie
 in Bambu Studio: 1 oben, 2 unten, 3 vorne, 4 hinten, 5 links, 6 rechts, 0 schräg.

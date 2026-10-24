@@ -1835,7 +1835,7 @@ function renderGizmoBar() {
   if (!gizmoTarget) return;
   const label =
     gizmoTarget.assembly
-      ? 'Gesamtes Modell bewegen'
+      ? assemblyOf(getPart(gizmoTarget.id)!).some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : `Baugruppe „${nameOf(gizmoTarget.id)}" bewegen`
       : gizmoTarget.kind === 'part'
       ? `„${nameOf(gizmoTarget.id)}" bewegen`
       : `Verbindung ${joints.findIndex((x) => x.id === gizmoTarget!.id) + 1} anpassen`;
@@ -2374,7 +2374,19 @@ partsEl.addEventListener('pointerleave', () => {
 partsEl.addEventListener('dblclick', (e) => {
   const span = (e.target as HTMLElement).closest<HTMLElement>('[data-act="name"]');
   const p = span && getPart(Number(span.dataset.id));
-  if (!span || !p) return;
+  if (span && p) renameInList(p);
+});
+
+function renameInList(p: Part) {
+  // Zeile sichtbar machen (eingeklappte Liste, eingeklappte ausgeblendete Teile)
+  if (partsFolded) setPartsFolded(false);
+  if (!p.visible && hiddenFolded) {
+    hiddenFolded = false;
+    renderParts();
+  }
+  const span = partsEl.querySelector<HTMLElement>(`[data-act="name"][data-id="${p.id}"]`);
+  if (!span) return;
+  span.scrollIntoView({ block: 'nearest' });
   const input = document.createElement('input');
   input.className = 'rename';
   input.value = p.name;
@@ -2394,7 +2406,7 @@ partsEl.addEventListener('dblclick', (e) => {
     else if (k.key === 'Escape') finish(false);
   });
   input.addEventListener('blur', () => finish(true));
-});
+}
 
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (e.buttons || tc.dragging) {
@@ -2550,24 +2562,29 @@ function toggleEdge(j: Joint, side: Side, part: Part, edge: EdgeFeature, on?: nu
   renderAll();
 }
 
-renderer.domElement.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  // Strg+Klick ist auf dem Mac ein Rechtsklick – dort beginnt das Verschieben, nichts löschen
-  if (e.ctrlKey && e.button === 0) return;
+// Kein Browsermenü im 3D-Fenster – ein Rechtsklick ohne Ziehen öffnet das eigene (siehe Kontextmenü)
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/** Markierung (Punkt oder gewählte Fläche) unter dem Mauszeiger. */
+function markerAt(e: PointerEvent | MouseEvent): { joint: Joint; side: Side; index: number; kind: 'point' | 'face' } | null {
   setNdc(e);
   const targets = [...markerGroup.children.filter((o) => (o as THREE.Mesh).isMesh), ...faceGroup.children];
   const hit = raycaster.intersectObjects(targets, false)[0];
-  if (!hit) return;
+  if (!hit) return null;
   const { joint, side, index, kind } = hit.object.userData as { joint: number; side: Side; index: number; kind: 'point' | 'face' };
   const j = joints.find((x) => x.id === joint);
-  if (!j) return;
-  if (kind === 'face') (side === 'a' ? j.fa : j.fb).splice(index, 1);
-  else (side === 'a' ? j.ma : j.mb).splice(index, 1);
+  return j ? { joint: j, side, index, kind } : null;
+}
+
+function removeMarker(m: { joint: Joint; side: Side; index: number; kind: 'point' | 'face' }) {
+  const j = m.joint;
+  if (m.kind === 'face') (m.side === 'a' ? j.fa : j.fb).splice(m.index, 1);
+  else (m.side === 'a' ? j.ma : j.mb).splice(m.index, 1);
   markersChanged(j);
   if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
   solveAll();
   renderAll();
-});
+}
 
 function setPickMode(mode: PickMode) {
   pickMode = mode;
@@ -2882,6 +2899,40 @@ function renderLight() {
   rebuildMarkers();
 }
 
+function setBase(id: number) {
+  baseId = id;
+  solveAll();
+  renderAll();
+  fitView();
+}
+
+/** Teil aus seiner Gruppe lösen; es bleibt, wo es ist. */
+function ungroupPart(p: Part) {
+  // Lage beibehalten: aktuelle Position wird die neue Ausgangslage
+  p.layout.copy(p.mesh.matrixWorld);
+  p.group = undefined;
+  solveAll();
+  renderAll();
+  toast(`„${p.name}" bewegt sich jetzt unabhängig von seiner Gruppe.`);
+}
+
+/** Gizmo für ein Teil öffnen – oder schließen, wenn es schon offen ist. */
+function movePartByHand(id: number) {
+  // Nochmal klicken schließt das Gizmo wieder
+  if (gizmoPart()?.id === id && !gizmoTarget?.assembly) {
+    closeGizmo();
+    renderAll();
+    return;
+  }
+  // Wird das Teil von einer Verbindung bewegt, wird diese angepasst
+  const jid = movedBy.get(id);
+  if (jid !== undefined) {
+    activeJointId = jid;
+    openGizmo({ kind: 'joint', id: jid });
+  } else openGizmo({ kind: 'part', id });
+  renderAll();
+}
+
 document.getElementById('panel')!.addEventListener('click', (e) => {
   const t = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
   if (!t) return;
@@ -2906,35 +2957,16 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
     }
     case 'ungroup': {
       const p = getPart(id);
-      if (!p) break;
-      // Lage beibehalten: aktuelle Position wird die neue Ausgangslage
-      p.layout.copy(p.mesh.matrixWorld);
-      p.group = undefined;
-      solveAll();
-      renderAll();
-      toast(`„${p.name}" bewegt sich jetzt unabhängig von seiner Gruppe.`);
+      if (p) ungroupPart(p);
       break;
     }
     case 'fold-hidden':
       hiddenFolded = !hiddenFolded;
       renderParts();
       break;
-    case 'move-part': {
-      // Nochmal klicken schließt das Gizmo wieder
-      if (gizmoPart()?.id === id && !gizmoTarget?.assembly) {
-        closeGizmo();
-        renderAll();
-        break;
-      }
-      // Wird das Teil von einer Verbindung bewegt, wird diese angepasst
-      const jid = movedBy.get(id);
-      if (jid !== undefined) {
-        activeJointId = jid;
-        openGizmo({ kind: 'joint', id: jid });
-      } else openGizmo({ kind: 'part', id });
-      renderAll();
+    case 'move-part':
+      movePartByHand(id);
       break;
-    }
     case 'clr-a':
     case 'clr-b':
       if (!j) break;
@@ -3095,10 +3127,7 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
       break;
     }
     case 'base':
-      baseId = id;
-      solveAll();
-      renderAll();
-      fitView();
+      setBase(id);
       break;
     case 'sel-a':
     case 'sel-b': {
@@ -3501,6 +3530,170 @@ function worldPositions(members: Part[]): Float32Array {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- Kontextmenü
+
+/**
+ * Rechtsklick auf ein Teil (im 3D-Fenster oder in der Teileliste): die Befehle für dieses Teil an einer
+ * Stelle. Im 3D-Fenster öffnet nur ein Rechtsklick ohne Ziehen das Menü – rechts ziehen verschiebt
+ * weiterhin die Ansicht (auf dem Mac käme das Browser-Ereignis schon beim Drücken).
+ */
+type MenuEntry = { label: string; run: () => void; disabled?: boolean; danger?: boolean; title?: string } | 'sep';
+const ctxMenu = document.getElementById('ctxMenu')!;
+const ctxColor = document.getElementById('ctxColor') as HTMLInputElement;
+let ctxEntries: MenuEntry[] = [];
+
+function openMenu(x: number, y: number, head: string, entries: MenuEntry[]) {
+  hideTip();
+  // Trennlinien nur zwischen Einträgen
+  const list = entries.filter((e, i) => e !== 'sep' || (i > 0 && entries[i - 1] !== 'sep' && i < entries.length - 1));
+  ctxEntries = list;
+  ctxMenu.innerHTML = head + list.map((e, i) => e === 'sep'
+    ? '<hr />'
+    : `<button role="menuitem" data-i="${i}"${e.disabled ? ' disabled' : ''}${e.danger ? ' class="danger"' : ''}${e.title ? ` title="${esc(e.title)}"` : ''}>${esc(e.label)}</button>`).join('');
+  ctxMenu.hidden = false;
+  const r = ctxMenu.getBoundingClientRect();
+  ctxMenu.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 4))}px`;
+  ctxMenu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
+  ctxMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+}
+
+function closeMenu() {
+  if (ctxMenu.hidden) return;
+  ctxMenu.hidden = true;
+  ctxEntries = [];
+}
+
+ctxMenu.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-i]');
+  const entry = b && ctxEntries[Number(b.dataset.i)];
+  if (!entry || entry === 'sep' || entry.disabled) return;
+  closeMenu();
+  beginAction();
+  entry.run();
+});
+ctxMenu.addEventListener('contextmenu', (e) => e.preventDefault());
+// Klick daneben, Scrollen, Fenstergröße: Menü schließen
+window.addEventListener('pointerdown', (e) => { if (!ctxMenu.contains(e.target as Node)) closeMenu(); }, { capture: true });
+window.addEventListener('wheel', closeMenu, { capture: true, passive: true });
+window.addEventListener('resize', closeMenu);
+window.addEventListener('blur', closeMenu);
+// Tasten: Esc schließt, Pfeile wählen, Enter/Leertaste lösen aus – alle anderen Kürzel ruhen
+window.addEventListener('keydown', (e) => {
+  if (ctxMenu.hidden) return;
+  if (e.key === 'Enter' || e.key === ' ') return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (e.key === 'Escape' || e.key === 'Tab') closeMenu();
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const items = [...ctxMenu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+  }
+}, { capture: true });
+
+/** Farbe eines Teils über die Farbauswahl des Systems ändern (live). */
+function pickColor(p: Part, x: number, y: number) {
+  ctxColor.value = `#${p.color.getHexString()}`;
+  ctxColor.style.left = `${x}px`;
+  ctxColor.style.top = `${y}px`;
+  ctxColor.oninput = () => {
+    p.color.set(ctxColor.value);
+    (p.mesh.material as THREE.MeshStandardMaterial).color.copy(p.color);
+  };
+  ctxColor.onchange = () => renderAll();
+  try {
+    ctxColor.showPicker();
+  } catch {
+    ctxColor.click();
+  }
+}
+
+function setVisible(list: Part[], on: boolean) {
+  for (const q of list) { q.visible = on; q.mesh.visible = on; }
+  renderAll();
+}
+
+function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnType<typeof markerAt>) {
+  const members = unitMembers(p);
+  const s = sizeOf([p]);
+  const others = parts.filter((q) => q !== p && q.visible);
+  const outsideUnit = parts.filter((q) => q.visible && !members.includes(q));
+  const assembly = assemblyOf(p);
+  const seed = getPart(seedOf.get(p.id) ?? p.id) ?? p;
+  const head = `<div class="head"><b>${esc(p.name)}</b><small>${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm${members.length > 1 ? ` · Baugruppe mit ${members.length} Teilen` : ''}</small></div>`;
+  const entries: MenuEntry[] = [];
+  if (marker) {
+    entries.push({ label: marker.kind === 'face' ? 'Diese Fläche abwählen' : 'Diesen Punkt entfernen', run: () => removeMarker(marker) }, 'sep');
+  }
+  entries.push(
+    { label: 'Ausblenden', run: () => setVisible([p], false), disabled: !p.visible },
+    others.length
+      ? { label: 'Nur dieses Teil zeigen', run: () => setVisible(others, false) }
+      : { label: 'Alle Teile zeigen', run: () => setVisible(parts, true), disabled: parts.every((q) => q.visible) },
+  );
+  if (members.length > 1 && outsideUnit.length) entries.push({ label: 'Nur diese Baugruppe zeigen', run: () => setVisible(outsideUnit, false) });
+  entries.push(
+    'sep',
+    { label: 'Farbe ändern …', run: () => pickColor(p, x, y) },
+    { label: 'Umbenennen …', run: () => renameInList(p) },
+    { label: p.id === baseId ? 'Ist das Basisteil' : 'Als Basisteil festlegen', run: () => setBase(p.id), disabled: p.id === baseId, title: 'Das Basisteil bleibt liegen, alle anderen werden daran angefügt.' },
+    { label: 'In der Teileliste zeigen', run: () => revealPart(p) },
+    'sep',
+  );
+  if (h) {
+    entries.push(
+      { label: 'Mit dieser Fläche auf die Platte legen', run: () => layOnFace(h), title: 'Dreht die Baugruppe so, dass die angeklickte ebene Fläche unten liegt.' },
+      { label: 'Passung an dieser Stelle …', run: () => { setTool('fit'); pickFit(h); }, title: 'Zapfen dünner, Bohrung weiter oder Fläche versetzen.' },
+    );
+  }
+  entries.push({ label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) });
+  if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });
+  if (p.group && groupOf(p).length > 1) entries.push({ label: 'Aus der Gruppe lösen', run: () => ungroupPart(p), title: `Gehört zu einer Gruppe (${groupOf(p).length} Teile, bewegen sich gemeinsam).` });
+  entries.push('sep', { label: 'Entfernen', run: () => removePart(p.id), danger: true });
+  openMenu(x, y, head, entries);
+}
+
+/** Rechtsklick ins Leere. */
+function viewMenu(x: number, y: number) {
+  const hidden = parts.filter((q) => !q.visible);
+  openMenu(x, y, '', [
+    { label: 'Ansicht anpassen', run: fitView, disabled: !parts.length },
+    { label: 'Schrägansicht', run: () => viewFrom(VIEW_KEYS[0]) },
+    { label: `Alle Teile zeigen${hidden.length ? ` (${hidden.length} ausgeblendet)` : ''}`, run: () => setVisible(parts, true), disabled: !hidden.length },
+    'sep',
+    { label: 'Auf der Platte anordnen', run: () => void arrangeOnBed(), disabled: !parts.length },
+    { label: 'Hilfe und Tastenkürzel', run: openHelp },
+  ]);
+}
+
+let rightDown: { x: number; y: number } | null = null;
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  rightDown = e.button === 2 ? { x: e.clientX, y: e.clientY } : null;
+}, { capture: true });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.button !== 2 || !rightDown) return;
+  const moved = Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y);
+  rightDown = null;
+  if (moved > 5) return; // war ein Verschieben der Ansicht
+  const marker = markerAt(e);
+  // Punkte sind klein: direkt entfernen (wie bisher); gewählte Flächen bedecken oft das ganze Teil – Menü
+  if (marker?.kind === 'point') {
+    beginAction();
+    removeMarker(marker);
+    return;
+  }
+  const h = pick(e);
+  if (h) partMenu(h.part, h, e.clientX, e.clientY, marker);
+  else viewMenu(e.clientX, e.clientY);
+});
+partsEl.addEventListener('contextmenu', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-part]');
+  const p = li && getPart(Number(li.dataset.part));
+  if (!p || (e.target as HTMLElement).closest('input.rename')) return;
+  e.preventDefault();
+  partMenu(p, null, e.clientX, e.clientY);
+});
 
 // ---------------------------------------------------------------- Statuszeile
 
