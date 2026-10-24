@@ -129,6 +129,15 @@ rechts, „⇄ Seite" zeigt die andere Hälfte. Wo die Ebene durch Material geht
 einem dunkleren Ton des Teils (auch bei aufeinanderliegenden Teilen sauber getrennt), so lassen sich
 Wandstärken, Bohrungen und Passungen ansehen. Klicken und Messen treffen nur, was sichtbar ist – z. B. eine
 Bohrung im Inneren.
+**Zerschneiden** (Rechtsklick › „Zerschneiden …"): teilt ein Teil an der Schnittebene in zwei – etwa wenn es
+nicht auf die Platte passt oder ohne Stützen druckbar werden soll. Die Ebene stellt man wie in der
+Schnittansicht ein (X/Y/Z, Regler, Seite); gezeigt wird nur dieses Teil aufgeschnitten. Verbinder: ohne
+(zum Kleben), **Zapfen** an der sichtbaren Hälfte mit passender Bohrung in der anderen, oder **Dübel**
+(Bohrungen in beiden Hälften, Dübel als eigene Teile). Anzahl und ⌀ automatisch oder vorgegeben, Spiel
+einstellbar (Standard 0,2 mm). Die Verbinder sitzen nur dort, wo um die Bohrung genug Wand bleibt, und
+reichen nie bis auf die andere Seite durch; die Vorschau zeigt sie in der Schnittfläche. Danach liegen die
+Hälften mit der Schnittfläche nach unten nebeneinander (Zapfen nach oben), Dübel stehen daneben – alles mit
+Strg/⌘+Z zurücknehmbar. Das Teil muss geschlossen (wasserdicht) sein; Bemalung und Modifier entfallen.
 **Skalieren und Spiegeln** (Rechtsklick › „Skalieren / Spiegeln …" oder Taste S über einem Teil bzw. für die
 Auswahl): Größe in % oder als Breite/Tiefe/Höhe in mm (gleichmäßig), Schnellwahl 50 %, 200 %, Zoll → mm
 (× 25,4) und cm → mm; Spiegeln an X, Y oder Z. Wahlweise die ganze Baugruppe oder nur ein Teil – um die

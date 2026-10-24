@@ -28,6 +28,7 @@ import {
   type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, saveSession, sessionInfo, unpackProject,
 } from './io/project';
 import { unionParts } from './io/union';
+import { type Connector, CutError, cutMesh, planConnectors, releaseCut } from './io/cut';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -2145,7 +2146,7 @@ function pick(e: PointerEvent | MouseEvent): Hit | null {
   setNdc(e);
   const meshes = parts.filter((p) => p.visible).map((p) => p.mesh);
   // Im Schnitt nur, was zu sehen ist
-  const hit = raycaster.intersectObjects(meshes, false).find((h) => sectionKeeps(h.point));
+  const hit = raycaster.intersectObjects(meshes, false).find((h) => sectionKeeps(h.point, getPart(h.object.userData.partId)));
   if (!hit || !hit.face || hit.faceIndex == null) return null;
   const part = getPart(hit.object.userData.partId)!;
   const inv = part.mesh.matrixWorld.clone().invert();
@@ -2695,6 +2696,7 @@ window.addEventListener('keydown', (e) => {
       openScale({ partId: p.id, which: unitMembers(p).length > 1 ? 'unit' : 'part' });
     } else toast('Zum Skalieren mit der Maus auf ein Teil zeigen (oder Teile auswählen) und S drücken.');
   } else if (scaleTarget && k === 'escape') closeScale();
+  else if (cutTarget && k === 'escape') setSection(false);
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
@@ -3687,12 +3689,12 @@ function placeCaps() {
 }
 
 /** Liegt ein Punkt (Welt) im sichtbaren Teil? */
-const sectionKeeps = (p: THREE.Vector3) => !section || sectionPlane.distanceToPoint(p) >= -1e-6;
+const sectionKeeps = (p: THREE.Vector3, part?: Part) => !section || (!!cutTarget && part?.id !== cutTarget.partId) || sectionPlane.distanceToPoint(p) >= -1e-6;
 
-/** Umriss aller sichtbaren Teile. */
+/** Umriss aller sichtbaren Teile – beim Zerschneiden nur des Teils, das zerschnitten wird. */
 function sceneBox(): THREE.Box3 {
   const box = new THREE.Box3();
-  for (const p of parts) if (p.visible) box.union(partBox(p));
+  for (const p of parts) if (p.visible && (!cutTarget || p.id === cutTarget.partId)) box.union(partBox(p));
   return box;
 }
 
@@ -3717,6 +3719,7 @@ function updateSection() {
   sectionOutline.geometry.setFromPoints([corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)]);
   sectionOutline.visible = true;
   placeCaps();
+  if (cutTarget) scheduleCutPreview();
 }
 
 /** Schieberegler über die Ausdehnung der Teile entlang der Achse. */
@@ -3738,6 +3741,7 @@ function setSection(on: boolean, axis?: 0 | 1 | 2) {
     section = null;
     sectionBar.hidden = true;
     sectionOutline.visible = false;
+    if (cutTarget) closeCut();
   } else {
     const ax = axis ?? section?.axis ?? 1;
     const box = sceneBox();
@@ -3758,17 +3762,19 @@ function setSection(on: boolean, axis?: 0 | 1 | 2) {
 /** Je Bild: Schnittebene an allen betroffenen Materialien (auch an neu angelegten). */
 function applySectionClip() {
   if (!section && !clipApplied) return;
-  const planes = section ? sectionPlanes : null;
-  const set = (o: THREE.Object3D) => o.traverse((c) => {
+  const set = (o: THREE.Object3D, on: boolean) => o.traverse((c) => {
     const m = (c as THREE.Mesh).material;
     if (!m) return;
+    const planes = on ? sectionPlanes : null;
     for (const mat of Array.isArray(m) ? m : [m]) if (mat.clippingPlanes !== planes) mat.clippingPlanes = planes;
   });
-  // Schnittflächen für alle sichtbaren Teile, entfernte Teile aufräumen
-  for (const p of [...caps.keys()]) if (!section || !parts.includes(p)) dropCaps(p);
+  // Schnittflächen für alle sichtbaren Teile (beim Zerschneiden nur für dieses), entfernte Teile aufräumen
+  const cutsPart = (p: Part) => !!section && (!cutTarget || p.id === cutTarget.partId);
+  for (const p of [...caps.keys()]) if (!cutsPart(p) || !parts.includes(p)) dropCaps(p);
   if (section) {
     let added = false;
     for (const p of parts) {
+      if (!cutsPart(p)) continue;
       if (!caps.has(p)) { makeCaps(p); added = true; }
       const c = caps.get(p)!;
       c.quad.visible = p.visible;
@@ -3778,8 +3784,8 @@ function applySectionClip() {
     }
     if (added) placeCaps();
   }
-  for (const p of parts) set(p.mesh);
-  for (const o of [faceGroup, checkGroup, hoverMesh, hoverLine]) set(o);
+  for (const p of parts) set(p.mesh, cutsPart(p));
+  for (const o of [faceGroup, checkGroup, hoverMesh, hoverLine]) set(o, !!section && !cutTarget);
   clipApplied = !!section;
 }
 
@@ -3796,6 +3802,232 @@ document.getElementById('sectionFlip')!.addEventListener('click', () => {
   updateSection();
 });
 document.getElementById('sectionClose')!.addEventListener('click', () => setSection(false));
+
+// ---------------------------------------------------------------- Zerschneiden
+
+/**
+ * Ein Teil an der Schnittebene in zwei Teile zerschneiden – etwa weil es nicht auf die Platte passt oder
+ * ohne Stützen druckbar werden soll. Die Schnittansicht zeigt dabei nur dieses Teil aufgeschnitten; die
+ * sichtbare Hälfte bekommt die Zapfen, die andere die Bohrungen (oder beide Bohrungen für Dübel).
+ * Danach liegen beide Hälften mit der Schnittfläche nach unten (Zapfen nach oben) nebeneinander.
+ */
+let cutTarget: { partId: number } | null = null;
+let cutConnector: Connector = 'pin';
+const cutBar = document.getElementById('cutBar')!;
+const cutCount = document.getElementById('cutCount') as HTMLSelectElement;
+const cutDia = document.getElementById('cutDia') as HTMLInputElement;
+const cutGap = document.getElementById('cutGap') as HTMLInputElement;
+const cutFlat = document.getElementById('cutFlat') as HTMLInputElement;
+const cutHelp = document.getElementById('cutHelp')!;
+const cutPreview = new THREE.Group();
+scene.add(cutPreview);
+let cutTimer = 0;
+let cutSeq = 0;
+let cutBusy = false;
+
+function openCut(p: Part) {
+  setTool(null);
+  closeScale();
+  if (gizmoTarget) closeGizmo();
+  cutTarget = { partId: p.id };
+  document.getElementById('cutTitle')!.textContent = `„${p.name}“ zerschneiden`;
+  cutBar.hidden = false;
+  renderCutBar();
+  // Waagerecht durch die Mitte, die untere Hälfte bleibt sichtbar (Zapfen zeigen nach oben)
+  if (!section) {
+    setSection(true, 2);
+    if (section) {
+      const box = partBox(p);
+      const sec = section as { axis: 0 | 1 | 2; value: number; keepHigh: boolean };
+      sec.value = (box.min.z + box.max.z) / 2;
+      sec.keepHigh = false;
+      sectionRange();
+      updateSection();
+    }
+  } else {
+    sectionRange();
+    updateSection();
+  }
+}
+
+function closeCut() {
+  cutTarget = null;
+  cutBar.hidden = true;
+  clearCutPreview();
+  releaseCut();
+  if (section) { sectionRange(); updateSection(); }
+}
+
+function renderCutBar() {
+  cutBar.querySelectorAll<HTMLElement>('[data-conn]').forEach((b) => b.classList.toggle('on', b.dataset.conn === cutConnector));
+  for (const el of cutBar.querySelectorAll<HTMLElement>('.conn-opt')) el.hidden = cutConnector === 'none';
+}
+
+function clearCutPreview() {
+  for (const o of [...cutPreview.children]) {
+    cutPreview.remove(o);
+    (o as THREE.Mesh).geometry.dispose();
+    ((o as THREE.Mesh).material as THREE.Material).dispose();
+  }
+}
+
+/** Schnittebene und Einstellungen in den Koordinaten des Teils (Hälfte A = die sichtbare). */
+function cutOptions(p: Part) {
+  p.mesh.updateMatrixWorld();
+  const local = sectionPlane.clone().applyMatrix4(p.mesh.matrixWorld.clone().invert());
+  // Behalten wird k·x + c ≥ 0; die Normale fürs Schneiden zeigt zur weggeschnittenen Seite
+  return {
+    normal: [-local.normal.x, -local.normal.y, -local.normal.z] as Vec3,
+    offset: local.constant,
+    connector: cutConnector,
+    count: Number(cutCount.value) || 0,
+    diameter: Number(cutDia.value) || 0,
+    clearance: Math.max(0, Number(cutGap.value) || 0),
+  };
+}
+
+function scheduleCutPreview() {
+  clearTimeout(cutTimer);
+  cutTimer = window.setTimeout(() => void updateCutPreview(), 180);
+}
+
+const mmc = (x: number) => String(+x.toFixed(2)).replace('.', ',');
+
+async function updateCutPreview() {
+  const p = cutTarget && getPart(cutTarget.partId);
+  if (!p || !section) return;
+  const seq = ++cutSeq;
+  const opts = cutOptions(p);
+  if (opts.connector === 'none') {
+    clearCutPreview();
+    cutHelp.textContent = 'Schnitt ohne Verbinder – die Hälften lassen sich z. B. kleben.';
+    return;
+  }
+  let res;
+  try {
+    res = await planConnectors(positionsOf(p), opts, manifoldWasm);
+  } catch {
+    return;
+  }
+  if (seq !== cutSeq || !cutTarget) return;
+  clearCutPreview();
+  if (!res.closed) {
+    cutHelp.textContent = 'Das Teil ist nicht geschlossen (nicht wasserdicht) – so lässt es sich nicht zerschneiden.';
+    return;
+  }
+  const W = p.mesh.matrixWorld;
+  const n = new THREE.Vector3(...opts.normal).transformDirection(W);
+  const color = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde');
+  for (const c of res.connectors) {
+    const h = c.depthA + c.depthB;
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(c.diameter / 2, c.diameter / 2, h, 32), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false }));
+    m.renderOrder = 8;
+    m.raycast = () => {};
+    // Zylinder entlang y → entlang der Schnittnormale, von −TiefeA bis +TiefeB
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+    m.position.copy(new THREE.Vector3(...c.center).applyMatrix4(W)).addScaledVector(n, (c.depthB - c.depthA) / 2);
+    cutPreview.add(m);
+  }
+  const kind = cutConnector === 'pin' ? 'Zapfen' : 'Dübel';
+  const first = res.connectors[0];
+  cutHelp.textContent = [
+    res.connectors.length
+      ? `${res.connectors.length} ${kind} ⌀ ${mmc(first.diameter)} mm, Spiel ${mmc(opts.clearance)} mm, ${mmc(Math.min(...res.connectors.map((c) => Math.min(c.depthA, c.depthB))))}–${mmc(Math.max(...res.connectors.map((c) => Math.max(c.depthA, c.depthB))))} mm tief.`
+      : 'Kein Platz für Verbinder.',
+    cutConnector === 'pin' ? 'Die sichtbare Hälfte bekommt die Zapfen.' : '',
+    ...res.notes,
+  ].filter(Boolean).join(' ');
+}
+
+/** Name der Hälfte nach ihrer Lage zur Ebene (Richtung d zeigt in die Hälfte). */
+function halfName(d: THREE.Vector3): string {
+  const a = [Math.abs(d.x), Math.abs(d.y), Math.abs(d.z)];
+  const k = a.indexOf(Math.max(...a));
+  return [['links', 'rechts'], ['vorne', 'hinten'], ['unten', 'oben']][k][d.getComponent(k) > 0 ? 1 : 0];
+}
+
+async function applyCut() {
+  const p = cutTarget && getPart(cutTarget.partId);
+  if (!p || !section || cutBusy) return;
+  const opts = cutOptions(p);
+  cutBusy = true;
+  toast('Schneide …', 20000);
+  let res;
+  try {
+    res = await cutMesh(positionsOf(p), opts, manifoldWasm);
+  } catch (err) {
+    toast(err instanceof CutError ? err.message : `Zerschneiden fehlgeschlagen: ${(err as Error).message}`, 6000);
+    return;
+  } finally {
+    cutBusy = false;
+  }
+  if (getPart(p.id) !== p) return;
+  const W = p.mesh.matrixWorld.clone();
+  // Richtung in die sichtbare Hälfte (Welt)
+  const k = sectionPlane.normal.clone();
+  // Alles, was am Teil hängt, bleibt, wo es ist – die Verbindungen zum Teil selbst entfallen
+  for (const q of unitMembers(p)) q.layout.copy(q.mesh.matrixWorld);
+  const wasBase = baseId === p.id;
+  const lost = [p.paint ? 'Bemalung' : '', p.modifiers?.length ? 'Modifier/Text' : ''].filter(Boolean);
+  const color = `#${p.color.getHexString()}`;
+  const extras = { settings: p.settings, objectSettings: p.objectSettings };
+  const geo = (pos: Float32Array) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  };
+  removePart(p.id);
+  const kept = addPart(`${p.name} (${halfName(k)})`, geo(res.a), { color, layout: W, extras });
+  const other = addPart(`${p.name} (${halfName(k.clone().negate())})`, geo(res.b), { color, layout: W, extras });
+  const dowels = res.dowels.map((d, i) => addPart(`${p.name} Dübel ${i + 1}`, geo(d), { color, layout: W }));
+  if (wasBase) baseId = kept.id;
+  solveAll();
+  const pins = cutConnector === 'pin' && res.connectors.length > 0;
+  if (cutFlat.checked) {
+    // Schnittflächen nach unten; Zapfen zeigen nach oben; Dübel stehen
+    const turn = (q: Part, down: THREE.Vector3) => {
+      const c = partBox(q).getCenter(new THREE.Vector3());
+      turnUnit([q], layFlat([down.x, down.y, down.z], [c.x, c.y, c.z]));
+    };
+    turn(kept, pins ? k : k.clone().negate());
+    turn(other, k);
+    for (const d of dowels) turn(d, k);
+  }
+  // Nebeneinander: die andere Hälfte rechts der sichtbaren, die Dübel dahinter
+  solveAll();
+  const gap = Math.max(5, sceneScale() * 0.05);
+  const ref = partBox(kept);
+  let x = ref.max.x + gap;
+  const row = cutFlat.checked ? [other, ...dowels] : dowels;
+  for (const q of row) {
+    const b = partBox(q);
+    q.layout.premultiply(new THREE.Matrix4().makeTranslation(x - b.min.x, (ref.min.y + ref.max.y) / 2 - (b.min.y + b.max.y) / 2, 0));
+    solveAll();
+    x = partBox(q).max.x + gap;
+  }
+  selected.clear();
+  for (const q of [kept, other, ...dowels]) selected.add(q.id);
+  setSection(false);
+  solveAll();
+  renderAll();
+  // Die Teile liegen jetzt woanders: alles ins Bild
+  fitView();
+  const nc = res.connectors.length;
+  const what = nc ? ` mit ${nc} ${cutConnector === 'pin' ? 'Zapfen' : nc > 1 ? 'Dübeln' : 'Dübel'} ⌀ ${mmc(res.connectors[0].diameter)} mm` : '';
+  toast(`„${p.name}“ zerschnitten${what}.${lost.length ? ` ${lost.join(' und ')} entfernt.` : ''}${res.notes.length ? ` ${res.notes.join(' ')}` : ''}`, 6000);
+}
+
+cutBar.querySelectorAll<HTMLElement>('[data-conn]').forEach((b) => b.addEventListener('click', () => {
+  cutConnector = b.dataset.conn as Connector;
+  renderCutBar();
+  scheduleCutPreview();
+}));
+for (const el of [cutCount, cutDia, cutGap]) el.addEventListener('input', scheduleCutPreview);
+document.getElementById('cutApply')!.addEventListener('click', () => void applyCut());
+document.getElementById('cutCancel')!.addEventListener('click', () => setSection(false));
 
 // ---------------------------------------------------------------- Skalieren und Spiegeln
 
@@ -4254,6 +4486,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
   }
   entries.push(
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ partId: p.id, which: members.length > 1 ? 'unit' : 'part' }), title: 'Größe in % oder mm, Zoll → mm, an X/Y/Z spiegeln (Taste S)' },
+    { label: section && !cutTarget ? 'Hier zerschneiden …' : 'Zerschneiden …', run: () => openCut(p), title: 'In zwei Teile schneiden, auf Wunsch mit Zapfen oder Dübeln zum Zusammenstecken' },
     { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
   );
   if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });

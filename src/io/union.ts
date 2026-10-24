@@ -6,7 +6,7 @@
  *
  * Die Bibliothek (WebAssembly, ~0,5 MB) wird erst beim ersten Gebrauch geladen.
  */
-import type { ManifoldToplevel } from 'manifold-3d';
+import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 
 export interface UnionInput {
   name: string;
@@ -24,7 +24,7 @@ export interface UnionResult {
 let modulePromise: Promise<ManifoldToplevel> | null = null;
 
 /** Lädt manifold-3d; die WASM-Datei wird ohne Netzwerkzugriff übergeben, wenn sie eingebettet ist. */
-function loadManifold(wasmUrl?: string): Promise<ManifoldToplevel> {
+export function loadManifold(wasmUrl?: string): Promise<ManifoldToplevel> {
   modulePromise ??= (async () => {
     const { default: Module } = await import('manifold-3d');
     const config: Record<string, unknown> = {};
@@ -48,7 +48,7 @@ function loadManifold(wasmUrl?: string): Promise<ManifoldToplevel> {
 }
 
 /** Gleiche Eckpunkte (bitgenau) zusammenfassen – manifold braucht ein indiziertes Netz. */
-function indexed(p: Float32Array): { verts: Float32Array; tris: Uint32Array } {
+export function indexed(p: Float32Array): { verts: Float32Array; tris: Uint32Array } {
   const map = new Map<string, number>();
   const verts: number[] = [];
   const tris = new Uint32Array(p.length / 3);
@@ -65,45 +65,56 @@ function indexed(p: Float32Array): { verts: Float32Array; tris: Uint32Array } {
   return { verts: Float32Array.from(verts), tris };
 }
 
+/** Geschlossener Körper aus nicht indizierten Dreiecken – oder null, wenn das Netz nicht wasserdicht ist. */
+export function solidOf(wasm: ManifoldToplevel, positions: Float32Array): Manifold | null {
+  const { verts, tris } = indexed(positions);
+  const mesh = new wasm.Mesh({ numProp: 3, vertProperties: verts, triVerts: tris });
+  // Fast deckungsgleiche Ränder (Nähte) schließen
+  mesh.merge();
+  try {
+    const m = new wasm.Manifold(mesh);
+    if (!m.isEmpty()) return m;
+    m.delete();
+  } catch { /* nicht geschlossen */ }
+  return null;
+}
+
+/** Nicht indizierte Dreiecke eines Körpers. */
+export function positionsOfSolid(m: Manifold): Float32Array {
+  const res = m.getMesh();
+  const np = res.numProp;
+  const out = new Float32Array(res.triVerts.length * 3);
+  for (let i = 0; i < res.triVerts.length; i++) {
+    const v = res.triVerts[i] * np;
+    out[i * 3] = res.vertProperties[v];
+    out[i * 3 + 1] = res.vertProperties[v + 1];
+    out[i * 3 + 2] = res.vertProperties[v + 2];
+  }
+  return out;
+}
+
 /**
  * Vereinigt alle Teile zu einem Körper.
  * @param wasmUrl Adresse der manifold.wasm (im Browser aus dem Build), in Node nicht nötig
  */
 export async function unionParts(parts: UnionInput[], wasmUrl?: string): Promise<UnionResult> {
   const wasm = await loadManifold(wasmUrl);
-  const { Manifold, Mesh } = wasm;
-  const solids: InstanceType<typeof Manifold>[] = [];
+  const { Manifold } = wasm;
+  const solids: Manifold[] = [];
   const loose: Float32Array[] = [];
   const notClosed: string[] = [];
   for (const part of parts) {
-    const { verts, tris } = indexed(part.positions);
-    const mesh = new Mesh({ numProp: 3, vertProperties: verts, triVerts: tris });
-    // Fast deckungsgleiche Ränder (Nähte) schließen
-    mesh.merge();
-    try {
-      const m = new Manifold(mesh);
-      if (m.isEmpty()) {
-        m.delete();
-        throw new Error('leer');
-      }
-      solids.push(m);
-    } catch {
+    const m = solidOf(wasm, part.positions);
+    if (m) solids.push(m);
+    else {
       notClosed.push(part.name);
       loose.push(part.positions);
     }
   }
-  let out = new Float32Array(0);
+  let out: Float32Array = new Float32Array(0);
   if (solids.length) {
     const u = solids.length === 1 ? solids[0] : Manifold.union(solids);
-    const res = u.getMesh();
-    const np = res.numProp;
-    out = new Float32Array(res.triVerts.length * 3);
-    for (let i = 0; i < res.triVerts.length; i++) {
-      const v = res.triVerts[i] * np;
-      out[i * 3] = res.vertProperties[v];
-      out[i * 3 + 1] = res.vertProperties[v + 1];
-      out[i * 3 + 2] = res.vertProperties[v + 2];
-    }
+    out = positionsOfSolid(u);
     if (u !== solids[0]) u.delete();
     for (const m of solids) m.delete();
   }

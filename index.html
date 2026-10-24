@@ -153,6 +153,21 @@
           <button id="sectionFlip" class="ghost small" title="Die andere Hälfte zeigen">⇄ Seite</button>
           <button id="sectionClose" class="icon" title="Schnitt beenden (C)" aria-label="Schnitt beenden">✕</button>
         </div>
+        <div id="cutBar" hidden>
+          <strong id="cutTitle"></strong>
+          <span class="seg" role="group" aria-label="Verbinder">
+            <button data-conn="none" title="Nur schneiden – z. B. zum Kleben">Ohne</button>
+            <button data-conn="pin" title="Zapfen an der sichtbaren Hälfte, Bohrung in der anderen">Zapfen</button>
+            <button data-conn="dowel" title="Bohrungen in beiden Hälften und getrennt gedruckte Dübel">Dübel</button>
+          </span>
+          <label class="small conn-opt">Anzahl <select id="cutCount"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+          <label class="small conn-opt">⌀ <input type="number" id="cutDia" min="2" max="20" step="0.5" placeholder="Auto" /> mm</label>
+          <label class="small conn-opt" title="Spiel zwischen Zapfen bzw. Dübel und Bohrung (je Seite)">Spiel <input type="number" id="cutGap" min="0" max="1" step="0.05" value="0.2" /> mm</label>
+          <label class="check small"><input type="checkbox" id="cutFlat" checked /> Schnittflächen auf die Platte</label>
+          <button id="cutApply" class="small">Zerschneiden</button>
+          <button id="cutCancel" class="ghost small">Abbrechen</button>
+          <p class="help" id="cutHelp">Lage der Schnittebene unten rechts einstellen.</p>
+        </div>
         <div id="scaleBar" hidden>
           <strong id="scaleTitle"></strong>
           <span class="seg" id="scaleWhich" role="group" aria-label="Was skaliert wird">
@@ -258,7 +273,7 @@
             <dt>Klick</dt><dd>Fläche, Kante oder Punkt wählen – nochmal: abwählen</dd>
             <dt><kbd>Alt/⌥</kbd> + Klick</dt><dd>Fläche an die zuletzt gewählte anhängen (zusammenfassen)</dd>
             <dt><kbd>⇧</kbd> + Klick</dt><dd>Teil auswählen (weitere ⇧-Klicks: mehrere) und in der Teileliste zeigen</dd>
-            <dt>Rechtsklick</dt><dd>auf ein Teil: Menü (ausblenden, Farbe, Basis, hinlegen, Passung, bewegen, entfernen …) – auch in der Teileliste; auf einen Punkt: entfernen</dd>
+            <dt>Rechtsklick</dt><dd>auf ein Teil: Menü (ausblenden, Farbe, Basis, hinlegen, Passung, skalieren, zerschneiden, bewegen, entfernen …) – auch in der Teileliste; auf einen Punkt: entfernen</dd>
             <dt>Links ziehen</dt><dd>Ansicht drehen</dd>
             <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben</dd>
             <dt>Mausrad</dt><dd>zoomen, dorthin, wo der Zeiger steht</dd>
