@@ -75,6 +75,14 @@ body {
 [hidden] { display: none !important; }
 #tip small { color: var(--muted); }
 .parts li.hl { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.parts li.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.selbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 0; padding: 6px 8px;
+  border: 1px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.selbar strong { font-size: 12.5px; margin-right: 2px; }
+.selbar button.danger { color: var(--err); border-color: var(--err); }
+.selbar button.icon { margin-left: auto; }
 .parts li.flash { animation: flash 1.4s ease-out; }
 @keyframes flash { 0%, 40% { background: color-mix(in srgb, var(--accent) 35%, transparent); } 100% { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .parts li.flash { animation: none; background: color-mix(in srgb, var(--accent) 20%, transparent); } }

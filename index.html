@@ -49,6 +49,15 @@
             <label class="check small" title="Alle Teile ein- oder ausblenden"><input type="checkbox" id="allVis" checked /> Alle Teile</label>
             <span id="partsCount" class="help"></span>
           </div>
+          <div id="selBar" class="selbar" hidden>
+            <strong id="selCount"></strong>
+            <button class="ghost small" data-sel="group" title="Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam">Gruppieren</button>
+            <button class="ghost small" data-sel="ungroup" title="Alle Teile der Gruppen bewegen sich danach einzeln">Gruppe auflösen</button>
+            <button class="ghost small" data-sel="hide">Ausblenden</button>
+            <button class="ghost small" data-sel="color">Farbe</button>
+            <button class="ghost small danger" data-sel="remove">Entfernen</button>
+            <button class="icon" data-sel="clear" title="Auswahl aufheben (Esc)" aria-label="Auswahl aufheben">✕</button>
+          </div>
           <ul id="parts" class="parts"></ul>
           <div class="row wrap">
             <button id="demo" class="ghost small">Beispiel: Haus</button>
@@ -184,6 +193,7 @@
             <dt>⛓</dt><dd>Teil aus seiner Gruppe lösen</dd>
             <dt>✥</dt><dd>Teil von Hand bewegen und drehen</dd>
             <dt>✕</dt><dd>Teil entfernen</dd>
+            <dt><kbd>Strg/⌘</kbd> + Klick</dt><dd>mehrere Teile auswählen, <kbd>⇧</kbd> + Klick: Bereich – dann gruppieren, ausblenden, Farbe, entfernen</dd>
           </dl>
           <p class="help">In der Flächenliste einer Verbindung: Kästchen anhaken und „… zusammenfassen“ macht aus mehreren Flächen eine, ⇹ trennt sie wieder, Rechtsklick auf eine Markierung im Modell entfernt sie. Den Rand der Seitenleiste ziehen ändert ihre Breite, Doppelklick setzt sie zurück.</p>
         </section>
@@ -197,7 +207,8 @@
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
             <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie in Bambu Studio</dd>
-            <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden, sonst Auswahl aufheben</dd>
+            <dt><kbd>Strg/⌘</kbd> <kbd>A</kbd></dt><dd>alle sichtbaren Teile auswählen</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>Z</kbd></dt><dd>Rückgängig – jede Aktion</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd></dt><dd>Wiederholen (auch <kbd>Strg</kbd> <kbd>Y</kbd>)</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>S</kbd></dt><dd>Projekt speichern</dd>
@@ -208,7 +219,7 @@
           <dl class="keys">
             <dt>Klick</dt><dd>Fläche, Kante oder Punkt wählen – nochmal: abwählen</dd>
             <dt><kbd>Alt/⌥</kbd> + Klick</dt><dd>Fläche an die zuletzt gewählte anhängen (zusammenfassen)</dd>
-            <dt><kbd>⇧</kbd> + Klick</dt><dd>Teil in der Teileliste zeigen</dd>
+            <dt><kbd>⇧</kbd> + Klick</dt><dd>Teil auswählen (weitere ⇧-Klicks: mehrere) und in der Teileliste zeigen</dd>
             <dt>Rechtsklick</dt><dd>auf ein Teil: Menü (ausblenden, Farbe, Basis, hinlegen, Passung, bewegen, entfernen …) – auch in der Teileliste; auf einen Punkt: entfernen</dd>
             <dt>Links ziehen</dt><dd>Ansicht drehen</dd>
             <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben</dd>

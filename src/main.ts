@@ -164,6 +164,9 @@ let tool: 'lay' | 'fit' | 'measure' | null = null;
 let fitTarget: { part: Part; f: CylinderFeature | PlaneFeature } | null = null;
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
 let hiddenFolded = false;
+/** Ausgewählte Teile (Mehrfachauswahl) und die zuletzt angeklickte Zeile für Umschalt+Klick. */
+const selected = new Set<number>();
+let selAnchor: number | null = null;
 /** Teileliste eingeklappt (bleibt im Browser gespeichert). */
 let partsFolded = false;
 try { partsFolded = localStorage.getItem('partjoin.partsFolded') === '1'; } catch { /* ohne Speicher */ }
@@ -259,6 +262,10 @@ hoverLine.matrixAutoUpdate = false;
 hoverLine.visible = false;
 hoverLine.renderOrder = 15;
 scene.add(hoverLine);
+/** Rahmen um ausgewählte Teile. */
+const selGroup = new THREE.Group();
+scene.add(selGroup);
+const selBar = document.getElementById('selBar')!;
 
 function applyTheme() {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches &&
@@ -2461,7 +2468,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     pickMeasure(h);
     return;
   }
+  // Umschalt+Klick: Teil zur Auswahl hinzufügen (oder herausnehmen) und in der Liste zeigen
   if (e.shiftKey) {
+    toggleSelected(h.part.id);
     revealPart(h.part);
     return;
   }
@@ -2622,6 +2631,14 @@ window.addEventListener('keydown', (e) => {
     else undo();
     return;
   }
+  // Strg/⌘+A: alle sichtbaren Teile auswählen
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'a') {
+    if (!parts.length) return;
+    e.preventDefault();
+    for (const p of parts) if (p.visible) selected.add(p.id);
+    renderParts();
+    return;
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === 'p') setPickMode('point');
@@ -2639,13 +2656,14 @@ window.addEventListener('keydown', (e) => {
     updateGizmoAxes();
     renderGizmoBar();
   } else if (gizmoTarget && k === 'escape') closeGizmo();
+  else if (k === 'escape') clearSelection();
 });
 
 // ---------------------------------------------------------------- Seitenleiste
 
 
 function renderParts() {
-  const row = (p: Part) => `<li data-part="${p.id}"${p.visible ? '' : ' class="off"'}>
+  const row = (p: Part) => `<li data-part="${p.id}"${p.visible && !selected.has(p.id) ? '' : ` class="${[p.visible ? '' : 'off', selected.has(p.id) ? 'sel' : ''].join(' ').trim()}"`}>
         <input type="color" class="swatch" data-act="color" data-id="${p.id}" value="#${p.color.getHexString()}" title="Farbe (wird beim mehrfarbigen 3MF-Export übernommen)" />
         <input type="checkbox" data-act="vis" data-id="${p.id}" ${p.visible ? 'checked' : ''} title="Sichtbar" />
         <span class="name" data-act="name" data-id="${p.id}" title="${esc(p.name)} – Klick: im Modell zeigen, Doppelklick: umbenennen">${esc(p.name)}</span>
@@ -2676,6 +2694,7 @@ function renderParts() {
   all.checked = shown === parts.length;
   all.indeterminate = shown > 0 && shown < parts.length;
   document.getElementById('partsCount')!.textContent = `${shown} von ${parts.length} sichtbar`;
+  renderSelection();
 }
 
 function setPartsFolded(on: boolean) {
@@ -2859,6 +2878,8 @@ let rendering = false;
 
 function renderAll() {
   if (rendering) return;
+  // Ausgewählte Teile, die es nicht mehr gibt, vergessen
+  for (const id of selected) if (!getPart(id)) selected.delete(id);
   // Gizmo schließen, wenn sein Teil ausgeblendet oder entfernt wurde
   if (gizmoTarget && !gizmoPart()?.visible) closeGizmo();
   rendering = true;
@@ -2897,6 +2918,7 @@ function renderLight() {
     }
   }
   rebuildMarkers();
+  drawSelection();
 }
 
 function setBase(id: number) {
@@ -3531,6 +3553,144 @@ function worldPositions(members: Part[]): Float32Array {
   return out;
 }
 
+// ---------------------------------------------------------------- Mehrfachauswahl und Gruppen
+
+/**
+ * Mehrere Teile auswählen – in der Teileliste mit Strg/⌘+Klick (einzeln) und Umschalt+Klick (Bereich),
+ * im 3D-Fenster mit Umschalt+Klick, Strg/⌘+A wählt alle sichtbaren. Für die Auswahl: ausblenden,
+ * Farbe, gruppieren (bewegen sich danach gemeinsam), Gruppe auflösen, entfernen.
+ */
+const selectedParts = () => parts.filter((p) => selected.has(p.id));
+
+function toggleSelected(id: number) {
+  if (selected.has(id)) selected.delete(id);
+  else selected.add(id);
+  selAnchor = id;
+  renderParts();
+}
+
+/** Umschalt+Klick in der Liste: alle Zeilen zwischen der zuletzt angeklickten und dieser. */
+function selectRange(id: number) {
+  const order = [...partsEl.querySelectorAll<HTMLElement>('li[data-part]')].map((li) => Number(li.dataset.part));
+  const a = order.indexOf(selAnchor ?? id);
+  const b = order.indexOf(id);
+  if (a < 0 || b < 0) { toggleSelected(id); return; }
+  for (const x of order.slice(Math.min(a, b), Math.max(a, b) + 1)) selected.add(x);
+  renderParts();
+}
+
+function clearSelection() {
+  if (!selected.size) return;
+  selected.clear();
+  renderParts();
+}
+
+/** Leiste über der Liste und Rahmen im 3D-Fenster. */
+function renderSelection() {
+  const list = selectedParts();
+  selBar.hidden = list.length < 2;
+  if (list.length >= 2) {
+    document.getElementById('selCount')!.textContent = `${list.length} ausgewählt`;
+    const grouped = list.some((p) => p.group && groupOf(p).length > 1);
+    (selBar.querySelector('[data-sel="ungroup"]') as HTMLElement).hidden = !grouped;
+    (selBar.querySelector('[data-sel="group"]') as HTMLButtonElement).disabled = sameGroup(list);
+  }
+  drawSelection();
+}
+
+/** Bilden die Teile schon genau eine Gruppe? */
+const sameGroup = (list: Part[]) => !!list[0]?.group && list.every((p) => p.group === list[0].group) && groupOf(list[0]).length === list.length;
+
+function drawSelection() {
+  for (const o of [...selGroup.children]) {
+    selGroup.remove(o);
+    (o as THREE.LineSegments).geometry.dispose();
+    ((o as THREE.LineSegments).material as THREE.Material).dispose();
+  }
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde';
+  for (const p of selectedParts()) {
+    if (!p.visible) continue;
+    const helper = new THREE.Box3Helper(partBox(p).expandByScalar(0.3), new THREE.Color(accent));
+    const m = helper.material as THREE.LineBasicMaterial;
+    m.depthTest = false;
+    m.transparent = true;
+    m.opacity = 0.85;
+    helper.renderOrder = 6;
+    helper.raycast = () => {};
+    selGroup.add(helper);
+  }
+}
+
+/** Ausgewählte Teile zu einer Gruppe verbinden: Sie bleiben, wo sie sind, und bewegen sich künftig gemeinsam. */
+function groupParts(list: Part[]) {
+  if (list.length < 2) return;
+  const taken = new Set(parts.map((p) => p.group));
+  let n = 1;
+  while (taken.has(`Gruppe ${n}`)) n++;
+  const name = `Gruppe ${n}`;
+  for (const p of list) {
+    p.layout.copy(p.mesh.matrixWorld);
+    p.group = name;
+  }
+  solveAll();
+  renderAll();
+  toast(`${list.length} Teile bilden jetzt „${name}" und bewegen sich gemeinsam. Lösen: Rechtsklick › „Gruppe auflösen".`);
+}
+
+/** Gruppen der Teile auflösen (alle Mitglieder). */
+function ungroupAll(list: Part[]) {
+  const members = new Set(list.flatMap((p) => (p.group ? groupOf(p) : [])));
+  for (const p of members) {
+    p.layout.copy(p.mesh.matrixWorld);
+    p.group = undefined;
+  }
+  solveAll();
+  renderAll();
+  if (members.size) toast(`${members.size} Teile bewegen sich jetzt einzeln.`);
+}
+
+function removeParts(list: Part[]) {
+  for (const p of list) removePart(p.id);
+  selected.clear();
+  renderAll();
+}
+
+// Strg/⌘+Klick und Umschalt+Klick in der Teileliste (nicht auf Knöpfen und Feldern)
+partsEl.addEventListener('click', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-part]');
+  if (!li || (e.target as HTMLElement).closest('input, button, label')) return;
+  const id = Number(li.dataset.part);
+  if (e.ctrlKey || e.metaKey) toggleSelected(id);
+  else if (e.shiftKey) selectRange(id);
+  else {
+    // Einfacher Klick: Auswahl aufheben, der Name lässt das Teil wie bisher aufleuchten
+    selAnchor = id;
+    clearSelection();
+    return;
+  }
+  e.stopPropagation();
+});
+// Umschalt+Klick soll keinen Text markieren
+partsEl.addEventListener('mousedown', (e) => { if (e.shiftKey) e.preventDefault(); });
+
+selBar.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-sel]');
+  const list = selectedParts();
+  if (!b || !list.length) return;
+  switch (b.dataset.sel) {
+    case 'group': groupParts(list); break;
+    case 'ungroup': ungroupAll(list); break;
+    case 'hide': setVisible(list, false); break;
+    case 'color': {
+      const r = b.getBoundingClientRect();
+      pickColor(list, r.left, r.bottom);
+      break;
+    }
+    case 'remove': removeParts(list); break;
+    case 'clear': clearSelection(); break;
+  }
+});
+
 // ---------------------------------------------------------------- Kontextmenü
 
 /**
@@ -3592,14 +3752,16 @@ window.addEventListener('keydown', (e) => {
   }
 }, { capture: true });
 
-/** Farbe eines Teils über die Farbauswahl des Systems ändern (live). */
-function pickColor(p: Part, x: number, y: number) {
-  ctxColor.value = `#${p.color.getHexString()}`;
+/** Farbe von Teilen über die Farbauswahl des Systems ändern (live). */
+function pickColor(list: Part[], x: number, y: number) {
+  ctxColor.value = `#${list[0].color.getHexString()}`;
   ctxColor.style.left = `${x}px`;
   ctxColor.style.top = `${y}px`;
   ctxColor.oninput = () => {
-    p.color.set(ctxColor.value);
-    (p.mesh.material as THREE.MeshStandardMaterial).color.copy(p.color);
+    for (const p of list) {
+      p.color.set(ctxColor.value);
+      (p.mesh.material as THREE.MeshStandardMaterial).color.copy(p.color);
+    }
   };
   ctxColor.onchange = () => renderAll();
   try {
@@ -3615,6 +3777,8 @@ function setVisible(list: Part[], on: boolean) {
 }
 
 function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnType<typeof markerAt>) {
+  // Rechtsklick auf ein ausgewähltes Teil: Befehle für die ganze Auswahl
+  if (selected.has(p.id) && selected.size > 1 && !marker) { selectionMenu(x, y); return; }
   const members = unitMembers(p);
   const s = sizeOf([p]);
   const others = parts.filter((q) => q !== p && q.visible);
@@ -3635,7 +3799,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
   if (members.length > 1 && outsideUnit.length) entries.push({ label: 'Nur diese Baugruppe zeigen', run: () => setVisible(outsideUnit, false) });
   entries.push(
     'sep',
-    { label: 'Farbe ändern …', run: () => pickColor(p, x, y) },
+    { label: 'Farbe ändern …', run: () => pickColor([p], x, y) },
     { label: 'Umbenennen …', run: () => renameInList(p) },
     { label: p.id === baseId ? 'Ist das Basisteil' : 'Als Basisteil festlegen', run: () => setBase(p.id), disabled: p.id === baseId, title: 'Das Basisteil bleibt liegen, alle anderen werden daran angefügt.' },
     { label: 'In der Teileliste zeigen', run: () => revealPart(p) },
@@ -3649,9 +3813,36 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
   }
   entries.push({ label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) });
   if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });
-  if (p.group && groupOf(p).length > 1) entries.push({ label: 'Aus der Gruppe lösen', run: () => ungroupPart(p), title: `Gehört zu einer Gruppe (${groupOf(p).length} Teile, bewegen sich gemeinsam).` });
-  entries.push('sep', { label: 'Entfernen', run: () => removePart(p.id), danger: true });
+  if (p.group && groupOf(p).length > 1) {
+    entries.push(
+      { label: 'Aus der Gruppe lösen', run: () => ungroupPart(p), title: `Gehört zu „${p.group}" (${groupOf(p).length} Teile, bewegen sich gemeinsam).` },
+      { label: 'Gruppe auflösen', run: () => ungroupAll([p]), title: 'Alle Teile der Gruppe bewegen sich danach einzeln.' },
+    );
+  }
+  entries.push(
+    'sep',
+    { label: selected.has(p.id) ? 'Aus der Auswahl nehmen' : 'Zur Auswahl hinzufügen', run: () => toggleSelected(p.id), title: 'Mehrere Teile auswählen: Umschalt+Klick im 3D-Fenster, Strg/⌘+Klick in der Liste.' },
+    { label: 'Entfernen', run: () => removePart(p.id), danger: true },
+  );
   openMenu(x, y, head, entries);
+}
+
+function selectionMenu(x: number, y: number) {
+  const list = selectedParts();
+  const others = parts.filter((q) => q.visible && !selected.has(q.id));
+  const grouped = list.some((q) => q.group && groupOf(q).length > 1);
+  const s = sizeOf(list);
+  openMenu(x, y, `<div class="head"><b>${list.length} Teile ausgewählt</b><small>zusammen ${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm</small></div>`, [
+    { label: 'Ausblenden', run: () => setVisible(list, false) },
+    { label: 'Nur diese zeigen', run: () => setVisible(others, false), disabled: !others.length },
+    { label: 'Farbe für alle …', run: () => pickColor(list, x, y) },
+    'sep',
+    { label: 'Gruppieren', run: () => groupParts(list), disabled: sameGroup(list), title: 'Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam.' },
+    ...(grouped ? [{ label: 'Gruppe auflösen', run: () => ungroupAll(list) }] : []),
+    'sep',
+    { label: 'Auswahl aufheben', run: clearSelection },
+    { label: `${list.length} Teile entfernen`, run: () => removeParts(list), danger: true },
+  ]);
 }
 
 /** Rechtsklick ins Leere. */

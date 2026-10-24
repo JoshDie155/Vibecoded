@@ -124,6 +124,11 @@ Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder he
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Mehrfachauswahl**: In der Teileliste wählt Strg/⌘+Klick einzelne Teile, Umschalt+Klick einen Bereich; im
+3D-Fenster Umschalt+Klick, Strg/⌘+A alle sichtbaren, Esc hebt auf. Ausgewählte Teile haben einen Rahmen;
+über der Liste (und per Rechtsklick) lassen sie sich **gruppieren** – sie bleiben, wo sie sind, und bewegen
+sich danach gemeinsam (auch beim Strg+Ziehen und im Gizmo) –, ausblenden, gemeinsam einfärben oder
+entfernen. „Gruppe auflösen" macht alle Teile einer Gruppe wieder einzeln beweglich.
 **Rechtsklick auf ein Teil** (im 3D-Fenster oder in der Teileliste) öffnet ein Menü: ausblenden, nur dieses
 Teil oder diese Baugruppe zeigen, Farbe, umbenennen, als Basis festlegen, in der Liste zeigen, mit der
 angeklickten Fläche auf die Platte legen, Passung an dieser Stelle, von Hand bewegen, Baugruppe bewegen,
@@ -132,7 +137,7 @@ ins Leere: Ansicht anpassen, alle zeigen, anordnen, Hilfe. Rechts ziehen verschi
 Der **Ansichtswürfel** oben rechts dreht sich mit: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht
 dorthin (Drehpunkt und Abstand bleiben), Ziehen am Würfel dreht sie, ⌂ zeigt die Schrägansicht. Tasten wie
 in Bambu Studio: 1 oben, 2 unten, 3 vorne, 4 hinten, 5 links, 6 rechts, 0 schräg.
-Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick zeigt es in der Teileliste,
+Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick wählt es aus und zeigt es in der Teileliste,
 Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
 am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).
 „Alle Teile" über der Teileliste blendet alle Teile aus oder wieder ein, der Pfeil davor klappt die
