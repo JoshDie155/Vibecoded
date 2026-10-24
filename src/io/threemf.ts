@@ -6,6 +6,7 @@
  * oder aus den Filament-Zuordnungen von Bambu Studio / OrcaSlicer (Metadata/model_settings.config,
  * project_settings.config) bzw. PrusaSlicer (Metadata/Slic3r_PE_model.config, Slic3r_PE.config).
  * Mehrere Modelldateien im Archiv (3D/Objects/*.model, Production-Erweiterung) werden aufgelöst.
+ * Modifier (z. B. Aufschriften), Bemalung und Druckeinstellungen je Teil kommen als SlicerExtras mit.
  *
  * Schreiben: entweder ein einziger Körper oder ein Objekt aus mehreren Teilen mit je eigener Farbe
  * und eigenem Extruder – so ordnet der Slicer jedem Teil direkt ein Filament zu.
@@ -14,8 +15,39 @@
  * Durchlauf mit regulären Ausdrücken genügt und funktioniert auch in Tests ohne Browser.
  */
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { paintStates, remapPaint } from './paint';
 
-export interface ImportedPart {
+/**
+ * Slicer-Zusätze eines Teils (Bambu Studio / OrcaSlicer, teils PrusaSlicer). Sie ändern den Druck,
+ * nicht die Form, und werden beim Export nach Bambu Studio wieder mitgeschrieben.
+ */
+export interface SlicerExtras {
+  /**
+   * Bemalung je Dreieck (gleiche Reihenfolge wie positions, '' = unbemalt): paint_color (Farben),
+   * paint_supports, paint_seam, paint_fuzzy_skin. Kodierung siehe paint.ts.
+   */
+  paint?: Record<string, string[]>;
+  /** Filamentfarben zur Farbbemalung: Zustand k = Filament k = palette[k - 1]. */
+  palette?: string[];
+  /** Modifier (z. B. Aufschriften in anderer Farbe), negative Volumen, Stützen-Volumen. */
+  modifiers?: Modifier[];
+  /** Eigene Druckeinstellungen des Teils (Schlüssel wie in Bambu Studio, z. B. wall_loops). */
+  settings?: Record<string, string>;
+}
+
+export interface Modifier {
+  name: string;
+  /** Art wie in Bambu Studio: modifier_part, negative_part, support_enforcer, support_blocker */
+  subtype: string;
+  /** Nicht indizierte Dreiecke im selben Koordinatensystem wie das Teil. */
+  positions: Float32Array;
+  /** Filamentfarbe, falls der Modifier ein eigenes Filament vorgibt. */
+  color?: string;
+  /** Übrige Einstellungen des Modifiers. */
+  settings: Record<string, string>;
+}
+
+export interface ImportedPart extends SlicerExtras {
   name: string;
   /** Nicht indizierte Dreiecke (9 Werte pro Dreieck) in Millimetern, Lage aus der Datei. */
   positions: Float32Array;
@@ -25,9 +57,9 @@ export interface ImportedPart {
   group: string;
 }
 
-export interface ColoredPart {
+export interface ColoredPart extends SlicerExtras {
   name: string;
-  /** Nicht indizierte Dreiecke in Weltkoordinaten (mm). */
+  /** Nicht indizierte Dreiecke in Weltkoordinaten (mm); Modifier ebenso. */
   positions: Float32Array;
   /** '#rrggbb' */
   color: string;
@@ -44,6 +76,8 @@ interface RawMesh {
   /** Eigenschaft je Dreieck (pid, p1), -1 = Vorgabe des Objekts. */
   triPid: Int32Array;
   triP1: Int32Array;
+  /** Bemalung je Dreieck, nur vorhandene Arten */
+  paint: Record<string, string[]>;
 }
 
 interface RawObject {
@@ -62,6 +96,9 @@ interface RawModel {
   colors: Map<string, string[]>;
   build: { objectid: string; path?: string; transform: M12 }[];
 }
+
+/** Farben für Filamente, zu denen die Datei keine Farbe nennt. */
+const FALLBACK_COLORS = ['#ffffff', '#1f1f1f', '#e53935', '#1e88e5', '#43a047', '#fdd835', '#fb8c00', '#8e24aa'];
 
 const UNITS: Record<string, number> = { micron: 0.001, millimeter: 1, centimeter: 10, inch: 25.4, foot: 304.8, meter: 1000 };
 
@@ -116,6 +153,17 @@ function normColor(c: string | undefined): string | undefined {
   return m ? `#${m[1].toLowerCase()}` : undefined;
 }
 
+/** Bemalungs-Attribute der Dreiecke (Bambu Studio / OrcaSlicer bzw. PrusaSlicer) → Name in Bambu Studio. */
+const PAINT_ATTRS: Record<string, string> = {
+  paint_color: 'paint_color',
+  paint_supports: 'paint_supports',
+  paint_seam: 'paint_seam',
+  paint_fuzzy_skin: 'paint_fuzzy_skin',
+  'slic3rpe:mmu_segmentation': 'paint_color',
+  'slic3rpe:custom_supports': 'paint_supports',
+  'slic3rpe:custom_seam': 'paint_seam',
+};
+
 function parseMesh(body: string): RawMesh {
   const vs: number[] = [];
   const vre = /<(?:\w+:)?vertex\b([^>]*?)\/?>/g;
@@ -127,14 +175,24 @@ function parseMesh(body: string): RawMesh {
   const ts: number[] = [];
   const pids: number[] = [];
   const p1s: number[] = [];
+  const paint: Record<string, string[]> = {};
   const tre = /<(?:\w+:)?triangle\b([^>]*?)\/?>/g;
   while ((m = tre.exec(body))) {
     const a = attrs(m[1]);
+    const t = pids.length;
     ts.push(Number(a.v1), Number(a.v2), Number(a.v3));
     pids.push(a.pid !== undefined ? Number(a.pid) : -1);
     p1s.push(a.p1 !== undefined ? Number(a.p1) : -1);
+    for (const k in a) {
+      const kind = PAINT_ATTRS[k];
+      if (kind && a[k]) (paint[kind] ??= [])[t] = a[k].toUpperCase();
+    }
   }
-  return { verts: Float64Array.from(vs), tris: Uint32Array.from(ts), triPid: Int32Array.from(pids), triP1: Int32Array.from(p1s) };
+  for (const kind in paint) {
+    const list = paint[kind];
+    for (let t = 0; t < pids.length; t++) list[t] ??= '';
+  }
+  return { verts: Float64Array.from(vs), tris: Uint32Array.from(ts), triPid: Int32Array.from(pids), triP1: Int32Array.from(p1s), paint };
 }
 
 function parseModel(xml: string): RawModel {
@@ -202,11 +260,55 @@ function rootModelPath(files: Record<string, Uint8Array>): string {
 interface SlicerObject {
   name?: string;
   extruder?: number;
-  /** Bambu/Orca: Teil-ID (= objectid der Komponente) → Name/Extruder */
-  parts: Map<string, { name?: string; extruder?: number }>;
+  /** Druckeinstellungen des Objekts, die auch je Teil gelten können (REGION_KEYS) */
+  settings: Record<string, string>;
+  /** Bambu/Orca: Teil-ID (= objectid der Komponente) → Name/Extruder/Art/Einstellungen */
+  parts: Map<string, { name?: string; extruder?: number; subtype?: string; settings: Record<string, string> }>;
   /** PrusaSlicer: Dreiecksbereiche im Netz des Objekts */
-  volumes: { first: number; last: number; name?: string; extruder?: number }[];
+  volumes: { first: number; last: number; name?: string; extruder?: number; subtype?: string }[];
 }
+
+/**
+ * Einstellungen, die Bambu Studio je Teil oder Modifier erlaubt (PrintRegionConfig, Bambu Studio
+ * 2.8). Objekt-Einstellungen wie die Schichthöhe gelten für ein ganzes Objekt und lassen sich nach
+ * dem Zusammenfügen zu einem Objekt nicht mehr je Teil festlegen. Ohne die Filament-Nummern
+ * (wall_filament …), die sich beim Export neu ordnen würden.
+ */
+const REGION_KEYS = new Set((
+  'bottom_shell_layers bottom_shell_thickness bridge_angle bridge_flow counterbore_hole_bridging overhang_totally_speed '
+  + 'bridge_speed ensure_vertical_shell_thickness top_surface_pattern bottom_surface_pattern monotonic_travel_into_wall '
+  + 'top_surface_density bottom_surface_density internal_solid_infill_pattern outer_wall_line_width outer_wall_speed '
+  + 'infill_direction symmetric_infill_y_axis infill_shift_step sparse_infill_lattice_angle_1 sparse_infill_lattice_angle_2 '
+  + 'infill_rotate_step skeleton_infill_density skin_infill_density sparse_infill_density fill_multiline infill_lock_depth '
+  + 'skin_infill_depth sparse_infill_pattern locked_skin_infill_pattern locked_skeleton_infill_pattern fuzzy_skin '
+  + 'fuzzy_skin_thickness fuzzy_skin_point_distance fuzzy_skin_first_layer fuzzy_skin_noise_type fuzzy_skin_scale '
+  + 'fuzzy_skin_octaves fuzzy_skin_persistence fuzzy_skin_mode gap_infill_speed sparse_infill_line_width '
+  + 'skin_infill_line_width skeleton_infill_line_width infill_wall_overlap sparse_infill_speed infill_combination '
+  + 'ironing_type ironing_pattern ironing_flow ironing_spacing ironing_inset ironing_direction ironing_speed '
+  + 'detect_overhang_wall smooth_speed_discontinuity_area smooth_coefficient inner_wall_line_width inner_wall_speed '
+  + 'wall_loops minimum_sparse_infill_area internal_solid_infill_line_width internal_solid_infill_speed detect_thin_wall '
+  + 'top_surface_line_width top_shell_layers top_shell_thickness top_surface_speed small_perimeter_speed '
+  + 'small_perimeter_threshold vertical_shell_speed top_color_penetration_layers bottom_color_penetration_layers '
+  + 'infill_instead_top_bottom_surfaces wall_sequence enable_overhang_speed overhang_1_4_speed overhang_2_4_speed '
+  + 'overhang_3_4_speed overhang_4_4_speed enable_height_slowdown slowdown_start_height slowdown_start_speed '
+  + 'slowdown_start_acc slowdown_end_height slowdown_end_speed slowdown_end_acc sparse_infill_anchor '
+  + 'sparse_infill_anchor_max top_solid_infill_flow_ratio initial_layer_flow_ratio filter_out_gap_fill precise_outer_wall '
+  + 'print_flow_ratio override_filament_scarf_seam_setting seam_slope_type seam_slope_conditional seam_slope_start_height '
+  + 'seam_slope_gap seam_slope_entire_loop seam_slope_min_length seam_slope_steps seam_slope_inner_walls '
+  + 'embedding_wall_into_infill alternate_extra_wall'
+).split(' '));
+
+const regionSettings = (md: Record<string, string>) =>
+  Object.fromEntries(Object.entries(md).filter(([k]) => REGION_KEYS.has(k)));
+
+/** Teilarten von Bambu Studio, die kein druckbarer Körper sind. */
+const MODIFIER_SUBTYPES = new Set(['modifier_part', 'negative_part', 'support_enforcer', 'support_blocker']);
+
+/** Art eines PrusaSlicer-Volumens → Bambu-Bezeichnung. */
+const PRUSA_SUBTYPES: Record<string, string> = {
+  ModelPart: 'normal_part', ParameterModifier: 'modifier_part', NegativeVolume: 'negative_part',
+  SupportEnforcer: 'support_enforcer', SupportBlocker: 'support_blocker',
+};
 
 function metadata(body: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -229,12 +331,17 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
       const id = attrs(o[1]).id;
       if (!id) continue;
       const own = metadata(o[2].replace(/<part\b[\s\S]*?<\/part>/g, ''));
-      const entry: SlicerObject = { name: own.name, extruder: own.extruder ? Number(own.extruder) : undefined, parts: new Map(), volumes: [] };
+      const entry: SlicerObject = {
+        name: own.name, extruder: own.extruder ? Number(own.extruder) : undefined, settings: regionSettings(own), parts: new Map(), volumes: [],
+      };
       for (const p of o[2].matchAll(/<part\b([^>]*)>([\s\S]*?)<\/part>/g)) {
         const pa = attrs(p[1]);
-        if (pa.subtype && pa.subtype !== 'normal_part') continue;
         const md = metadata(p[2]);
-        if (pa.id) entry.parts.set(pa.id, { name: md.name, extruder: md.extruder ? Number(md.extruder) : undefined });
+        if (pa.id) {
+          entry.parts.set(pa.id, {
+            name: md.name, extruder: md.extruder ? Number(md.extruder) : undefined, subtype: pa.subtype, settings: regionSettings(md),
+          });
+        }
       }
       objects.set(id, entry);
     }
@@ -258,14 +365,14 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
       const id = attrs(o[1]).id;
       if (!id) continue;
       const own = metadata(o[2].replace(/<volume\b[\s\S]*?<\/volume>/g, ''));
-      const entry: SlicerObject = objects.get(id) ?? { parts: new Map(), volumes: [] };
+      const entry: SlicerObject = objects.get(id) ?? { settings: {}, parts: new Map(), volumes: [] };
       entry.name ??= own.name;
       if (own.extruder) entry.extruder ??= Number(own.extruder);
       for (const v of o[2].matchAll(/<volume\b([^>]*)>([\s\S]*?)<\/volume>/g)) {
         const va = attrs(v[1]);
         const md = metadata(v[2]);
-        if (md.modifier === '1' || (md.volume_type && md.volume_type !== 'ModelPart')) continue;
-        entry.volumes.push({ first: Number(va.firstid), last: Number(va.lastid), name: md.name, extruder: md.extruder ? Number(md.extruder) : undefined });
+        const subtype = md.volume_type ? PRUSA_SUBTYPES[md.volume_type] ?? 'modifier_part' : md.modifier === '1' ? 'modifier_part' : 'normal_part';
+        entry.volumes.push({ first: Number(va.firstid), last: Number(va.lastid), name: md.name, extruder: md.extruder ? Number(md.extruder) : undefined, subtype });
       }
       objects.set(id, entry);
     }
@@ -302,27 +409,67 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
   const extruderColor = (e: number | undefined) => (e && slicer.colors[e - 1]) || undefined;
 
   const parts: ImportedPart[] = [];
+  /** Modifier des gerade gelesenen Objekts; sie hängen am ersten Teil des Objekts. */
+  let modifiers: Modifier[] = [];
   const names = new Map<string, number>();
+  // Slicer übernehmen oft den Dateinamen samt Endung („Kopf.stl")
+  const stripExt = (raw: string) => raw.replace(/\.(stl|obj|3mf|amf|ply|step|stp|glb|gltf|fbx)$/i, '') || raw;
   const uniqueName = (raw: string) => {
-    // Slicer übernehmen oft den Dateinamen samt Endung („Kopf.stl")
-    const n = raw.replace(/\.(stl|obj|3mf|amf|ply|step|stp|glb|gltf|fbx)$/i, '') || raw;
+    const n = stripExt(raw);
     const k = names.get(n) ?? 0;
     names.set(n, k + 1);
     return k ? `${n} (${k + 1})` : n;
   };
 
+  /** Dreiecke eines Netzes in Millimetern und in der Lage tf (Eckpunkte in der Reihenfolge der Datei). */
+  const place = (model: RawModel, mesh: RawMesh, tris: number[], tf: M12) => {
+    const s = model.scale;
+    const out = new Float32Array(tris.length * 9);
+    let o = 0;
+    for (const t of tris) {
+      for (let c = 0; c < 3; c++) {
+        const v = mesh.tris[t * 3 + c] * 3;
+        const x = mesh.verts[v] * s;
+        const y = mesh.verts[v + 1] * s;
+        const z = mesh.verts[v + 2] * s;
+        out[o++] = x * tf[0] + y * tf[3] + z * tf[6] + tf[9] * s;
+        out[o++] = x * tf[1] + y * tf[4] + z * tf[7] + tf[10] * s;
+        out[o++] = x * tf[2] + y * tf[5] + z * tf[8] + tf[11] * s;
+      }
+    }
+    return out;
+  };
+  const allTris = (mesh: RawMesh) => Array.from({ length: mesh.tris.length / 3 }, (_, t) => t);
+
+  /** Bemalung der gewählten Dreiecke (nur Arten, die dort vorkommen). */
+  const paintOf = (mesh: RawMesh, tris: number[]) => {
+    let out: Record<string, string[]> | undefined;
+    for (const kind in mesh.paint) {
+      const list = tris.map((t) => mesh.paint[kind][t]);
+      if (list.some(Boolean)) (out ??= {})[kind] = list;
+    }
+    return out;
+  };
+  /** Filamentfarben zur Farbbemalung, ergänzt um Vorgaben für Filamente ohne Farbangabe. */
+  const paletteFor = (paint: Record<string, string[]>) => {
+    const states = new Set<number>();
+    for (const c of paint.paint_color ?? []) if (c) paintStates(c, states);
+    const palette = [...slicer.colors];
+    for (const k of states) for (let i = palette.length; i < k; i++) palette.push(FALLBACK_COLORS[i % FALLBACK_COLORS.length]);
+    return palette;
+  };
+
   /** Teil(e) aus einem Netz: nach Dreiecksfarbe bzw. PrusaSlicer-Volumen getrennt. */
   const emit = (
     model: RawModel, obj: RawObject, tf: M12, group: string, baseName: string,
-    fallback: string | undefined, volumes: SlicerObject['volumes'],
+    fallback: string | undefined, volumes: SlicerObject['volumes'], settings: Record<string, string>,
   ) => {
     const mesh = obj.mesh!;
-    const s = model.scale;
     const triCount = mesh.tris.length / 3;
     const objColor = obj.pid !== undefined ? model.colors.get(obj.pid)?.[obj.pindex ?? 0] : undefined;
     // Bereiche: PrusaSlicer-Volumen oder sonst Dreiecke gleicher Farbe
     const keyOf = new Array<string>(triCount);
-    const info = new Map<string, { name: string; color?: string }>();
+    const info = new Map<string, { name: string; color?: string; subtype?: string }>();
     /** Farbe eines Dreiecks laut 3MF (pid/p1, sonst Vorgabe des Objekts). */
     const triColor = (t: number) => {
       const pid = mesh.triPid[t] >= 0 ? String(mesh.triPid[t]) : obj.pid;
@@ -332,9 +479,14 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
     if (volumes.length) {
       volumes.forEach((v, k) => {
         const first = Math.max(0, v.first);
-        for (let t = first; t <= Math.min(triCount - 1, v.last); t++) keyOf[t] = `v${k}`;
+        // Modifier & Co. (PrusaSlicer): eigene Dreiecksbereiche im selben Netz
+        const modifier = v.subtype !== undefined && v.subtype !== 'normal_part';
+        const key = `${modifier ? 'm' : 'v'}${k}`;
+        for (let t = first; t <= Math.min(triCount - 1, v.last); t++) keyOf[t] = key;
         const own = first < triCount ? triColor(first) : undefined;
-        info.set(`v${k}`, { name: v.name ?? `${baseName} ${k + 1}`, color: extruderColor(v.extruder) ?? own ?? fallback ?? objColor });
+        info.set(key, modifier
+          ? { name: v.name ?? `Modifier ${k + 1}`, color: extruderColor(v.extruder), subtype: v.subtype }
+          : { name: v.name ?? `${baseName} ${k + 1}`, color: extruderColor(v.extruder) ?? own ?? fallback ?? objColor });
       });
     }
     for (let t = 0; t < triCount; t++) {
@@ -350,26 +502,25 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
       if (list) list.push(t);
       else groups.set(keyOf[t], [t]);
     }
-    const several = groups.size > 1;
+    const several = [...groups.keys()].filter((key) => !key.startsWith('m')).length > 1;
     let k = 0;
     for (const [key, tris] of groups) {
-      k++;
-      const out = new Float32Array(tris.length * 9);
-      let o = 0;
-      for (const t of tris) {
-        for (let c = 0; c < 3; c++) {
-          const v = mesh.tris[t * 3 + c] * 3;
-          const x = mesh.verts[v] * s;
-          const y = mesh.verts[v + 1] * s;
-          const z = mesh.verts[v + 2] * s;
-          out[o++] = x * tf[0] + y * tf[3] + z * tf[6] + tf[9] * s;
-          out[o++] = x * tf[1] + y * tf[4] + z * tf[7] + tf[10] * s;
-          out[o++] = x * tf[2] + y * tf[5] + z * tf[8] + tf[11] * s;
-        }
-      }
       const i = info.get(key)!;
+      const positions = place(model, mesh, tris, tf);
+      if (i.subtype) {
+        modifiers.push({ name: stripExt(i.name), subtype: i.subtype, positions, color: i.color, settings: {} });
+        continue;
+      }
+      k++;
       const name = several && !key.startsWith('v') ? `${i.name} – Farbe ${k}` : i.name;
-      parts.push({ name: uniqueName(name), positions: out, color: i.color, group });
+      const part: ImportedPart = { name: uniqueName(name), positions, color: i.color, group };
+      const paint = paintOf(mesh, tris);
+      if (paint) {
+        part.paint = paint;
+        if (paint.paint_color) part.palette = paletteFor(paint);
+      }
+      if (Object.keys(settings).length) part.settings = settings;
+      parts.push(part);
     }
   };
 
@@ -381,9 +532,19 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
     if (!obj || depth > 16) return;
     if (obj.mesh && obj.mesh.tris.length) {
       const part = meta.slicer?.parts.get(id);
-      const name = part?.name ?? obj.name ?? meta.name ?? 'Teil';
-      const color = extruderColor(part?.extruder) ?? meta.color;
-      emit(model, obj, tf, group, name, color, depth === 0 ? meta.slicer?.volumes ?? [] : []);
+      if (part?.subtype && MODIFIER_SUBTYPES.has(part.subtype)) {
+        // Modifier, negative Volumen, Stützen-Volumen: kein eigenes Teil, gehört zum Objekt
+        modifiers.push({
+          name: stripExt(part.name ?? obj.name ?? 'Modifier'), subtype: part.subtype,
+          positions: place(model, obj.mesh, allTris(obj.mesh), tf), color: extruderColor(part.extruder), settings: part.settings,
+        });
+      } else {
+        const name = part?.name ?? obj.name ?? meta.name ?? 'Teil';
+        const color = extruderColor(part?.extruder) ?? meta.color;
+        // Einstellungen des Objekts gelten für jedes seiner Teile, eigene des Teils haben Vorrang
+        const settings = { ...meta.slicer?.settings, ...part?.settings };
+        emit(model, obj, tf, group, name, color, depth === 0 ? meta.slicer?.volumes ?? [] : [], settings);
+      }
     }
     for (const c of obj.components ?? []) {
       const sub = c.path ? modelAt(c.path) : model;
@@ -399,11 +560,15 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
     if (!model) return;
     const so = slicer.objects.get(it.objectid);
     const obj = model.objects.get(it.objectid);
+    const first = parts.length;
+    modifiers = [];
     walk(model, it.objectid, it.transform, `3mf-${n}`, 0, {
       name: so?.name ?? obj?.name,
       color: extruderColor(so?.extruder),
       slicer: so,
     });
+    // Modifier wirken im Slicer auf das ganze Objekt; sie hängen am ersten Teil und bewegen sich mit dessen Gruppe
+    if (modifiers.length && parts.length > first) parts[first].modifiers = modifiers;
   });
   if (!parts.length) throw new Error('Die 3MF-Datei enthält keine Dreiecksnetze.');
   return parts;
@@ -414,11 +579,15 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
 const f5 = (x: number) => String(+x.toFixed(5));
 const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]!);
 
-/** Gleiche Eckpunkte zusammenfassen (3MF verlangt ein indiziertes Netz). */
-function weld(p: Float32Array): { verts: number[]; tris: number[] } {
+/**
+ * Gleiche Eckpunkte zusammenfassen (3MF verlangt ein indiziertes Netz).
+ * kept: Nummer des Ausgangsdreiecks je Dreieck des Ergebnisses (entartete fallen weg).
+ */
+function weld(p: Float32Array): { verts: number[]; tris: number[]; kept: number[] } {
   const map = new Map<string, number>();
   const verts: number[] = [];
   const tris: number[] = [];
+  const kept: number[] = [];
   const idx: number[] = [0, 0, 0];
   for (let t = 0; t < p.length; t += 9) {
     for (let c = 0; c < 3; c++) {
@@ -437,16 +606,70 @@ function weld(p: Float32Array): { verts: number[]; tris: number[] } {
     // Entartete Dreiecke (nach dem Zusammenfassen) weglassen
     if (idx[0] === idx[1] || idx[1] === idx[2] || idx[0] === idx[2]) continue;
     tris.push(idx[0], idx[1], idx[2]);
+    kept.push(t / 9);
   }
-  return { verts, tris };
+  return { verts, tris, kept };
 }
 
-/** Farben → Extrudernummern (1, 2, …) in der Reihenfolge des ersten Auftretens. */
+/** Filamente, mit denen ein Teil bemalt ist (ohne 0 = Filament des Teils). */
+function paintedStates(p: SlicerExtras): number[] {
+  const states = new Set<number>();
+  for (const c of p.paint?.paint_color ?? []) if (c) paintStates(c, states);
+  states.delete(0);
+  return [...states].sort((a, b) => a - b);
+}
+
+/**
+ * Farben → Extrudernummern (1, 2, …) in der Reihenfolge des ersten Auftretens: erst die Farben der
+ * Teile, dann die zusätzlichen aus Bemalung und Modifiern.
+ */
 export function colorSlots(parts: ColoredPart[]): string[] {
   const list: string[] = [];
-  for (const p of parts) if (!list.includes(p.color.toLowerCase())) list.push(p.color.toLowerCase());
+  const add = (c: string | undefined) => {
+    if (c && !list.includes(c.toLowerCase())) list.push(c.toLowerCase());
+  };
+  for (const p of parts) add(p.color);
+  for (const p of parts) {
+    for (const k of paintedStates(p)) add(p.palette?.[k - 1]);
+    for (const m of p.modifiers ?? []) add(m.color);
+  }
   return list;
 }
+
+/** Namen der Bemalungs-Attribute je Slicer-Format. */
+const BAMBU_PAINT: Record<string, string> = {
+  paint_color: 'paint_color', paint_supports: 'paint_supports', paint_seam: 'paint_seam', paint_fuzzy_skin: 'paint_fuzzy_skin',
+};
+const PRUSA_PAINT: Record<string, string> = {
+  paint_color: 'slic3rpe:mmu_segmentation', paint_supports: 'slic3rpe:custom_supports', paint_seam: 'slic3rpe:custom_seam',
+};
+
+/**
+ * Bemalungs-Attribute eines Dreiecks für den Export (src = Dreieck im Teil). Die Farbbemalung wird auf
+ * die Filamentnummern des Exports umgestellt, die übrige bleibt, wie sie ist.
+ */
+function paintWriter(part: ColoredPart, slots: string[], names: Record<string, string>): ((src: number) => string) | undefined {
+  const paint = part.paint;
+  if (!paint) return undefined;
+  const slotOf = (k: number) => {
+    const c = part.palette?.[k - 1];
+    const i = c ? slots.indexOf(c.toLowerCase()) : -1;
+    return i >= 0 ? i + 1 : k;
+  };
+  const kinds = Object.keys(paint).filter((k) => names[k]);
+  return (src) => {
+    let out = '';
+    for (const kind of kinds) {
+      const code = paint[kind][src];
+      const v = code && (kind === 'paint_color' ? remapPaint(code, (k) => (k ? slotOf(k) : 0)) : code);
+      if (v) out += ` ${names[kind]}="${v}"`;
+    }
+    return out;
+  };
+}
+
+const settingLines = (settings: Record<string, string> | undefined, indent: string) =>
+  Object.entries(settings ?? {}).map(([k, v]) => `\n${indent}<metadata key="${esc(k)}" value="${esc(v)}"/>`).join('');
 
 /**
  * @param mode 'single': ein Körper aus allen Teilen (ohne Farben),
@@ -463,12 +686,15 @@ export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor'): U
     ? [{ name: 'PartJoin', color: slots[0] ?? '#cccccc', positions: concat(parts.map((p) => p.positions)) }]
     : parts;
   for (const part of list) {
-    const { verts, tris } = weld(part.positions);
+    const { verts, tris, kept } = weld(part.positions);
     for (let i = 0; i < verts.length; i += 3) vChunks.push(`<vertex x="${f5(verts[i])}" y="${f5(verts[i + 1])}" z="${f5(verts[i + 2])}"/>`);
     const slot = Math.max(0, slots.indexOf(part.color.toLowerCase()));
     const colorAttr = mode === 'multicolor' ? ` pid="1" p1="${slot}"` : '';
+    // Bemalung im PrusaSlicer-Format (andere Programme übergehen die Attribute). Modifier fehlen hier
+    // bewusst: Programme ohne Slicer-Metadaten würden sie als Teil des Körpers drucken.
+    const paint = mode === 'multicolor' ? paintWriter(part, slots, PRUSA_PAINT) : undefined;
     for (let i = 0; i < tris.length; i += 3)
-      tChunks.push(`<triangle v1="${tris[i] + vOffset}" v2="${tris[i + 1] + vOffset}" v3="${tris[i + 2] + vOffset}"${colorAttr}/>`);
+      tChunks.push(`<triangle v1="${tris[i] + vOffset}" v2="${tris[i + 1] + vOffset}" v3="${tris[i + 2] + vOffset}"${colorAttr}${paint?.(kept[i / 3]) ?? ''}/>`);
     const n = tris.length / 3;
     if (n) volumes.push({ first: tCount, last: tCount + n - 1, name: part.name, extruder: slot + 1 });
     vOffset += verts.length / 3;
@@ -620,7 +846,8 @@ export function bambuPrinterOf(files: Record<string, Uint8Array>): string | unde
  * Projektformat von Bambu Studio / OrcaSlicer: ein Objekt aus mehreren Teilen (je Teil ein Netz in
  * 3D/Objects/object_1.model), Filament je Teil in Metadata/model_settings.config, Drucker,
  * Profile und Filamentfarben in Metadata/project_settings.config. Teile gleicher Farbe bekommen
- * dieselbe Filament-Nummer.
+ * dieselbe Filament-Nummer. Modifier werden weitere Teile des Objekts (subtype), Bemalung steht an
+ * den Dreiecken, Einstellungen je Teil in model_settings.config.
  */
 export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Uint8Array {
   const slots = colorSlots(parts);
@@ -636,31 +863,48 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
   const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]];
   const printer = BAMBU_PRINTERS.find((p) => p.id === opts.printer) ?? BAMBU_PRINTERS[0];
   const [bx, by] = [printer.bed[0] / 2, printer.bed[1] / 2];
-  const objId = parts.length + 1;
-
   const sub: string[] = [];
   const components: string[] = [];
   const settings: string[] = [];
-  parts.forEach((part, i) => {
-    const id = i + 1;
-    const local = new Float32Array(part.positions.length);
-    for (let k = 0; k < local.length; k++) local[k] = part.positions[k] - c[k % 3];
-    const { verts, tris } = weld(local);
+  let nextId = 1;
+  /** Netz als eigenes Objekt in object_1.model plus Komponente im Hauptobjekt. */
+  const meshObject = (positions: Float32Array, triAttrs?: (src: number) => string) => {
+    const id = nextId++;
+    const local = new Float32Array(positions.length);
+    for (let k = 0; k < local.length; k++) local[k] = positions[k] - c[k % 3];
+    const { verts, tris, kept } = weld(local);
     const v: string[] = [];
     for (let k = 0; k < verts.length; k += 3) v.push(`<vertex x="${f5(verts[k])}" y="${f5(verts[k + 1])}" z="${f5(verts[k + 2])}"/>`);
     const t: string[] = [];
-    for (let k = 0; k < tris.length; k += 3) t.push(`<triangle v1="${tris[k]}" v2="${tris[k + 1]}" v3="${tris[k + 2]}"/>`);
+    for (let k = 0; k < tris.length; k += 3) t.push(`<triangle v1="${tris[k]}" v2="${tris[k + 1]}" v3="${tris[k + 2]}"${triAttrs?.(kept[k / 3]) ?? ''}/>`);
     sub.push(`  <object id="${id}" p:UUID="${uuid(1, id)}" type="model">
    <mesh><vertices>${v.join('')}</vertices><triangles>${t.join('')}</triangles></mesh>
   </object>`);
     components.push(`    <component p:path="/3D/Objects/object_1.model" objectid="${id}" p:UUID="${uuid(2, id)}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>`);
+    return id;
+  };
+  const identity = '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1';
+  for (const part of parts) {
+    const id = meshObject(part.positions, paintWriter(part, slots, BAMBU_PAINT));
     const extruder = Math.max(0, slots.indexOf(part.color.toLowerCase())) + 1;
     settings.push(`    <part id="${id}" subtype="normal_part">
       <metadata key="name" value="${esc(part.name)}"/>
-      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>
-      <metadata key="extruder" value="${extruder}"/>
+      <metadata key="matrix" value="${identity}"/>
+      <metadata key="extruder" value="${extruder}"/>${settingLines(part.settings, '      ')}
     </part>`);
-  });
+  }
+  // Modifier nach den Teilen; im Slicer wirken sie auf alle Teile, die sie berühren
+  for (const part of parts) {
+    for (const m of part.modifiers ?? []) {
+      const id = meshObject(m.positions);
+      const slot = m.color ? slots.indexOf(m.color.toLowerCase()) + 1 : 0;
+      settings.push(`    <part id="${id}" subtype="${esc(m.subtype)}">
+      <metadata key="name" value="${esc(m.name)}"/>
+      <metadata key="matrix" value="${identity}"/>${slot ? `\n      <metadata key="extruder" value="${slot}"/>` : ''}${settingLines(m.settings, '      ')}
+    </part>`);
+    }
+  }
+  const objId = nextId;
   const ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
   // Ab 2.0, sonst passt Bambu Studio die Einstellungen alter Projekte an (Prime Tower)
   const version = opts.version ?? 'BambuStudio-02.00.00.00';

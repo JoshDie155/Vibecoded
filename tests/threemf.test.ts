@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { colorSlots, read3MF, write3MF, write3MFBambu } from '../src/io/threemf';
+import { paintStates as paintStatesOf } from '../src/io/paint';
 import { box, cylinder, transformPositions } from './helpers/meshes';
 import * as THREE from 'three';
 
@@ -323,5 +324,141 @@ describe('write3MFBambu', () => {
     const none: { printer?: string } = {};
     read3MF(write3MF(parts, 'multicolor'), none);
     expect(none.printer).toBeUndefined();
+  });
+});
+
+describe('Slicer-Zusätze: Bemalung, Modifier, Einstellungen', () => {
+  // Bambu-Projekt: Schild mit eingelassener Aufschrift (Modifier, Filament 2) und bemalten Dreiecken
+  const plate = box(40, 10, 2);
+  const text = transformPositions(box(20, 4, 0.5), new THREE.Matrix4().makeTranslation(0, 0, -0.9));
+  const paintCount = plate.length / 9;
+  // Dreieck 0 in Filament 3 ('0C'), Dreieck 1 zur Hälfte in Filament 2 ('801': eine Seite geteilt, Kinder rückwärts 0 und 8)
+  const paintAttr = (t: number) => (t === 0 ? ' paint_color="0C"' : t === 1 ? ' paint_color="801"' : t === 2 ? ' paint_fuzzy_skin="4"' : '');
+  const meshWithPaint = (p: Float32Array) => {
+    let v = '';
+    let t = '';
+    for (let i = 0; i < p.length / 3; i++) v += `<vertex x="${p[i * 3]}" y="${p[i * 3 + 1]}" z="${p[i * 3 + 2]}"/>`;
+    for (let i = 0; i < p.length / 9; i++) t += `<triangle v1="${i * 3}" v2="${i * 3 + 1}" v3="${i * 3 + 2}"${paintAttr(i)}/>`;
+    return `<mesh><vertices>${v}</vertices><triangles>${t}</triangles></mesh>`;
+  };
+  const project = () => zipSync({
+    '_rels/.rels': strToU8(RELS),
+    '3D/3dmodel.model': strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+<resources><object id="3" type="model"><components>
+<component p:path="/3D/Objects/object_1.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+<component p:path="/3D/Objects/object_1.model" objectid="2" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+</components></object></resources>
+<build><item objectid="3" transform="1 0 0 0 1 0 0 0 1 100 50 1" printable="1"/></build></model>`),
+    '3D/Objects/object_1.model': strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+<resources><object id="1" type="model">${meshWithPaint(plate)}</object><object id="2" type="model">${meshXml(text)}</object></resources><build/></model>`),
+    'Metadata/model_settings.config': strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="3">
+    <metadata key="name" value="Schild"/>
+    <metadata key="extruder" value="1"/>
+    <metadata key="layer_height" value="0.28"/>
+    <metadata key="sparse_infill_density" value="20%"/>
+    <part id="1" subtype="normal_part"><metadata key="name" value="Schild.stl"/><metadata key="wall_loops" value="4"/></part>
+    <part id="2" subtype="modifier_part"><metadata key="name" value="text_shape"/><metadata key="extruder" value="2"/><metadata key="bottom_surface_pattern" value="concentric"/></part>
+  </object>
+</config>`),
+    'Metadata/project_settings.config': strToU8(JSON.stringify({ filament_colour: ['#0000FF', '#FFFFFF', '#FF0000'] })),
+  });
+
+  it('liest Modifier als Zusatz des Teils statt als eigenes Teil, mit Filamentfarbe und Einstellungen', () => {
+    const parts = read3MF(project());
+    expect(parts.map((p) => p.name)).toEqual(['Schild']);
+    const [p] = parts;
+    expect(p.color).toBe('#0000ff');
+    expect(p.modifiers).toHaveLength(1);
+    const m = p.modifiers![0];
+    expect([m.name, m.subtype, m.color]).toEqual(['text_shape', 'modifier_part', '#ffffff']);
+    expect(m.settings).toEqual({ bottom_surface_pattern: 'concentric' });
+    // Lage wie das Teil (Druckbett-Position eingerechnet)
+    expect(bbox(m.positions).min[0]).toBeCloseTo(90, 4);
+    expect(bbox(m.positions).min[2]).toBeCloseTo(1 - 0.9, 4);
+    // Einstellungen: Objekt-Einstellungen, die je Teil gelten können, plus die des Teils – ohne Schichthöhe
+    expect(p.settings).toEqual({ sparse_infill_density: '20%', wall_loops: '4' });
+  });
+
+  it('liest die Bemalung je Dreieck samt Filamentfarben', () => {
+    const [p] = read3MF(project());
+    expect(p.paint!.paint_color.slice(0, 3)).toEqual(['0C', '801', '']);
+    expect(p.paint!.paint_color).toHaveLength(paintCount);
+    expect(p.paint!.paint_fuzzy_skin[2]).toBe('4');
+    expect(p.palette).toEqual(['#0000ff', '#ffffff', '#ff0000']);
+  });
+
+  it('Bambu-Export schreibt Modifier, Bemalung und Einstellungen mit den neuen Filamentnummern', () => {
+    const [p] = read3MF(project());
+    // Ein anderes Teil zuerst: Rot wird Filament 1, Blau 2, Weiß 3
+    const other = { name: 'Rot', positions: transformPositions(box(5, 5, 5), new THREE.Matrix4().makeTranslation(0, 30, 0)), color: '#ff0000' };
+    const files = unzipSync(write3MFBambu([other, { ...p, color: p.color! }], { printer: 'P2S' }));
+    const cfg = strFromU8(files['Metadata/model_settings.config']);
+    expect(cfg).toMatch(/<part id="3" subtype="modifier_part">\s*<metadata key="name" value="text_shape"\/>\s*<metadata key="matrix"[^>]*\/>\s*<metadata key="extruder" value="3"\/>\s*<metadata key="bottom_surface_pattern" value="concentric"\/>/);
+    expect(cfg).toContain('<metadata key="wall_loops" value="4"/>');
+    expect(cfg).not.toContain('layer_height');
+    const objects = strFromU8(files['3D/Objects/object_1.model']);
+    // Filament 3 (Rot) heißt jetzt Filament 1: Zustand 1 = '4'
+    expect(objects).toContain('paint_color="4"');
+    expect(objects).toContain('paint_fuzzy_skin="4"');
+    const colors = JSON.parse(strFromU8(files['Metadata/project_settings.config'])).filament_colour;
+    expect(colors).toEqual(['#FF0000', '#0000FF', '#FFFFFF']);
+    // Und zurück: gleiche Farben an denselben Dreiecken
+    const back = read3MF(write3MFBambu([other, { ...p, color: p.color! }], { printer: 'P2S' }));
+    const plateBack = back.find((q) => q.name === 'Schild')!;
+    const colorAt = (q: typeof p, t: number) => {
+      const code = q.paint!.paint_color[t];
+      return code ? [...paintStatesOf(code)].map((s) => (s ? q.palette![s - 1] : q.color)) : [];
+    };
+    for (const t of [0, 1, 2]) expect(colorAt(plateBack, t)).toEqual(colorAt(p, t));
+    expect(back.flatMap((q) => q.modifiers ?? []).map((m) => m.color)).toEqual(['#ffffff']);
+  });
+
+  it('entartete Dreiecke fallen beim Export weg, ohne die Bemalung zu verschieben', () => {
+    const tri = (x: number) => [x, 0, 0, x + 1, 0, 0, x, 1, 0];
+    const positions = new Float32Array([...tri(0), 5, 5, 5, 5, 5, 5, 6, 6, 6, ...tri(10)]);
+    const part = { name: 'A', positions, color: '#00ff00', paint: { paint_color: ['', '8', '4'] }, palette: ['#ff0000', '#0000ff'] };
+    const objects = strFromU8(unzipSync(write3MFBambu([part]))['3D/Objects/object_1.model']);
+    const tris = [...objects.matchAll(/<triangle [^>]*\/>/g)].map((m) => m[0]);
+    expect(tris).toHaveLength(2);
+    expect(tris[0]).not.toContain('paint_color');
+    // Filament 1 (Rot) → Filament 2 des Exports: Zustand 2 = '8'
+    expect(tris[1]).toContain('paint_color="8"');
+  });
+
+  it('PrusaSlicer: Modifier-Bereiche werden Zusatz statt Teil, Bemalung als mmu_segmentation', () => {
+    const a = box(10, 10, 10);
+    const b = transformPositions(box(4, 4, 4), new THREE.Matrix4().makeTranslation(0, 0, 3));
+    const all = new Float32Array(a.length + b.length);
+    all.set(a);
+    all.set(b, a.length);
+    let v = '';
+    let t = '';
+    for (let i = 0; i < all.length / 3; i++) v += `<vertex x="${all[i * 3]}" y="${all[i * 3 + 1]}" z="${all[i * 3 + 2]}"/>`;
+    for (let i = 0; i < all.length / 9; i++) t += `<triangle v1="${i * 3}" v2="${i * 3 + 1}" v3="${i * 3 + 2}"${i === 0 ? ' slic3rpe:mmu_segmentation="8"' : ''}/>`;
+    const model = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06">
+<resources><object id="1" type="model"><mesh><vertices>${v}</vertices><triangles>${t}</triangles></mesh></object></resources>
+<build><item objectid="1"/></build></model>`;
+    const cfg = `<?xml version="1.0" encoding="UTF-8"?>
+<config><object id="1" instances_count="1"><metadata type="object" key="name" value="Würfel"/>
+<volume firstid="0" lastid="${a.length / 9 - 1}"><metadata type="volume" key="name" value="Würfel"/><metadata type="volume" key="extruder" value="1"/></volume>
+<volume firstid="${a.length / 9}" lastid="${all.length / 9 - 1}"><metadata type="volume" key="name" value="Kern"/><metadata type="volume" key="volume_type" value="ParameterModifier"/><metadata type="volume" key="extruder" value="2"/></volume>
+</object></config>`;
+    const parts = read3MF(zipSync({
+      '_rels/.rels': strToU8(RELS),
+      '3D/3dmodel.model': strToU8(model),
+      'Metadata/Slic3r_PE_model.config': strToU8(cfg),
+      'Metadata/Slic3r_PE.config': strToU8('; extruder_colour = "#FF0000;#00FF00"\n'),
+    }));
+    expect(parts.map((p) => [p.name, p.positions.length])).toEqual([['Würfel', a.length]]);
+    expect(parts[0].modifiers!.map((m) => [m.name, m.subtype, m.color, m.positions.length])).toEqual([['Kern', 'modifier_part', '#00ff00', b.length]]);
+    expect(parts[0].paint!.paint_color[0]).toBe('8');
+    // Farbiger 3MF-Export: Bemalung im PrusaSlicer-Format, Filament 2 (Grün) ist dort Filament 2
+    const out = strFromU8(unzipSync(write3MF([{ ...parts[0], color: parts[0].color! }], 'multicolor'))['3D/3dmodel.model']);
+    expect(out).toContain('slic3rpe:mmu_segmentation="8"');
   });
 });

@@ -17,11 +17,12 @@ import { VRMLLoader } from 'three/addons/loaders/VRMLLoader.js';
 import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
 import { VTKLoader } from 'three/addons/loaders/VTKLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { read3MF } from './threemf';
+import { type ImportedPart, type SlicerExtras, read3MF } from './threemf';
 
 export const SUPPORTED = ['stl', 'obj', 'mtl', 'ply', '3mf', 'amf', 'glb', 'gltf', 'fbx', 'dae', 'wrl', '3ds', 'vtk'] as const;
 
-export interface LoadedPart {
+/** Slicer-Zusätze (Bemalung, Modifier, Einstellungen) gibt es nur bei 3MF-Projekten. */
+export interface LoadedPart extends SlicerExtras {
   name: string;
   geom: THREE.BufferGeometry;
   /** '#rrggbb', falls die Datei eine Farbe angibt. */
@@ -120,11 +121,16 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
 
   if (ext === '3mf') {
     const parts = read3MF(new Uint8Array(buf), opts.info);
-    const list = opts.split && parts.length <= MAX_SPLIT ? parts : [{ ...parts[0], positions: concat(parts.map((p) => p.positions)) }];
+    const list = opts.split && parts.length <= MAX_SPLIT ? parts : [joinParts(parts)];
     return list.map((p) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(p.positions, 3));
-      return { name: list.length > 1 ? p.name : base, geom: finish(g), color: p.color, group: list.length > 1 ? `${file.name}:${p.group}` : undefined };
+      const out: LoadedPart = { name: list.length > 1 ? p.name : base, geom: finish(g), color: p.color, group: list.length > 1 ? `${file.name}:${p.group}` : undefined };
+      if (p.paint) out.paint = p.paint;
+      if (p.palette) out.palette = p.palette;
+      if (p.modifiers) out.modifiers = p.modifiers;
+      if (p.settings) out.settings = p.settings;
+      return out;
     });
   }
 
@@ -158,6 +164,20 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
     const group = perTop.get(m.top)! > 1 ? `${file.name}:${tops.indexOf(m.top)}` : undefined;
     return { name: k > 1 ? `${m.name} (${k})` : m.name, geom: finish(m.geom), color: m.color, group };
   });
+}
+
+/** Alle Teile einer 3MF-Datei als ein Teil – Bemalung und Modifier bleiben erhalten. */
+function joinParts(parts: ImportedPart[]): ImportedPart {
+  const out: ImportedPart = { ...parts[0], positions: concat(parts.map((p) => p.positions)) };
+  const kinds = new Set(parts.flatMap((p) => Object.keys(p.paint ?? {})));
+  if (kinds.size) {
+    out.paint = {};
+    for (const kind of kinds) out.paint[kind] = parts.flatMap((p) => p.paint?.[kind] ?? new Array<string>(p.positions.length / 9).fill(''));
+    out.palette = parts.find((p) => p.palette)?.palette;
+  }
+  const modifiers = parts.flatMap((p) => p.modifiers ?? []);
+  if (modifiers.length) out.modifiers = modifiers;
+  return out;
 }
 
 function concat(list: Float32Array[]): Float32Array {

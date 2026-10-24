@@ -19,7 +19,8 @@ import { describeFeature, featureTag } from './math/mate';
 import { fitFeatures } from './math/fit';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
-import { BAMBU_PRINTERS, colorSlots, write3MF, write3MFBambu } from './io/threemf';
+import { BAMBU_PRINTERS, type ColoredPart, type SlicerExtras, colorSlots, write3MF, write3MFBambu } from './io/threemf';
+import { decorate, disposeDecor } from './decor';
 import { unionParts } from './io/union';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
@@ -32,7 +33,8 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 // ---------------------------------------------------------------- Zustand
 
-interface Part {
+/** paint, palette, modifiers, settings: Slicer-Zusätze aus 3MF-Projekten, Lage wie geom. */
+interface Part extends SlicerExtras {
   id: number;
   name: string;
   geom: THREE.BufferGeometry;
@@ -169,7 +171,8 @@ const seedOf = new Map<number, number>();
 const view = document.getElementById('view')!;
 const partsEl = document.getElementById('parts')!;
 const jointsEl = document.getElementById('joints')!;
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+// Stencil-Puffer für die Darstellung farbiger Modifier (decor.ts)
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, stencil: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 view.prepend(renderer.domElement);
 
@@ -375,6 +378,7 @@ function releaseUnused() {
   for (const s of [...undoStack, ...redoStack, ...(pendingUndo ? [pendingUndo] : [])]) for (const e of s.parts) used.add(e.part);
   for (const p of removedParts) {
     if (used.has(p)) continue;
+    disposeDecor(p.mesh);
     p.geom.disposeBoundsTree();
     p.geom.dispose();
     (p.mesh.material as THREE.Material).dispose();
@@ -510,9 +514,15 @@ function toast(msg: string, ms = 3200) {
   toastTimer = window.setTimeout(() => el.classList.remove('show'), ms);
 }
 
+/** Umriss eines Teils in Weltkoordinaten (ohne angehängte Darstellung wie Modifier). */
+function partBox(p: Part): THREE.Box3 {
+  p.mesh.updateWorldMatrix(false, false);
+  return p.geom.boundingBox!.clone().applyMatrix4(p.mesh.matrixWorld);
+}
+
 function fitView() {
   const box = new THREE.Box3();
-  for (const p of parts) if (p.visible) box.expandByObject(p.mesh);
+  for (const p of parts) if (p.visible) box.union(partBox(p));
   if (box.isEmpty()) return;
   const c = box.getCenter(new THREE.Vector3());
   const r = box.getSize(new THREE.Vector3()).length() / 2;
@@ -530,7 +540,7 @@ function fitView() {
 /** Platz rechts neben den bereits geladenen Teilen für einen Bereich mit diesem Umriss. */
 function nextLayout(bb: THREE.Box3): THREE.Matrix4 {
   let x = 0;
-  for (const p of parts) x = Math.max(x, new THREE.Box3().setFromObject(p.mesh).max.x);
+  for (const p of parts) x = Math.max(x, partBox(p).max.x);
   const gap = parts.length ? sceneScale() * 0.3 : 0;
   return new THREE.Matrix4().makeTranslation(
     parts.length ? x + gap - bb.min.x : -(bb.min.x + bb.max.x) / 2,
@@ -539,7 +549,9 @@ function nextLayout(bb: THREE.Box3): THREE.Matrix4 {
   );
 }
 
-function addPart(name: string, geom: THREE.BufferGeometry, opts: { color?: string; group?: string; layout?: THREE.Matrix4 } = {}) {
+function addPart(
+  name: string, geom: THREE.BufferGeometry, opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras } = {},
+) {
   geom.computeBoundsTree();
   const color = new THREE.Color(opts.color ?? PART_COLORS[(nextPartId - 1) % PART_COLORS.length]);
   const mesh = new THREE.Mesh(
@@ -554,8 +566,9 @@ function addPart(name: string, geom: THREE.BufferGeometry, opts: { color?: strin
   mesh.matrixWorldNeedsUpdate = true;
 
   const part: Part = {
-    id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 6000), group: opts.group,
+    id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 6000), group: opts.group, ...opts.extras,
   };
+  decorate(mesh, part);
   mesh.userData.partId = part.id;
   parts.push(part);
   scene.add(mesh);
@@ -607,6 +620,8 @@ async function loadFiles(files: FileList | File[]) {
         const members = new Map<string, number>();
         for (const l of loaded) if (l.group) members.set(l.group, (members.get(l.group) ?? 0) + 1);
         loaded = loaded.flatMap((l) => {
+          // Bemalung und Modifier gehören zu genau diesem Netz – solche Teile bleiben ganz
+          if (l.paint || l.modifiers) return [l];
           const pieces = splitLoosePieces(l.geom.getAttribute('position').array as Float32Array);
           if (pieces.length < 2) return [l];
           separated = true;
@@ -627,7 +642,10 @@ async function loadFiles(files: FileList | File[]) {
       const bb = new THREE.Box3();
       for (const l of loaded) bb.union(l.geom.boundingBox!);
       const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
-      for (const l of loaded) addPart(l.name, l.geom, { color: l.color, group: l.group, layout });
+      for (const l of loaded) {
+        const { paint, palette, modifiers, settings } = l;
+        addPart(l.name, l.geom, { color: l.color, group: l.group, layout, extras: { paint, palette, modifiers, settings } });
+      }
       if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
     } catch (e) {
       toast(`${file.name}: ${(e as Error).message}`);
@@ -1461,10 +1479,10 @@ function placeGizmo() {
   if (!pivot && gizmoTarget.assembly) {
     // Drehpunkt in der Mitte des ganzen zusammengesetzten Modells
     const box = new THREE.Box3();
-    for (const p of assemblyOf(moving)) box.expandByObject(p.mesh);
+    for (const p of assemblyOf(moving)) box.union(partBox(p));
     pivot = box.getCenter(new THREE.Vector3());
   }
-  if (!pivot) pivot = new THREE.Box3().setFromObject(moving.mesh).getCenter(new THREE.Vector3());
+  if (!pivot) pivot = partBox(moving).getCenter(new THREE.Vector3());
   const z = (zAxis ?? new THREE.Vector3(0, 0, 1)).normalize();
   let x = xHint ? xHint.clone().addScaledVector(z, -xHint.dot(z)) : new THREE.Vector3(1, 0, 0).addScaledVector(z, -z.x);
   if (x.lengthSq() < 1e-6) x = new THREE.Vector3(0, 1, 0).addScaledVector(z, -z.y);
@@ -1694,7 +1712,7 @@ async function runCheck() {
   // Färbung etwa im Raster von 1–2 % der Teilgröße
   const opts = { contactTol: 0.03, gapTol: 0.6, maxEdge: Math.min(3, Math.max(0.4, sceneScale() * 0.015)) };
   const visible = parts.filter((p) => p.visible);
-  const boxes = new Map(visible.map((p) => [p.id, new THREE.Box3().setFromObject(p.mesh)]));
+  const boxes = new Map(visible.map((p) => [p.id, partBox(p)]));
   const target = (p: Part) => {
     const b = boxes.get(p.id)!;
     return { bvh: p.geom.boundsTree as MeshBVH, matrix: matrixToRigid(p.mesh.matrixWorld), box: { min: v3(b.min), max: v3(b.max) } };
@@ -2938,14 +2956,26 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
   b.addEventListener('click', () => void exportAs(b.dataset.export ?? 'stl')),
 );
 
+function transformed(positions: Float32Array, m: THREE.Matrix4): Float32Array {
+  const out = new Float32Array(positions.length);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < positions.length; i += 3) v.fromArray(positions, i).applyMatrix4(m).toArray(out, i);
+  return out;
+}
+
 /** Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. */
 async function exportAs(kind: string) {
   const visible = parts.filter((p) => p.visible);
   if (!visible.length) { toast('Keine sichtbaren Teile zum Exportieren.'); return; }
-  const world = visible.map((p) => ({
+  const world: ColoredPart[] = visible.map((p) => ({
     name: p.name,
     color: `#${p.color.getHexString()}`,
     positions: p.geom.clone().applyMatrix4(p.mesh.matrixWorld).getAttribute('position').array as Float32Array,
+    // Bemalung je Dreieck bleibt gültig (gleiche Dreiecke, gleiche Reihenfolge), Modifier ziehen mit um
+    paint: p.paint,
+    palette: p.palette,
+    settings: p.settings,
+    modifiers: p.modifiers?.map((m) => ({ ...m, positions: transformed(m.positions, p.mesh.matrixWorld) })),
   }));
   try {
     if (kind === '3mf-color' || kind === '3mf-bambu') {

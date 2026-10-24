@@ -14,6 +14,11 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    bilden eine Gruppe (⛓) und bewegen sich gemeinsam; jedes Teil lässt sich aus seiner Gruppe lösen
    und per Farbwähler umfärben. Liegen die Teile in den Dateien schon richtig zueinander,
    „Lage aus der Datei übernehmen" anhaken.
+   Aus Slicer-Projekten kommen auch **Aufschriften und Logos als Modifier** (z. B. eingelassener Text
+   in anderem Filament), **Farbbemalung**, Fuzzy-Skin-, Stützen- und Naht-Bemalung sowie die
+   Druckeinstellungen je Teil mit: Sie werden angezeigt (die Oberfläche erscheint dort in der
+   Filamentfarbe, wo sie im Modifier liegt – so wie gedruckt) und beim Export nach Bambu Studio
+   wieder mitgeschrieben.
 2. **Automatisch oder von Hand auswählen** – **„Alles automatisch verbinden"** sucht für alle Teile
    passende Flächen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und setzt sie ab dem
    Basisteil zusammen; **„Vorschlagen"** macht das für eine einzelne Verbindung, „Nächster Vorschlag"
@@ -58,8 +63,13 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
      0,20 mm Standard, Bambu PLA Basic; auch H2C, H2D, H2D Pro und X2D mit zwei Düsen) – ohne sie lädt
      Bambu Studio ab 2.8.2 nur die Geometrie.
      Der Drucker eines geladenen Bambu-Projekts wird vorausgewählt.
+     Modifier (Aufschriften, negative Volumen, Stützen-Volumen), Bemalung und Druckeinstellungen je
+     Teil (Wände, Infill, Muster …) bleiben erhalten; die Filamentnummern werden dabei auf die
+     Filamente des Exports umgestellt. Einstellungen, die nur für ein ganzes Objekt gelten (z. B.
+     Schichthöhe, Brim), entfallen, weil die Baugruppe ein einziges Objekt wird.
    - **3MF für PrusaSlicer**: ein Objekt aus mehreren Teilen; Teile gleicher Farbe bekommen dieselbe
-     Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen.
+     Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen. Die Bemalung kommt mit,
+     Modifier nicht (andere Programme würden sie als Teil des Körpers drucken).
    - **STL, OBJ, 3MF (ein Körper)**: mit „Zu einem Körper vereinigen" werden die Teile per
      boolescher Vereinigung zu einem geschlossenen Netz (Überlappungen und Innenflächen verschwinden).
      Nicht geschlossene Teile werden unverändert angehängt und genannt.
@@ -128,8 +138,9 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
   und Durchdringungsprüfung (`src/math/suggest.ts`).
 - **Prüfansicht**: Abstand und Vorzeichen zur Oberfläche des anderen Teils je (unterteiltem) Dreieck
   (`src/math/check.ts`).
-- **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), **Vereinigung** mit
-  manifold-3d (`src/io/union.ts`).
+- **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
+  TriangleSelector von Bambu/Prusa (`src/io/paint.ts`), Darstellung von Bemalung und Modifiern per
+  Stencil-Puffer (`src/decor.ts`), **Vereinigung** mit manifold-3d (`src/io/union.ts`).
 
 ## Entwicklung
 
@@ -147,4 +158,3 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 - Projekt speichern/laden
 - Druckausrichtung (größte ebene Fläche aufs Druckbett)
 - Passungshilfe (Zapfen gezielt dünner machen)
-- Bemalte Bereiche (Bambu „paint_color") beim 3MF-Import als eigene Teile
