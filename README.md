@@ -129,6 +129,13 @@ rechts, „⇄ Seite" zeigt die andere Hälfte. Wo die Ebene durch Material geht
 einem dunkleren Ton des Teils (auch bei aufeinanderliegenden Teilen sauber getrennt), so lassen sich
 Wandstärken, Bohrungen und Passungen ansehen. Klicken und Messen treffen nur, was sichtbar ist – z. B. eine
 Bohrung im Inneren.
+**Netz reparieren**: Nach dem Laden prüft PartJoin jedes Netz im Hintergrund. Offene oder verdrehte Netze
+bekommen ein ⚠ in der Teileliste (und einen Hinweis in der Statuszeile); ein Klick darauf oder Rechtsklick ›
+„Netz reparieren" verschweißt fast deckungsgleiche Punkte (feine Risse), entfernt doppelte Dreiecke und
+Innenwände, gleicht den Umlaufsinn an, dreht nach innen zeigende Netze nach außen und schließt Löcher
+(ebene Ränder sauber abgetragen, verwinkelte mit einem Fächer). Gewählte Flächen und Bemalung bleiben
+erhalten. Zerschneiden und Vereinigen brauchen ein geschlossenes Netz – beim Zerschneiden gibt es dafür
+direkt einen Knopf. Zusammengefallene Dreiecke ohne Fläche gelten nicht als Fehler.
 **Zerschneiden** (Rechtsklick › „Zerschneiden …"): teilt ein Teil an der Schnittebene in zwei – etwa wenn es
 nicht auf die Platte passt oder ohne Stützen druckbar werden soll. Die Ebene stellt man wie in der
 Schnittansicht ein (X/Y/Z, Regler, Seite); gezeigt wird nur dieses Teil aufgeschnitten. Verbinder: ohne

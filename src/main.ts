@@ -29,6 +29,7 @@ import {
 } from './io/project';
 import { unionParts } from './io/union';
 import { type Connector, CutError, cutMesh, planConnectors, releaseCut } from './io/cut';
+import type { MeshHealth } from './math/repair';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -65,6 +66,8 @@ interface Part extends SlicerExtras {
    * einer OBJ-Datei): Sie stehen gemeinsam auf der Platte und werden zusammen ein Objekt im Slicer.
    */
   together?: string;
+  /** Ergebnis der Netzprüfung (läuft nach dem Laden im Hintergrund). */
+  health?: MeshHealth;
 }
 
 /** Vorschlag für eine Verbindung: diese Fläche am einen Teil passt zu jener am anderen. */
@@ -778,7 +781,32 @@ function addPart(
   parts.push(part);
   scene.add(mesh);
   if (baseId === null) baseId = part.id;
+  checkHealth(part);
   return part;
+}
+
+/** Netz im Hintergrund prüfen; offene Netze bekommen ein Warnzeichen in der Teileliste. */
+function checkHealth(p: Part) {
+  // Erst nach dem Laden der übrigen Dateien, damit das Laden nicht wartet
+  setTimeout(() => {
+    if (p.health || !parts.includes(p)) return;
+    compute('meshHealth', { positions: positionsOf(p) }).then((h) => {
+      p.health = h;
+      if (parts.includes(p) && !h.closed) { renderParts(); renderStatus(); }
+    }).catch(() => { /* ohne Prüfung */ });
+  }, 50);
+}
+
+/** Kurzbeschreibung der Netzfehler. */
+function healthText(h: MeshHealth): string {
+  const bits = [
+    h.openEdges ? `${h.openEdges} offene Kante${h.openEdges > 1 ? 'n' : ''}` : '',
+    h.flippedEdges ? `${h.flippedEdges} verdrehte Kante${h.flippedEdges > 1 ? 'n' : ''}` : '',
+    h.nonManifoldEdges ? `${h.nonManifoldEdges} mehrdeutige Kante${h.nonManifoldEdges > 1 ? 'n' : ''}` : '',
+    h.duplicates ? `${h.duplicates} doppelte Dreieck${h.duplicates > 1 ? 'e' : ''}` : '',
+    h.volume < 0 && !h.openEdges ? 'Normalen zeigen nach innen' : '',
+  ].filter(Boolean);
+  return bits.join(', ') || 'in Ordnung';
 }
 
 /** Alle Teile, die sich mit diesem gemeinsam bewegen (inklusive des Teils selbst). */
@@ -2717,6 +2745,7 @@ function renderParts() {
         <label class="base" title="Das Basisteil bleibt liegen, alle anderen werden daran angefügt.">
           <input type="radio" name="base" data-act="base" data-id="${p.id}" ${p.id === baseId ? 'checked' : ''}/> Basis
         </label>
+        ${p.health && !p.health.closed ? `<button class="icon warn" data-act="repair" data-id="${p.id}" title="Netz nicht geschlossen: ${esc(healthText(p.health))}. Zerschneiden und Vereinigen brauchen ein geschlossenes Netz – klicken zum Reparieren." aria-label="Netz reparieren">⚠</button>` : ''}
         ${p.group && groupOf(p).length > 1 ? `<button class="icon" data-act="ungroup" data-id="${p.id}" title="Gehört zu einer Gruppe (${groupOf(p).length} Teile, bewegen sich gemeinsam). Klicken, um dieses Teil aus der Gruppe zu lösen.">⛓</button>` : ''}
         <button class="icon move${gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? ' on' : ''}" data-act="move-part" data-id="${p.id}" title="Teil von Hand bewegen/drehen (nochmal klicken: fertig)" aria-label="Teil von Hand bewegen/drehen" aria-pressed="${gizmoPart()?.id === p.id}">${MOVE_ICON}</button>
         <button class="icon rm" data-act="rm-part" data-id="${p.id}" title="Entfernen" aria-label="Entfernen">✕</button>
@@ -3038,6 +3067,11 @@ document.getElementById('panel')!.addEventListener('click', (e) => {
     case 'move-part':
       movePartByHand(id);
       break;
+    case 'repair': {
+      const p = getPart(id);
+      if (p) void repairParts([p]);
+      break;
+    }
     case 'clr-a':
     case 'clr-b':
       if (!j) break;
@@ -3453,7 +3487,7 @@ async function exportAs(kind: string) {
         const res = await unionParts(world, manifoldWasm);
         body = [{ name: 'PartJoin', positions: res.positions }];
         toast(res.notClosed.length
-          ? `Vereinigt. Nicht geschlossen und deshalb nur angehängt: ${res.notClosed.join(', ')}`
+          ? `Vereinigt. Nicht geschlossen und deshalb nur angehängt: ${res.notClosed.join(', ')} – vorher Rechtsklick › „Netz reparieren“.`
           : 'Zu einem Körper vereinigt.', 6000);
       } catch (e) {
         toast(`Vereinigen nicht möglich (${(e as Error).message ?? e}) – Export ohne Vereinigung.`, 6000);
@@ -3803,6 +3837,87 @@ document.getElementById('sectionFlip')!.addEventListener('click', () => {
 });
 document.getElementById('sectionClose')!.addEventListener('click', () => setSection(false));
 
+// ---------------------------------------------------------------- Netz reparieren
+
+/**
+ * Netze reparieren (im Hintergrund): verschweißen, Duplikate weg, Umlaufsinn angleichen, Löcher zu.
+ * Die übrigen Dreiecke behalten ihre Reihenfolge – Bemalung und gewählte Flächen werden übertragen
+ * (bei umgedrehten Dreiecken entfällt deren Bemalung).
+ */
+async function repairParts(list: Part[]) {
+  if (!list.length) return;
+  toast(list.length > 1 ? `Repariere ${list.length} Netze …` : `Repariere „${list[0].name}“ …`, 20000);
+  const notes: string[] = [];
+  let changed = 0;
+  for (const p of list) {
+    let r;
+    try {
+      r = await compute('repairMesh', { positions: positionsOf(p) });
+    } catch (err) {
+      notes.push(`„${p.name}“: ${(err as Error).message}`);
+      continue;
+    }
+    if (getPart(p.id) !== p) continue;
+    const rep = r.report;
+    const did = rep.welded + rep.removed + rep.flipped + rep.holes > 0;
+    if (!did) {
+      p.health = rep.after;
+      notes.push(`„${p.name}“ war schon in Ordnung.`);
+      continue;
+    }
+    // Bemalung übertragen
+    let lostPaint = false;
+    let paint = p.paint;
+    if (paint) {
+      const n = r.positions.length / 9;
+      paint = Object.fromEntries(Object.entries(paint).map(([k, codes]) => {
+        const out = new Array<string>(n).fill('');
+        codes.forEach((c, t) => {
+          const to = r.map[t];
+          if (to < 0 || !c) return;
+          if (r.flippedTris[to]) lostPaint = true;
+          else out[to] = c;
+        });
+        return [k, out];
+      }));
+    }
+    // Gewählte Flächen auf diesem Teil: neue Dreiecksnummern
+    for (const j of joints) {
+      const owner = (f: PickedFeature, side: Side) => f.on ?? (side === 'a' ? j.a : j.b);
+      const conv = (f: PickedFeature, side: Side): PickedFeature | null => {
+        const pieces = f.pieces?.map((q) => conv(q, side)).filter((q): q is PickedFeature => !!q);
+        if (owner(f, side) !== p.id) return pieces ? { ...f, pieces } : f;
+        const tris = f.tris.map((t) => r.map[t]).filter((t) => t >= 0);
+        return tris.length ? { ...f, tris, ...(pieces ? { pieces } : {}) } : null;
+      };
+      const fa = j.fa.map((f) => conv(f, 'a')).filter((f): f is PickedFeature => !!f);
+      const fb = j.fb.map((f) => conv(f, 'b')).filter((f): f is PickedFeature => !!f);
+      if (fa.some((f, i) => f !== j.fa[i]) || fb.some((f, i) => f !== j.fb[i]) || fa.length !== j.fa.length || fb.length !== j.fb.length) {
+        j.fa = fa;
+        j.fb = fb;
+        j.proposals = undefined;
+        mergePick.delete(j.id);
+      }
+    }
+    const fresh = replaceGeometry(p, r.positions, { paint, modifiers: p.modifiers });
+    fresh.health = rep.after;
+    changed++;
+    const bits = [
+      rep.holes ? `${rep.holes} Loch${rep.holes > 1 ? 'er' : ''} geschlossen` : '',
+      rep.flipped ? `${rep.flipped} Dreieck${rep.flipped > 1 ? 'e' : ''} umgedreht` : '',
+      rep.removed ? `${rep.removed} doppelte/leere entfernt` : '',
+      rep.welded && !rep.holes && !rep.flipped && !rep.removed ? 'Risse geschlossen' : '',
+    ].filter(Boolean);
+    notes.push(`„${p.name}“: ${bits.join(', ') || 'Punkte verschweißt'}${rep.after.closed ? ' – jetzt geschlossen.' : ` – noch offen (${healthText(rep.after)}).`}${lostPaint ? ' Bemalung umgedrehter Dreiecke entfernt.' : ''}`);
+  }
+  if (changed) {
+    solveAll();
+    renderAll();
+  } else renderParts();
+  toast(notes.join(' '), 8000);
+  if (cutTarget && list.some((q) => q.id === cutTarget!.partId)) scheduleCutPreview();
+}
+
 // ---------------------------------------------------------------- Zerschneiden
 
 /**
@@ -3912,7 +4027,7 @@ async function updateCutPreview() {
   if (seq !== cutSeq || !cutTarget) return;
   clearCutPreview();
   if (!res.closed) {
-    cutHelp.textContent = 'Das Teil ist nicht geschlossen (nicht wasserdicht) – so lässt es sich nicht zerschneiden.';
+    cutHelp.innerHTML = 'Das Teil ist nicht geschlossen (nicht wasserdicht) – so lässt es sich nicht zerschneiden. <button class="ghost small" data-cut-repair>Netz reparieren</button>';
     return;
   }
   const W = p.mesh.matrixWorld;
@@ -3956,7 +4071,7 @@ async function applyCut() {
   try {
     res = await cutMesh(positionsOf(p), opts, manifoldWasm);
   } catch (err) {
-    toast(err instanceof CutError ? err.message : `Zerschneiden fehlgeschlagen: ${(err as Error).message}`, 6000);
+    toast(err instanceof CutError ? `${err.message}${/wasserdicht/.test(err.message) ? ' Erst „Netz reparieren“.' : ''}` : `Zerschneiden fehlgeschlagen: ${(err as Error).message}`, 6000);
     return;
   } finally {
     cutBusy = false;
@@ -4027,6 +4142,10 @@ cutBar.querySelectorAll<HTMLElement>('[data-conn]').forEach((b) => b.addEventLis
 }));
 for (const el of [cutCount, cutDia, cutGap]) el.addEventListener('input', scheduleCutPreview);
 document.getElementById('cutApply')!.addEventListener('click', () => void applyCut());
+cutHelp.addEventListener('click', (e) => {
+  const p = cutTarget && getPart(cutTarget.partId);
+  if (p && (e.target as HTMLElement).closest('[data-cut-repair]')) void repairParts([p]);
+});
 document.getElementById('cutCancel')!.addEventListener('click', () => setSection(false));
 
 // ---------------------------------------------------------------- Skalieren und Spiegeln
@@ -4487,6 +4606,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
   entries.push(
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ partId: p.id, which: members.length > 1 ? 'unit' : 'part' }), title: 'Größe in % oder mm, Zoll → mm, an X/Y/Z spiegeln (Taste S)' },
     { label: section && !cutTarget ? 'Hier zerschneiden …' : 'Zerschneiden …', run: () => openCut(p), title: 'In zwei Teile schneiden, auf Wunsch mit Zapfen oder Dübeln zum Zusammenstecken' },
+    { label: p.health && !p.health.closed ? 'Netz reparieren ⚠' : 'Netz prüfen und reparieren', run: () => void repairParts([p]), title: p.health ? `Netz: ${healthText(p.health)}` : 'Löcher schließen, verdrehte Flächen umdrehen, Duplikate entfernen' },
     { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
   );
   if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });
@@ -4514,6 +4634,7 @@ function selectionMenu(x: number, y: number) {
     { label: 'Nur diese zeigen', run: () => setVisible(others, false), disabled: !others.length },
     { label: 'Farbe für alle …', run: () => pickColor(list, x, y) },
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ sel: list.map((q) => q.id) }) },
+    { label: 'Netze reparieren', run: () => void repairParts(list) },
     'sep',
     { label: 'Gruppieren', run: () => groupParts(list), disabled: sameGroup(list), title: 'Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam.' },
     ...(grouped ? [{ label: 'Gruppe auflösen', run: () => ungroupAll(list) }] : []),
@@ -4592,6 +4713,8 @@ function renderStatus() {
     const s = sizeOf(members);
     bits.push(`${members.length > 1 ? `Baugruppe „${esc(p.name)}“ (${members.length} Teile)` : `„${esc(p.name)}“`}: <b>${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm</b>`);
   }
+  const open = parts.filter((q) => q.health && !q.health.closed);
+  if (open.length) bits.push(`<span class="warn">⚠ ${open.length > 1 ? `${open.length} Netze sind` : `„${esc(open[0].name)}“ ist`} nicht geschlossen – Rechtsklick › „Netz reparieren“</span>`);
   statusEl.innerHTML = bits.join(' · ') + bedWarning();
 }
 

@@ -10,6 +10,7 @@ import { type BaseChoice, bestBase } from '../math/orient';
 import { CAD_MESHING, type CadPart, type OcctResult, occtToParts } from '../io/step';
 import occtImport from 'occt-import-js';
 import { gunzipSync } from 'fflate';
+import { type MeshHealth, type RepairResult, meshHealth, repairMesh } from '../math/repair';
 
 /** OpenCascade einmal je Thread starten. */
 let occt: ReturnType<typeof occtImport> | null = null;
@@ -51,6 +52,14 @@ export const TASKS = {
     const r = (await occt).ReadFile(a.format, a.data, CAD_MESHING) as OcctResult;
     const parts = occtToParts(r);
     return { result: parts, transfer: buffers(parts.map((p) => p.positions)) };
+  },
+  /** Ist das Netz geschlossen (für Zerschneiden, Vereinigen, Slicer)? */
+  meshHealth(a: { positions: Float32Array }): TaskResult<MeshHealth> {
+    return { result: meshHealth(a.positions) };
+  },
+  repairMesh(a: { positions: Float32Array }): TaskResult<RepairResult> {
+    const r = repairMesh(a.positions);
+    return { result: r, transfer: buffers([r.positions, r.map, r.flippedTris]) };
   },
   packProject(a: { data: ProjectData; blobs: Blobs }): TaskResult<Uint8Array> {
     const r = packProject(a.data, a.blobs);

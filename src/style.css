@@ -350,3 +350,6 @@ kbd {
 /* Im Schnitt sitzen Hinweis und Meldungen über dem Regler */
 #view.cut #hint { bottom: 80px; }
 #view.cut #toast { bottom: 136px; }
+.parts button.icon.warn { color: var(--warn); font-size: 14px; }
+.parts button.icon.warn:hover { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+#cutHelp button { margin-left: 6px; }

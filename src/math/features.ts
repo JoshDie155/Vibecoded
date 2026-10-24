@@ -229,7 +229,8 @@ function cellHash(ix: number, iy: number, iz: number): number {
  * einer offenen Hashtabelle). Bitgleiche Punkte werden mit einem Zugriff gefunden; nur für neue
  * Punkte werden auch die Nachbarzellen geprüft, in die ein naher Punkt fallen könnte.
  */
-function weld(positions: Float32Array, corners: number, tol: number) {
+/** Eckpunkte verschweißen: gleiche Nummer für Ecken mit Abstand ≤ tol (Laufzeit linear). */
+export function weld(positions: Float32Array, corners: number, tol: number) {
   const vertIds = new Int32Array(corners);
   const firstCorner = new Int32Array(corners);
   let size = 16;
