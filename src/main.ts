@@ -21,6 +21,10 @@ import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
 import { BAMBU_PRINTERS, type ColoredPart, type SlicerExtras, colorSlots, write3MF, write3MFBambu } from './io/threemf';
 import { decorate, disposeDecor } from './decor';
+import {
+  type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, packProject, saveSession, sessionInfo,
+  unpackProject,
+} from './io/project';
 import { unionParts } from './io/union';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
@@ -632,8 +636,20 @@ async function loadFiles(files: FileList | File[]) {
   // Farben für OBJ: passende .mtl-Datei (gleicher Name oder die einzige mitgegebene)
   const mtls = new Map<string, string>();
   for (const f of list) if (f.name.toLowerCase().endsWith('.mtl')) mtls.set(f.name.replace(/\.[^.]+$/, '').toLowerCase(), await f.text());
+  // PartJoin-Projekt: ersetzt die aktuelle Arbeit, weitere Dateien kommen dazu
+  const project = list.find((f) => f.name.toLowerCase().endsWith(`.${PROJECT_EXT}`));
+  if (project) {
+    try {
+      const { data, blobs } = unpackProject(new Uint8Array(await project.arrayBuffer()));
+      openProject(data, blobs);
+      toast(`Projekt „${project.name}" geöffnet${undoStack.length || pendingUndo ? ' – Strg+Z holt die vorige Arbeit zurück' : ''}.`, 5000);
+    } catch (e) {
+      toast(`${project.name}: ${(e as Error).message}`);
+    }
+    if (list.length === 1) return;
+  }
   for (const file of list) {
-    if (file.name.toLowerCase().endsWith('.mtl')) continue;
+    if (file === project || file.name.toLowerCase().endsWith('.mtl')) continue;
     try {
       const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase();
       const mtl = mtls.get(stem) ?? (mtls.size === 1 ? [...mtls.values()][0] : undefined);
@@ -2962,7 +2978,7 @@ gizmoBar.addEventListener('change', (e) => {
 });
 
 const fileInput = document.getElementById('file') as HTMLInputElement;
-fileInput.accept = SUPPORTED.map((s) => `.${s}`).join(',');
+fileInput.accept = [...SUPPORTED, PROJECT_EXT].map((s) => `.${s}`).join(',');
 fileInput.addEventListener('change', () => {
   if (fileInput.files?.length) loadFiles(fileInput.files);
   fileInput.value = '';
@@ -3093,10 +3109,223 @@ async function exportAs(kind: string) {
   }
 }
 
+// ---------------------------------------------------------------- Projekt speichern / öffnen
+
+/** Schlüssel der Netze eines Teils in Projektdatei und Sitzungssicherung (bleibt für das Teil gleich). */
+const geomKeys = new WeakMap<Part, string>();
+let geomCounter = 0;
+function geomKey(p: Part): string {
+  let k = geomKeys.get(p);
+  if (!k) {
+    k = `${Date.now().toString(36)}-${(geomCounter++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    geomKeys.set(p, k);
+  }
+  return k;
+}
+
+/** Der ganze Arbeitsstand als Projekt; die Netze getrennt (sie ändern sich nie). */
+function projectState(): { data: ProjectData; blobs: Blobs } {
+  const blobs: Blobs = new Map();
+  const list = parts.map((p) => {
+    const key = geomKey(p);
+    blobs.set(key, positionsOf(p));
+    return {
+      id: p.id, name: p.name, color: `#${p.color.getHexString()}`, group: p.group, layout: p.layout.toArray(),
+      visible: p.visible, fromFile: p.fromFile, geometry: key,
+      paint: p.paint, palette: p.palette, settings: p.settings, objectSettings: p.objectSettings,
+      modifiers: p.modifiers?.map(({ positions, ...m }, i) => {
+        blobs.set(`${key}-m${i}`, positions);
+        return { ...m, geometry: `${key}-m${i}` };
+      }),
+    };
+  });
+  // Nur, was der Benutzer festgelegt hat – Ergebnisse rechnet solveAll beim Öffnen neu
+  const saved = joints.map((j) => ({
+    id: j.id, color: `#${j.color.getHexString()}`, a: j.a, b: j.b, ma: j.ma, mb: j.mb, fa: j.fa, fb: j.fb,
+    ordered: j.ordered, normals: j.normals, overlap: j.overlap, spin: j.spin, seat: j.seat, applied: j.applied, alt: j.alt,
+    adjust: j.adjust, adjustInfo: j.adjustInfo, last: j.last, turnIdx: j.turnIdx, auto: j.auto,
+  }));
+  return {
+    data: newProject({
+      parts: list, joints: saved, baseId, activeJointId,
+      settings: { onFloor: onFloor.checked, printer: bambuPrinter.value },
+      camera: { position: camera.position.toArray(), target: controls.target.toArray() },
+    }),
+    blobs,
+  };
+}
+
+/** Ersetzt die aktuelle Arbeit durch ein Projekt (die vorige bleibt in der Historie: Strg+Z). */
+function openProject(data: ProjectData, blobs: Blobs) {
+  closeGizmo();
+  for (const p of parts) {
+    scene.remove(p.mesh);
+    removedParts.add(p);
+  }
+  parts.length = 0;
+  joints.length = 0;
+  mergePick.clear();
+  baseId = null;
+  activeJointId = null;
+  // Ids werden neu vergeben, Verweise in den Verbindungen entsprechend umgestellt
+  const ids = new Map<number, number>();
+  for (const sp of data.parts) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(blobs.get(sp.geometry)!, 3));
+    g.computeVertexNormals();
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    const modifiers = sp.modifiers?.map(({ geometry, ...m }) => ({ ...m, positions: blobs.get(geometry)! }));
+    const p = addPart(sp.name, g, {
+      color: sp.color, group: sp.group, layout: new THREE.Matrix4().fromArray(sp.layout),
+      extras: { paint: sp.paint, palette: sp.palette, modifiers, settings: sp.settings, objectSettings: sp.objectSettings },
+    });
+    p.visible = sp.visible !== false;
+    p.mesh.visible = p.visible;
+    if (sp.fromFile) p.fromFile = true;
+    geomKeys.set(p, sp.geometry);
+    ids.set(sp.id, p.id);
+  }
+  const part = (id: unknown) => (typeof id === 'number' ? ids.get(id) ?? null : null);
+  const feature = (f: PickedFeature): PickedFeature => {
+    const out = { ...f } as PickedFeature;
+    if (f.on !== undefined) out.on = part(f.on) ?? undefined;
+    if (f.pieces) out.pieces = f.pieces.map(feature);
+    return out;
+  };
+  const jointIds = new Map<number, number>();
+  for (const raw of data.joints) {
+    const sj = raw as unknown as Joint & { color: string };
+    const j: Joint = {
+      ...sj, id: nextJointId++, color: new THREE.Color(sj.color), a: part(sj.a), b: part(sj.b),
+      ma: sj.ma ?? [], mb: sj.mb ?? [], fa: (sj.fa ?? []).map(feature), fb: (sj.fb ?? []).map(feature),
+    };
+    jointIds.set(sj.id, j.id);
+    joints.push(j);
+  }
+  baseId = part(data.baseId) ?? parts[0]?.id ?? null;
+  activeJointId = (data.activeJointId !== null ? jointIds.get(data.activeJointId) : undefined) ?? joints[0]?.id ?? null;
+  onFloor.checked = data.settings?.onFloor ?? true;
+  const printer = data.settings?.printer;
+  if (printer && BAMBU_PRINTERS.some((b) => b.id === printer)) bambuPrinter.value = printer;
+  ensureJoint();
+  solveAll();
+  renderAll();
+  if (data.camera) {
+    camera.position.fromArray(data.camera.position);
+    controls.target.fromArray(data.camera.target);
+    controls.update();
+  } else fitView();
+}
+
+/** Dateiname aus dem Basisteil, ohne Zeichen, die Dateisysteme nicht mögen. */
+const projectName = () => (getPart(baseId)?.name ?? parts[0]?.name ?? 'PartJoin').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'PartJoin';
+
+async function saveProject() {
+  if (!parts.length) {
+    toast('Noch keine Teile geladen – es gibt nichts zu speichern.');
+    return;
+  }
+  const { data, blobs } = projectState();
+  const bytes = packProject(data, blobs);
+  await download(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), `${projectName()}.${PROJECT_EXT}`);
+  toast('Projekt gespeichert. Zum Weiterarbeiten die Datei hier hineinziehen oder „Projekt öffnen" wählen.', 6000);
+}
+
+const projFile = document.getElementById('projFile') as HTMLInputElement;
+document.getElementById('projOpen')!.addEventListener('click', () => projFile.click());
+projFile.addEventListener('change', () => {
+  if (projFile.files?.length) void loadFiles(projFile.files);
+  projFile.value = '';
+});
+document.getElementById('projSave')!.addEventListener('click', () => void saveProject());
+// Strg/⌘+S speichert das Projekt statt der Webseite
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 's') return;
+  e.preventDefault();
+  void saveProject();
+});
+
+// ---------------------------------------------------------------- Sitzung im Browser sichern
+
+/** Erst sichern, wenn über eine vorhandene Sitzung entschieden ist – sonst überschriebe die leere Seite sie. */
+let sessionArmed = false;
+let sessionSig = '';
+let sessionBusy = false;
+const restoreBar = document.getElementById('restoreBar')!;
+
+async function autosave() {
+  // Neue Arbeit begonnen, ohne über die alte Sitzung zu entscheiden: die neue gilt
+  if (!sessionArmed && !restoreBar.hidden && parts.length) {
+    restoreBar.hidden = true;
+    sessionArmed = true;
+  }
+  if (!sessionArmed || sessionBusy) return;
+  const sig = `${stateSig()}|${onFloor.checked}`;
+  if (sig === sessionSig) return;
+  sessionBusy = true;
+  try {
+    if (!parts.length) await clearSession();
+    else {
+      const { data, blobs } = projectState();
+      await saveSession(data, blobs);
+    }
+    sessionSig = sig;
+  } catch {
+    // Kein Speicher im Browser (z. B. privates Fenster oder voll): dann eben ohne Sicherung
+    sessionArmed = false;
+  } finally {
+    sessionBusy = false;
+  }
+}
+setInterval(() => void autosave(), 2500);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') void autosave();
+});
+
+document.getElementById('restoreYes')!.addEventListener('click', async () => {
+  restoreBar.hidden = true;
+  try {
+    const s = await loadSession();
+    if (s) {
+      openProject(s.data, s.blobs);
+      sessionSig = `${stateSig()}|${onFloor.checked}`;
+      toast('Letzte Sitzung wiederhergestellt.');
+    } else toast('Die gesicherte Sitzung ist unvollständig und lässt sich nicht wiederherstellen.');
+  } catch (e) {
+    toast(`Wiederherstellen nicht möglich: ${(e as Error).message ?? e}`);
+  }
+  sessionArmed = true;
+});
+document.getElementById('restoreNo')!.addEventListener('click', async () => {
+  restoreBar.hidden = true;
+  try { await clearSession(); } catch { /* ohne Speicher */ }
+  sessionArmed = true;
+});
+
+void (async () => {
+  let info: ProjectData | null = null;
+  try {
+    info = await sessionInfo();
+  } catch {
+    return; // kein IndexedDB: keine Sicherung
+  }
+  if (!info || parts.length) {
+    sessionArmed = true;
+    return;
+  }
+  const n = info.parts.length;
+  const k = info.joints.filter((j) => j.applied).length;
+  const when = new Date(info.savedAt).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  document.getElementById('restoreText')!.textContent =
+    `Letzte Sitzung vom ${when}: ${n} Teil${n === 1 ? '' : 'e'}, ${k} Verbindung${k === 1 ? '' : 'en'}.`;
+  restoreBar.hidden = false;
+})();
+
 // Für automatisierte Tests / Debugging
 Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
-    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor,
+    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor, autosave,
     checkCount: () => checkGroup.children.length,
     gizmoLocked: () => [...gizmoLocked],
     hoverLineVisible: () => hoverLine.visible,

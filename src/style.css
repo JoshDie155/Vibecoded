@@ -208,6 +208,11 @@ button.icon:hover { color: var(--err); }
 #gizmoBar .help { margin: 0; flex-basis: 100%; }
 #gizmoBar .help:empty { display: none; }
 .loadopts { display: grid; gap: 4px; margin-top: 10px; color: var(--muted); }
+.projectbar { margin: -4px 0 8px; }
+.restore {
+  display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 8px; font-size: 13px;
+}
 .swatch {
   width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 50%;
   background: none; cursor: pointer; flex: none; overflow: hidden;

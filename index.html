@@ -16,10 +16,22 @@
 
         <section>
           <h2><span class="step">1</span> Modelle laden</h2>
+          <div id="restoreBar" class="restore" hidden>
+            <span id="restoreText"></span>
+            <span class="row">
+              <button id="restoreYes" class="small">Wiederherstellen</button>
+              <button id="restoreNo" class="ghost small">Verwerfen</button>
+            </span>
+          </div>
+          <div class="row wrap projectbar">
+            <button id="projOpen" class="ghost small" title="PartJoin-Projekt (.partjoin) öffnen. Es ersetzt die aktuelle Arbeit – Strg+Z holt sie zurück.">Projekt öffnen</button>
+            <button id="projSave" class="ghost small" title="Alle Teile mit Lage, Farben, Aufschriften und Verbindungen in einer Datei speichern (Strg+S)">Projekt speichern</button>
+            <input type="file" id="projFile" accept=".partjoin" hidden />
+          </div>
           <label class="drop" id="drop">
             <input type="file" id="file" multiple />
             <strong>Dateien hierher ziehen</strong> oder klicken
-            <small>STL · OBJ (+MTL) · 3MF · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK</small>
+            <small>STL · OBJ (+MTL) · 3MF · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK · PartJoin-Projekt</small>
           </label>
           <div class="loadopts">
             <label class="check small" title="Viele mehrteilige Downloads liegen in den Dateien schon richtig zueinander. Dann werden die Teile genau so geladen.">

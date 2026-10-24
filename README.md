@@ -26,6 +26,11 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    Druckeinstellungen je Teil mit: Sie werden angezeigt (die Oberfläche erscheint dort in der
    Filamentfarbe, wo sie im Modifier liegt – so wie gedruckt) und beim Export nach Bambu Studio
    wieder mitgeschrieben.
+   **Projekt speichern/öffnen**: „Projekt speichern" (Strg/⌘+S) legt alle Teile mit Lage, Farben,
+   Gruppen, Aufschriften, Bemalung und allen Verbindungen in einer `.partjoin`-Datei ab; „Projekt
+   öffnen" oder Hineinziehen macht dort weiter (die vorige Arbeit holt Strg+Z zurück). Zusätzlich
+   sichert PartJoin die Sitzung laufend im Browser – nach einem Neuladen bietet es an, den letzten
+   Stand wiederherzustellen.
 2. **Automatisch oder von Hand auswählen** – **„Alles automatisch verbinden"** sucht für alle Teile
    passende Flächen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und setzt sie ab dem
    Basisteil zusammen; **„Vorschlagen"** macht das für eine einzelne Verbindung, „Nächster Vorschlag"
@@ -150,6 +155,8 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
   und Durchdringungsprüfung (`src/math/suggest.ts`).
 - **Prüfansicht**: Abstand und Vorzeichen zur Oberfläche des anderen Teils je (unterteiltem) Dreieck
   (`src/math/check.ts`).
+- **Projekte**: ZIP mit `project.json` und den Netzen als Float32-Daten, Sitzungssicherung in IndexedDB
+  (`src/io/project.ts`).
 - **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
   TriangleSelector von Bambu/Prusa (`src/io/paint.ts`), Darstellung von Bemalung und Modifiern per
   Stencil-Puffer (`src/decor.ts`), **Vereinigung** mit manifold-3d (`src/io/union.ts`).
@@ -167,6 +174,5 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 ## Ideen für später
 
 - CAD-Formate STEP/IGES (z. B. über `occt-import-js`)
-- Projekt speichern/laden
 - Druckausrichtung (größte ebene Fläche aufs Druckbett)
 - Passungshilfe (Zapfen gezielt dünner machen)
