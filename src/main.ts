@@ -169,6 +169,12 @@ const movedBy = new Map<number, number>();
 const seedOf = new Map<number, number>();
 /** Um so viel hat der feste Boden jedes Teil angehoben (z, nach dem letzten solveAll). */
 const floorShift = new Map<number, number>();
+/**
+ * Baugruppe je Teil (nach dem letzten solveAll): Teile, die über Verbindungen oder Gruppen zusammenhängen,
+ * dazu alle mit der Lage aus der Datei geladenen. Jede steht für sich auf der Platte und wird im
+ * Bambu-Export ein eigenes Objekt. Wert: Id eines ihrer Teile.
+ */
+const unitOf = new Map<number, number>();
 
 // ---------------------------------------------------------------- Szene
 
@@ -664,8 +670,8 @@ async function loadFiles(files: FileList | File[]) {
       for (const l of loaded) bb.union(l.geom.boundingBox!);
       const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
       for (const l of loaded) {
-        const { paint, palette, modifiers, settings } = l;
-        const part = addPart(l.name, l.geom, { color: l.color, group: l.group, layout, extras: { paint, palette, modifiers, settings } });
+        const { paint, palette, modifiers, settings, objectSettings } = l;
+        const part = addPart(l.name, l.geom, { color: l.color, group: l.group, layout, extras: { paint, palette, modifiers, settings, objectSettings } });
         if (keep) part.fromFile = true;
       }
       if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
@@ -870,16 +876,18 @@ function solveAll() {
   }
   deferred = [];
 
-  // Fester Boden: jede Baugruppe steht mit ihrem tiefsten Punkt auf der Druckplatte (z = 0). Teile mit
-  // der Lage aus der Datei bleiben dabei untereinander, wie sie geladen wurden (z. B. Kopf über Körper).
+  // Baugruppen. Teile mit der Lage aus der Datei bleiben untereinander, wie sie geladen wurden (z. B. Kopf
+  // über Körper): Baugruppen, in denen eins steckt, zählen als eine.
+  unitOf.clear();
+  const fileSeed = parts.find((p) => p.fromFile)?.id;
+  const unit = (p: Part) => (p.fromFile && fileSeed !== undefined ? seedOf.get(fileSeed) ?? fileSeed : seedOf.get(p.id) ?? p.id);
+  const merged = new Map<number, number>();
+  for (const p of parts) if (p.fromFile) merged.set(seedOf.get(p.id) ?? p.id, unit(p));
+  for (const p of parts) unitOf.set(p.id, merged.get(seedOf.get(p.id) ?? p.id) ?? unit(p));
+  const key = (p: Part) => unitOf.get(p.id)!;
+  // Fester Boden: jede Baugruppe steht mit ihrem tiefsten Punkt auf der Druckplatte (z = 0)
   floorShift.clear();
   if (onFloor.checked) {
-    const fileSeed = parts.find((p) => p.fromFile)?.id;
-    const unit = (p: Part) => (p.fromFile && fileSeed !== undefined ? seedOf.get(fileSeed) ?? fileSeed : seedOf.get(p.id) ?? p.id);
-    // Baugruppen, in denen ein Teil aus der Datei steckt, gehören zur selben Einheit
-    const merged = new Map<number, number>();
-    for (const p of parts) if (p.fromFile) merged.set(seedOf.get(p.id) ?? p.id, unit(p));
-    const key = (p: Part) => merged.get(seedOf.get(p.id) ?? p.id) ?? unit(p);
     const low = new Map<number, number>();
     for (const p of parts) low.set(key(p), Math.min(low.get(key(p)) ?? Infinity, lowestZ(p, placed.get(p.id) ?? p.layout)));
     for (const p of parts) {
@@ -3040,6 +3048,10 @@ async function exportAs(kind: string) {
     paint: p.paint,
     palette: p.palette,
     settings: p.settings,
+    objectSettings: p.objectSettings,
+    // Jede Baugruppe ein eigenes Objekt im Slicer, benannt nach ihrem ersten Teil
+    object: String(unitOf.get(p.id) ?? p.id),
+    objectName: getPart(unitOf.get(p.id) ?? p.id)?.name,
     modifiers: p.modifiers?.map((m) => ({ ...m, positions: transformed(m.positions, p.mesh.matrixWorld) })),
   }));
   try {
@@ -3047,8 +3059,9 @@ async function exportAs(kind: string) {
       const data = kind === '3mf-bambu' ? write3MFBambu(world, { printer: bambuPrinter.value }) : write3MF(world, 'multicolor');
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
       const slots = colorSlots(world);
+      const objects = new Set(world.map((w) => w.object)).size;
       toast(kind === '3mf-bambu'
-        ? `Gespeichert – ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben, Drucker ${bambuPrinter.selectedOptions[0]?.text ?? ''}.`
+        ? `Gespeichert – ${objects} Objekt${objects > 1 ? 'e (je Baugruppe eins)' : ''}, ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben, Drucker ${bambuPrinter.selectedOptions[0]?.text ?? ''}.`
         : `Gespeichert. Im Slicer zuordnen: ${slots.map((c, i) => `Extruder ${i + 1} = ${c.toUpperCase()}`).join(' · ')}`, 9000);
       return;
     }

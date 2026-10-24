@@ -130,6 +130,7 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
       if (p.palette) out.palette = p.palette;
       if (p.modifiers) out.modifiers = p.modifiers;
       if (p.settings) out.settings = p.settings;
+      if (p.objectSettings) out.objectSettings = p.objectSettings;
       return out;
     });
   }

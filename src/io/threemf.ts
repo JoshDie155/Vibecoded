@@ -33,6 +33,8 @@ export interface SlicerExtras {
   modifiers?: Modifier[];
   /** Eigene Druckeinstellungen des Teils (Schlüssel wie in Bambu Studio, z. B. wall_loops). */
   settings?: Record<string, string>;
+  /** Einstellungen seines ursprünglichen Objekts, die nur je Objekt gelten (z. B. layer_height, brim_type). */
+  objectSettings?: Record<string, string>;
 }
 
 export interface Modifier {
@@ -59,6 +61,10 @@ export interface ImportedPart extends SlicerExtras {
 
 export interface ColoredPart extends SlicerExtras {
   name: string;
+  /** Teile mit gleichem Wert werden ein Objekt im Slicer (Bambu-Export); ohne Angabe ein gemeinsames. */
+  object?: string;
+  /** Name dieses Objekts im Slicer. */
+  objectName?: string;
   /** Nicht indizierte Dreiecke in Weltkoordinaten (mm); Modifier ebenso. */
   positions: Float32Array;
   /** '#rrggbb' */
@@ -262,6 +268,8 @@ interface SlicerObject {
   extruder?: number;
   /** Druckeinstellungen des Objekts, die auch je Teil gelten können (REGION_KEYS) */
   settings: Record<string, string>;
+  /** Einstellungen, die nur je Objekt gelten (OBJECT_KEYS) */
+  objectSettings: Record<string, string>;
   /** Bambu/Orca: Teil-ID (= objectid der Komponente) → Name/Extruder/Art/Einstellungen */
   parts: Map<string, { name?: string; extruder?: number; subtype?: string; settings: Record<string, string> }>;
   /** PrusaSlicer: Dreiecksbereiche im Netz des Objekts */
@@ -301,6 +309,39 @@ const REGION_KEYS = new Set((
 const regionSettings = (md: Record<string, string>) =>
   Object.fromEntries(Object.entries(md).filter(([k]) => REGION_KEYS.has(k)));
 
+/**
+ * Einstellungen, die in Bambu Studio nur für ein ganzes Objekt gelten (PrintObjectConfig, Bambu Studio
+ * 2.8), z. B. Schichthöhe, Brim, Stützen. Sie bleiben erhalten, solange ein exportiertes Objekt nur
+ * Teile mit denselben Werten enthält. Ohne die Filament-Nummern (support_filament …).
+ */
+const OBJECT_KEYS = new Set((
+  'brim_object_gap brim_type brim_width bridge_no_support elefant_foot_compensation max_bridge_length line_width '
+  + 'interface_shells layer_height mmu_segmented_region_max_width mmu_segmented_region_interlocking_depth '
+  + 'raft_contact_distance raft_expansion raft_first_layer_density raft_first_layer_expansion raft_layers '
+  + 'seam_position seam_placement_away_from_overhangs slice_closing_radius slicing_mode enable_support support_type '
+  + 'support_angle support_on_build_plate_only support_critical_regions_only support_remove_small_overhang '
+  + 'support_top_z_distance support_bottom_z_distance enforce_support_layers support_line_width '
+  + 'support_interface_not_for_body support_interface_loop_pattern '
+  + 'support_interface_top_layers support_interface_bottom_layers support_interface_spacing enable_support_ironing '
+  + 'support_ironing_pattern support_ironing_flow support_ironing_spacing support_ironing_inset '
+  + 'support_ironing_direction support_ironing_speed support_interface_speed support_base_pattern '
+  + 'support_interface_pattern support_base_pattern_spacing support_expansion support_speed support_style '
+  + 'thick_bridges support_threshold_angle support_object_xy_distance support_object_first_layer_gap '
+  + 'xy_hole_compensation xy_contour_compensation enable_circle_compensation circle_compensation_manual_offset '
+  + 'apply_scarf_seam_on_circles flush_into_objects flush_into_infill flush_into_support '
+  + 'tree_support_branch_distance tree_support_branch_diameter tree_support_branch_angle '
+  + 'tree_support_branch_diameter_angle tree_support_wall_count detect_narrow_internal_solid_infill '
+  + 'detect_floating_vertical_shell support_bottom_interface_spacing internal_bridge_support_thickness '
+  + 'wall_generator wall_transition_length wall_transition_filter_deviation wall_transition_angle '
+  + 'wall_distribution_count min_feature_size min_bead_width top_one_wall_type top_area_threshold '
+  + 'only_one_wall_first_layer seam_gap wipe_speed role_base_wipe_speed precise_z_height interlocking_beam '
+  + 'interlocking_beam_width interlocking_orientation interlocking_beam_layer_count interlocking_depth '
+  + 'interlocking_boundary_avoidance scarf_angle_threshold'
+).split(' '));
+
+const objectSettingsOf = (md: Record<string, string>) =>
+  Object.fromEntries(Object.entries(md).filter(([k]) => OBJECT_KEYS.has(k)));
+
 /** Teilarten von Bambu Studio, die kein druckbarer Körper sind. */
 const MODIFIER_SUBTYPES = new Set(['modifier_part', 'negative_part', 'support_enforcer', 'support_blocker']);
 
@@ -332,7 +373,8 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
       if (!id) continue;
       const own = metadata(o[2].replace(/<part\b[\s\S]*?<\/part>/g, ''));
       const entry: SlicerObject = {
-        name: own.name, extruder: own.extruder ? Number(own.extruder) : undefined, settings: regionSettings(own), parts: new Map(), volumes: [],
+        name: own.name, extruder: own.extruder ? Number(own.extruder) : undefined, settings: regionSettings(own),
+        objectSettings: objectSettingsOf(own), parts: new Map(), volumes: [],
       };
       for (const p of o[2].matchAll(/<part\b([^>]*)>([\s\S]*?)<\/part>/g)) {
         const pa = attrs(p[1]);
@@ -365,7 +407,7 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
       const id = attrs(o[1]).id;
       if (!id) continue;
       const own = metadata(o[2].replace(/<volume\b[\s\S]*?<\/volume>/g, ''));
-      const entry: SlicerObject = objects.get(id) ?? { settings: {}, parts: new Map(), volumes: [] };
+      const entry: SlicerObject = objects.get(id) ?? { settings: {}, objectSettings: {}, parts: new Map(), volumes: [] };
       entry.name ??= own.name;
       if (own.extruder) entry.extruder ??= Number(own.extruder);
       for (const v of o[2].matchAll(/<volume\b([^>]*)>([\s\S]*?)<\/volume>/g)) {
@@ -463,6 +505,7 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
   const emit = (
     model: RawModel, obj: RawObject, tf: M12, group: string, baseName: string,
     fallback: string | undefined, volumes: SlicerObject['volumes'], settings: Record<string, string>,
+    objectSettings: Record<string, string>,
   ) => {
     const mesh = obj.mesh!;
     const triCount = mesh.tris.length / 3;
@@ -520,6 +563,7 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
         if (paint.paint_color) part.palette = paletteFor(paint);
       }
       if (Object.keys(settings).length) part.settings = settings;
+      if (Object.keys(objectSettings).length) part.objectSettings = objectSettings;
       parts.push(part);
     }
   };
@@ -543,7 +587,7 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
         const color = extruderColor(part?.extruder) ?? meta.color;
         // Einstellungen des Objekts gelten für jedes seiner Teile, eigene des Teils haben Vorrang
         const settings = { ...meta.slicer?.settings, ...part?.settings };
-        emit(model, obj, tf, group, name, color, depth === 0 ? meta.slicer?.volumes ?? [] : [], settings);
+        emit(model, obj, tf, group, name, color, depth === 0 ? meta.slicer?.volumes ?? [] : [], settings, meta.slicer?.objectSettings ?? {});
       }
     }
     for (const c of obj.components ?? []) {
@@ -851,61 +895,118 @@ export function bambuPrinterOf(files: Record<string, Uint8Array>): string | unde
  */
 export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Uint8Array {
   const slots = colorSlots(parts);
-  // Baugruppe mittig auf die Platte, Unterseite auf z = 0
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  for (const p of parts)
-    for (let i = 0; i < p.positions.length; i += 3)
-      for (let k = 0; k < 3; k++) {
-        min[k] = Math.min(min[k], p.positions[i + k]);
-        max[k] = Math.max(max[k], p.positions[i + k]);
-      }
-  const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]];
+  const box = (list: ColoredPart[]) => {
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const p of list)
+      for (let i = 0; i < p.positions.length; i += 3)
+        for (let k = 0; k < 3; k++) {
+          min[k] = Math.min(min[k], p.positions[i + k]);
+          max[k] = Math.max(max[k], p.positions[i + k]);
+        }
+    return { min, max };
+  };
+  // Alles zusammen mittig auf die Platte, Unterseite auf z = 0; die Objekte liegen zueinander wie in PartJoin
+  const all = box(parts);
+  const c = [(all.min[0] + all.max[0]) / 2, (all.min[1] + all.max[1]) / 2, all.min[2]];
   const printer = BAMBU_PRINTERS.find((p) => p.id === opts.printer) ?? BAMBU_PRINTERS[0];
   const [bx, by] = [printer.bed[0] / 2, printer.bed[1] / 2];
-  const sub: string[] = [];
-  const components: string[] = [];
-  const settings: string[] = [];
+  const groups = new Map<string, ColoredPart[]>();
+  for (const p of parts) {
+    const k = p.object ?? '';
+    const list = groups.get(k);
+    if (list) list.push(p);
+    else groups.set(k, [p]);
+  }
+
+  const identity = '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1';
+  const files: Record<string, Uint8Array> = {};
+  const mainObjects: string[] = [];
+  const items: string[] = [];
+  const configObjects: string[] = [];
+  const instances: string[] = [];
+  const assemble: string[] = [];
+  const subRels: string[] = [];
+  const ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
   let nextId = 1;
-  /** Netz als eigenes Objekt in object_1.model plus Komponente im Hauptobjekt. */
-  const meshObject = (positions: Float32Array, triAttrs?: (src: number) => string) => {
-    const id = nextId++;
-    const local = new Float32Array(positions.length);
-    for (let k = 0; k < local.length; k++) local[k] = positions[k] - c[k % 3];
-    const { verts, tris, kept } = weld(local);
-    const v: string[] = [];
-    for (let k = 0; k < verts.length; k += 3) v.push(`<vertex x="${f5(verts[k])}" y="${f5(verts[k + 1])}" z="${f5(verts[k + 2])}"/>`);
-    const t: string[] = [];
-    for (let k = 0; k < tris.length; k += 3) t.push(`<triangle v1="${tris[k]}" v2="${tris[k + 1]}" v3="${tris[k + 2]}"${triAttrs?.(kept[k / 3]) ?? ''}/>`);
-    sub.push(`  <object id="${id}" p:UUID="${uuid(1, id)}" type="model">
+  let fileNo = 0;
+  for (const list of groups.values()) {
+    // Ursprung des Objekts: Mitte seiner Grundfläche, Unterseite
+    const b = box(list);
+    const o = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, b.min[2]];
+    const path = `3D/Objects/object_${++fileNo}.model`;
+    const sub: string[] = [];
+    const components: string[] = [];
+    const settings: string[] = [];
+    /** Netz als eigenes Objekt in der Unterdatei plus Komponente im Objekt. */
+    const meshObject = (positions: Float32Array, triAttrs?: (src: number) => string) => {
+      const id = nextId++;
+      const local = new Float32Array(positions.length);
+      for (let k = 0; k < local.length; k++) local[k] = positions[k] - o[k % 3];
+      const { verts, tris, kept } = weld(local);
+      const v: string[] = [];
+      for (let k = 0; k < verts.length; k += 3) v.push(`<vertex x="${f5(verts[k])}" y="${f5(verts[k + 1])}" z="${f5(verts[k + 2])}"/>`);
+      const t: string[] = [];
+      for (let k = 0; k < tris.length; k += 3) t.push(`<triangle v1="${tris[k]}" v2="${tris[k + 1]}" v3="${tris[k + 2]}"${triAttrs?.(kept[k / 3]) ?? ''}/>`);
+      sub.push(`  <object id="${id}" p:UUID="${uuid(1, id)}" type="model">
    <mesh><vertices>${v.join('')}</vertices><triangles>${t.join('')}</triangles></mesh>
   </object>`);
-    components.push(`    <component p:path="/3D/Objects/object_1.model" objectid="${id}" p:UUID="${uuid(2, id)}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>`);
-    return id;
-  };
-  const identity = '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1';
-  for (const part of parts) {
-    const id = meshObject(part.positions, paintWriter(part, slots, BAMBU_PAINT));
-    const extruder = Math.max(0, slots.indexOf(part.color.toLowerCase())) + 1;
-    settings.push(`    <part id="${id}" subtype="normal_part">
+      components.push(`    <component p:path="/${path}" objectid="${id}" p:UUID="${uuid(2, id)}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>`);
+      return id;
+    };
+    for (const part of list) {
+      const id = meshObject(part.positions, paintWriter(part, slots, BAMBU_PAINT));
+      const extruder = Math.max(0, slots.indexOf(part.color.toLowerCase())) + 1;
+      settings.push(`    <part id="${id}" subtype="normal_part">
       <metadata key="name" value="${esc(part.name)}"/>
       <metadata key="matrix" value="${identity}"/>
       <metadata key="extruder" value="${extruder}"/>${settingLines(part.settings, '      ')}
     </part>`);
-  }
-  // Modifier nach den Teilen; im Slicer wirken sie auf alle Teile, die sie berühren
-  for (const part of parts) {
-    for (const m of part.modifiers ?? []) {
-      const id = meshObject(m.positions);
-      const slot = m.color ? slots.indexOf(m.color.toLowerCase()) + 1 : 0;
-      settings.push(`    <part id="${id}" subtype="${esc(m.subtype)}">
+    }
+    // Modifier nach den Teilen; im Slicer wirken sie auf alle Teile des Objekts, die sie berühren
+    for (const part of list) {
+      for (const m of part.modifiers ?? []) {
+        const id = meshObject(m.positions);
+        const slot = m.color ? slots.indexOf(m.color.toLowerCase()) + 1 : 0;
+        settings.push(`    <part id="${id}" subtype="${esc(m.subtype)}">
       <metadata key="name" value="${esc(m.name)}"/>
       <metadata key="matrix" value="${identity}"/>${slot ? `\n      <metadata key="extruder" value="${slot}"/>` : ''}${settingLines(m.settings, '      ')}
     </part>`);
+      }
     }
+    files[path] = strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" ${ns}>
+ <metadata name="BambuStudio:3mfVersion">1</metadata>
+ <resources>
+${sub.join('\n')}
+ </resources>
+ <build/>
+</model>`);
+    subRels.push(` <Relationship Target="/${path}" Id="rel-${fileNo}" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>`);
+
+    const objId = nextId++;
+    const place = `1 0 0 0 1 0 0 0 1 ${f5(o[0] - c[0] + bx)} ${f5(o[1] - c[1] + by)} ${f5(o[2] - c[2])}`;
+    mainObjects.push(`  <object id="${objId}" p:UUID="${uuid(3, objId)}" type="model">
+   <components>
+${components.join('\n')}
+   </components>
+  </object>`);
+    items.push(`  <item objectid="${objId}" p:UUID="${uuid(5, objId)}" transform="${place}" printable="1"/>`);
+    const name = list[0].objectName ?? (groups.size === 1 ? 'PartJoin' : list[0].name);
+    const firstSlot = Math.max(0, slots.indexOf(list[0].color.toLowerCase())) + 1;
+    configObjects.push(`  <object id="${objId}">
+    <metadata key="name" value="${esc(name)}"/>
+    <metadata key="extruder" value="${firstSlot}"/>${settingLines(commonSettings(list), '    ')}
+${settings.join('\n')}
+  </object>`);
+    instances.push(`    <model_instance>
+      <metadata key="object_id" value="${objId}"/>
+      <metadata key="instance_id" value="0"/>
+      <metadata key="identify_id" value="${100 + objId}"/>
+    </model_instance>`);
+    assemble.push(`   <assemble_item object_id="${objId}" instance_id="0" transform="${place}" offset="0 0 0" />`);
   }
-  const objId = nextId;
-  const ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
+
   // Ab 2.0, sonst passt Bambu Studio die Einstellungen alter Projekte an (Prime Tower)
   const version = opts.version ?? 'BambuStudio-02.00.00.00';
   const main = `<?xml version="1.0" encoding="UTF-8"?>
@@ -915,43 +1016,23 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
  <metadata name="Title">PartJoin</metadata>
  <metadata name="Designer">PartJoin</metadata>
  <resources>
-  <object id="${objId}" p:UUID="${uuid(3, objId)}" type="model">
-   <components>
-${components.join('\n')}
-   </components>
-  </object>
+${mainObjects.join('\n')}
  </resources>
  <build p:UUID="${uuid(4, 1)}">
-  <item objectid="${objId}" p:UUID="${uuid(5, objId)}" transform="1 0 0 0 1 0 0 0 1 ${f5(bx)} ${f5(by)} 0" printable="1"/>
+${items.join('\n')}
  </build>
-</model>`;
-  const objects = `<?xml version="1.0" encoding="UTF-8"?>
-<model unit="millimeter" xml:lang="en-US" ${ns}>
- <metadata name="BambuStudio:3mfVersion">1</metadata>
- <resources>
-${sub.join('\n')}
- </resources>
- <build/>
 </model>`;
   const config = `<?xml version="1.0" encoding="UTF-8"?>
 <config>
-  <object id="${objId}">
-    <metadata key="name" value="PartJoin"/>
-    <metadata key="extruder" value="1"/>
-${settings.join('\n')}
-  </object>
+${configObjects.join('\n')}
   <plate>
     <metadata key="plater_id" value="1"/>
     <metadata key="plater_name" value=""/>
     <metadata key="locked" value="false"/>
-    <model_instance>
-      <metadata key="object_id" value="${objId}"/>
-      <metadata key="instance_id" value="0"/>
-      <metadata key="identify_id" value="${100 + objId}"/>
-    </model_instance>
+${instances.join('\n')}
   </plate>
   <assemble>
-   <assemble_item object_id="${objId}" instance_id="0" transform="1 0 0 0 1 0 0 0 1 ${f5(bx)} ${f5(by)} 0" offset="0 0 0" />
+${assemble.join('\n')}
   </assemble>
 </config>
 `;
@@ -968,17 +1049,26 @@ ${settings.join('\n')}
 </Relationships>`;
   const modelRels = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
- <Relationship Target="/3D/Objects/object_1.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+${subRels.join('\n')}
 </Relationships>`;
   return zipSync({
     '[Content_Types].xml': strToU8(contentTypes),
     '_rels/.rels': strToU8(rels),
     '3D/3dmodel.model': strToU8(main),
     '3D/_rels/3dmodel.model.rels': strToU8(modelRels),
-    '3D/Objects/object_1.model': strToU8(objects),
+    ...files,
     'Metadata/model_settings.config': strToU8(config),
     'Metadata/project_settings.config': strToU8(bambuProjectSettings(printer, slots, version.replace(/^BambuStudio-/, ''))),
   });
+}
+
+/**
+ * Objekt-Einstellungen eines exportierten Objekts: nur, was alle seine Teile gleich mitbringen. Stammen
+ * die Teile aus Objekten mit verschiedener Schichthöhe (oder hat eins keine eigene), gilt das Profil.
+ */
+function commonSettings(list: ColoredPart[]): Record<string, string> {
+  const first = list[0].objectSettings ?? {};
+  return Object.fromEntries(Object.entries(first).filter(([k, v]) => list.every((p) => p.objectSettings?.[k] === v)));
 }
 
 function concat(list: Float32Array[]): Float32Array {

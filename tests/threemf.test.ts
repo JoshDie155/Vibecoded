@@ -379,8 +379,10 @@ describe('Slicer-Zusätze: Bemalung, Modifier, Einstellungen', () => {
     // Lage wie das Teil (Druckbett-Position eingerechnet)
     expect(bbox(m.positions).min[0]).toBeCloseTo(90, 4);
     expect(bbox(m.positions).min[2]).toBeCloseTo(1 - 0.9, 4);
-    // Einstellungen: Objekt-Einstellungen, die je Teil gelten können, plus die des Teils – ohne Schichthöhe
+    // Einstellungen: Objekt-Einstellungen, die je Teil gelten können, plus die des Teils – die Schichthöhe
+    // gilt nur je Objekt und steht extra
     expect(p.settings).toEqual({ sparse_infill_density: '20%', wall_loops: '4' });
+    expect(p.objectSettings).toEqual({ layer_height: '0.28' });
   });
 
   it('liest die Bemalung je Dreieck samt Filamentfarben', () => {
@@ -460,5 +462,58 @@ describe('Slicer-Zusätze: Bemalung, Modifier, Einstellungen', () => {
     // Farbiger 3MF-Export: Bemalung im PrusaSlicer-Format, Filament 2 (Grün) ist dort Filament 2
     const out = strFromU8(unzipSync(write3MF([{ ...parts[0], color: parts[0].color! }], 'multicolor'))['3D/3dmodel.model']);
     expect(out).toContain('slic3rpe:mmu_segmentation="8"');
+  });
+});
+
+describe('write3MFBambu: ein Objekt je Baugruppe', () => {
+  const at = (x: number, z = 0) => new THREE.Matrix4().makeTranslation(x, 0, z);
+  const parts = [
+    { name: 'Sitz', positions: transformPositions(box(20, 20, 30), at(0)), color: '#1f79e5', object: 'a', objectName: 'Sitz' },
+    { name: 'Lehne', positions: transformPositions(box(20, 4, 20), at(0, 30)), color: '#1f79e5', object: 'a', objectName: 'Sitz' },
+    {
+      name: 'Schild', positions: transformPositions(box(30, 10, 2), at(60)), color: '#ff0000', object: 'b', objectName: 'Schild',
+      objectSettings: { layer_height: '0.28', brim_type: 'no_brim' },
+    },
+  ];
+
+  it('schreibt jede Baugruppe als eigenes Objekt mit eigener Unterdatei, Lage und Platteneintrag', () => {
+    const files = unzipSync(write3MFBambu(parts, { printer: 'P2S' }));
+    const main = strFromU8(files['3D/3dmodel.model']);
+    expect(main.match(/<item /g)).toHaveLength(2);
+    expect(files['3D/Objects/object_1.model']).toBeDefined();
+    expect(files['3D/Objects/object_2.model']).toBeDefined();
+    expect(strFromU8(files['3D/_rels/3dmodel.model.rels'])).toContain('/3D/Objects/object_2.model');
+    const cfg = strFromU8(files['Metadata/model_settings.config']);
+    expect([...cfg.matchAll(/<object id="(\d+)">\s*<metadata key="name" value="([^"]+)"/g)].map((m) => m[2])).toEqual(['Sitz', 'Schild']);
+    expect(cfg.match(/<model_instance>/g)).toHaveLength(2);
+    expect(cfg.match(/<assemble_item /g)).toHaveLength(2);
+    // Eindeutige Ids über alle Objekte
+    const ids = [...cfg.matchAll(/<(?:object|part) id="(\d+)"/g)].map((m) => m[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    // Objekt-Einstellungen gehören zum Schild-Objekt
+    expect(cfg).toMatch(/value="Schild"\/>\s*<metadata key="extruder" value="2"\/>\s*<metadata key="layer_height" value="0.28"\/>\s*<metadata key="brim_type" value="no_brim"\/>/);
+  });
+
+  it('wird als zwei Objekte zurückgelesen, alles an seiner Stelle und auf der Platte', () => {
+    const back = read3MF(write3MFBambu(parts, { printer: 'P2S' }));
+    expect(back.map((p) => p.name)).toEqual(['Sitz', 'Lehne', 'Schild']);
+    expect(back[0].group).toBe(back[1].group);
+    expect(back[2].group).not.toBe(back[0].group);
+    expect(back[2].objectSettings).toEqual({ layer_height: '0.28', brim_type: 'no_brim' });
+    // Abstände wie vorher: Schild 60 mm neben dem Sitz, Lehne 30 mm über dem Boden
+    const b = back.map((p) => bbox(p.positions));
+    expect((b[2].min[0] + b[2].max[0]) / 2 - (b[0].min[0] + b[0].max[0]) / 2).toBeCloseTo(60, 4);
+    expect(b[1].min[2] - b[0].min[2]).toBeCloseTo(30, 4);
+    expect(Math.min(...b.map((x) => x.min[2]))).toBeCloseTo(0, 4);
+  });
+
+  it('Objekt-Einstellungen nur, wenn alle Teile des Objekts sie gleich mitbringen', () => {
+    const mixed = [
+      { ...parts[0], objectSettings: { layer_height: '0.2', brim_type: 'no_brim' } },
+      { ...parts[1], objectSettings: { layer_height: '0.28', brim_type: 'no_brim' } },
+    ];
+    const cfg = strFromU8(unzipSync(write3MFBambu(mixed))['Metadata/model_settings.config']);
+    expect(cfg).toContain('<metadata key="brim_type" value="no_brim"/>');
+    expect(cfg).not.toContain('layer_height');
   });
 });

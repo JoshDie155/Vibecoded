@@ -66,8 +66,10 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
 5. **Exportieren**
-   - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): ein Objekt aus mehreren Teilen
-     mit eigenem Namen; jede Teilefarbe wird ein Filament in genau dieser Farbe. Die Datei bringt
+   - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): **jede Baugruppe ein eigenes
+     Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in PartJoin und
+     lassen sich im Slicer einzeln anordnen („Anordnen", Taste A); jede Teilefarbe wird ein Filament in
+     genau dieser Farbe. Die Datei bringt
      Projekteinstellungen für den gewählten Drucker mit (System-Profile von Bambu Studio: 0,4-mm-Düse,
      0,20 mm Standard, Bambu PLA Basic; auch H2C, H2D, H2D Pro und X2D mit zwei Düsen) – ohne sie lädt
      Bambu Studio ab 2.8.2 nur die Geometrie.
@@ -75,7 +77,8 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
      Modifier (Aufschriften, negative Volumen, Stützen-Volumen), Bemalung und Druckeinstellungen je
      Teil (Wände, Infill, Muster …) bleiben erhalten; die Filamentnummern werden dabei auf die
      Filamente des Exports umgestellt. Einstellungen, die nur für ein ganzes Objekt gelten (z. B.
-     Schichthöhe, Brim), entfallen, weil die Baugruppe ein einziges Objekt wird.
+     Schichthöhe, Brim), bleiben erhalten, solange alle Teile eines Objekts dieselben Werte mitbringen;
+     sonst gilt das Druckprofil.
    - **3MF für PrusaSlicer**: ein Objekt aus mehreren Teilen; Teile gleicher Farbe bekommen dieselbe
      Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen. Die Bemalung kommt mit,
      Modifier nicht (andere Programme würden sie als Teil des Körpers drucken).
