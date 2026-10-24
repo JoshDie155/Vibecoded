@@ -34,6 +34,7 @@ import { planSplit, splitPlanes } from './math/split';
 import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, PocketError, type PocketSpec, addPocket, pocketPreview } from './io/pocket';
 import { carryPaint } from './io/paint';
 import { clearanceLabel, makeToleranceTest } from './io/testpiece';
+import { type BoolOp, BoolError, booleanParts } from './io/boolean';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -4741,6 +4742,100 @@ splitBar.addEventListener('click', (e) => {
 document.getElementById('splitApply')!.addEventListener('click', () => void applySplit());
 document.getElementById('splitCancel')!.addEventListener('click', closeSplit);
 
+// ---------------------------------------------------------------- Teile verrechnen
+
+/**
+ * Teile miteinander verrechnen: vereinigen (die anderen gehen im Ziel auf), die anderen aus dem Ziel
+ * ausschneiden oder nur die Überschneidung behalten (die anderen werden dabei ausgeblendet, nicht
+ * gelöscht). Das Ziel behält Lage, Verbindungen, Bemalung und Modifier.
+ */
+let boolBusy = false;
+async function combineParts(target: Part, others: Part[], op: BoolOp) {
+  if (boolBusy || !others.length) return;
+  boolBusy = true;
+  target.mesh.updateMatrixWorld();
+  const inv = target.mesh.matrixWorld.clone().invert();
+  const into = (q: Part) => {
+    q.mesh.updateMatrixWorld();
+    return inv.clone().multiply(q.mesh.matrixWorld);
+  };
+  toast(op === 'union' ? 'Vereinige …' : op === 'subtract' ? 'Schneide aus …' : 'Berechne die Überschneidung …', 20000);
+  let r;
+  try {
+    r = await booleanParts(
+      { name: target.name, positions: positionsOf(target) },
+      others.map((q) => ({ name: q.name, positions: transformMesh(positionsOf(q), into(q).elements) })),
+      op, manifoldWasm,
+    );
+  } catch (err) {
+    toast(err instanceof BoolError ? err.message : `Nicht möglich: ${(err as Error).message}`, 7000);
+    return;
+  } finally {
+    boolBusy = false;
+  }
+  if (getPart(target.id) !== target) return;
+  // Was an den anderen hängt, bleibt, wo es ist
+  for (const q of others) for (const m of unitMembers(q)) m.layout.copy(m.mesh.matrixWorld);
+  let positions = r.positions;
+  let paint = target.paint;
+  let lost = 0;
+  if (paint) {
+    const c = carryPaint(positionsOf(target), paint, positions, r.source);
+    ({ paint, positions } = c);
+    lost = c.lost;
+  }
+  carryFeatures(target.id, successors(r.source));
+  // Beim Vereinigen kommen die Modifier der anderen mit (in die Koordinaten des Ziels)
+  let modifiers = target.modifiers;
+  if (op === 'union') {
+    const extra = others.flatMap((q) => (q.modifiers ?? []).map((m) => {
+      const L = into(q);
+      return { ...m, positions: transformMesh(m.positions, L.elements), transform: m.transform && L.clone().multiply(new THREE.Matrix4().fromArray(m.transform)).toArray() };
+    }));
+    if (extra.length) modifiers = [...(modifiers ?? []), ...extra];
+  }
+  const fresh = replaceGeometry(target, positions, { paint, modifiers });
+  const otherPaint = op === 'union' && others.some((q) => q.paint);
+  if (op === 'union') for (const q of others) removePart(q.id);
+  else for (const q of others) { q.visible = false; q.mesh.visible = false; }
+  selected.clear();
+  selected.add(fresh.id);
+  solveAll();
+  renderAll();
+  const names = others.map((q) => `„${q.name}“`).join(', ');
+  toast((op === 'union' ? `${names} mit „${target.name}“ vereinigt.`
+    : op === 'subtract' ? `${names} aus „${target.name}“ ausgeschnitten – ${others.length > 1 ? 'die Werkzeuge sind' : 'das Werkzeug ist'} ausgeblendet.`
+    : `Nur die Überschneidung von „${target.name}“ mit ${names} bleibt – die anderen sind ausgeblendet.`)
+    + (lost ? ` Feine Bemalung an ${lost} Dreiecken entfernt.` : '') + (otherPaint ? ' Die Bemalung der anderen Teile entfällt.' : ''), 7000);
+}
+
+/** Einträge fürs Verrechnen der Auswahl (Ziel: zuletzt angeklicktes Teil, sonst das erste). */
+function boolEntries(list: Part[]): { label: string; run: () => void; title?: string }[] {
+  if (list.length < 2) return [];
+  const anchor = list.find((q) => q.id === selAnchor) ?? list[0];
+  const rest = (t: Part) => list.filter((q) => q !== t);
+  return [
+    { label: `Vereinigen (zu „${anchor.name}“)`, run: () => void combineParts(anchor, rest(anchor), 'union'), title: 'Ein Körper ohne Überlappungen und Innenwände' },
+    ...list.slice(0, 4).map((t) => ({ label: `Die anderen aus „${t.name}“ ausschneiden`, run: () => void combineParts(t, rest(t), 'subtract'), title: 'Die anderen Teile werden zu Aussparungen und danach ausgeblendet' })),
+    { label: `Nur die Überschneidung behalten (in „${anchor.name}“)`, run: () => void combineParts(anchor, rest(anchor), 'intersect') },
+  ];
+}
+
+const selBool = document.getElementById('selBool') as HTMLSelectElement;
+let boolChoices: { label: string; run: () => void }[] = [];
+function renderBoolSelect(list: Part[]) {
+  boolChoices = boolEntries(list);
+  selBool.innerHTML = `<option value="">Verrechnen …</option>${boolChoices.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}`;
+}
+selBool.addEventListener('change', () => {
+  const c = boolChoices[Number(selBool.value)];
+  selBool.value = '';
+  if (c) {
+    beginAction();
+    c.run();
+  }
+});
+
 // ---------------------------------------------------------------- Toleranz-Test
 
 /**
@@ -5056,6 +5151,7 @@ function renderSelection() {
     const grouped = list.some((p) => p.group && groupOf(p).length > 1);
     (selBar.querySelector('[data-sel="ungroup"]') as HTMLElement).hidden = !grouped;
     (selBar.querySelector('[data-sel="group"]') as HTMLButtonElement).disabled = sameGroup(list);
+    renderBoolSelect(list);
   }
   drawSelection();
 }
@@ -5307,6 +5403,8 @@ function selectionMenu(x: number, y: number) {
     { label: 'Farbe für alle …', run: () => pickColor(list, x, y) },
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ sel: list.map((q) => q.id) }) },
     { label: 'Netze reparieren', run: () => void repairParts(list) },
+    'sep',
+    ...boolEntries(list),
     'sep',
     { label: 'Gruppieren', run: () => groupParts(list), disabled: sameGroup(list), title: 'Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam.' },
     ...(grouped ? [{ label: 'Gruppe auflösen', run: () => ungroupAll(list) }] : []),

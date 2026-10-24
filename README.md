@@ -181,6 +181,11 @@ Teil im Gizmo) um 1 mm, mit Umschalt um 10 mm, mit Alt/⌥ um 0,1 mm – passend
 (rechts ist rechts im Bild); Bild↑/Bild↓ hebt und senkt (bei ausgeschalteter Druckplatte). Eine Tastenfolge
 nimmt Strg/⌘+Z in einem Schritt zurück. Mehrere ausgewählte Baugruppen lassen sich über „Ausrichten …"
 links/mittig/rechts bzw. vorne/hinten bündig stellen oder gleichmäßig verteilen.
+**Teile verrechnen** (mehrere auswählen, dann „Verrechnen …" über der Liste oder Rechtsklick): vereinigen
+(ein Körper ohne Überlappungen, die anderen gehen im Ziel auf), die anderen aus einem Teil ausschneiden
+(z. B. eine Form als Aussparung; die Werkzeuge werden ausgeblendet, nicht gelöscht) oder nur die
+Überschneidung behalten. Ziel ist das zuletzt angeklickte Teil; es behält Lage, Verbindungen, Bemalung und
+Modifier. Alle beteiligten Netze müssen geschlossen sein.
 **Rechtsklick auf ein Teil** (im 3D-Fenster oder in der Teileliste) öffnet ein Menü: ausblenden, nur dieses
 Teil oder diese Baugruppe zeigen, Farbe, umbenennen, als Basis festlegen, in der Liste zeigen, mit der
 angeklickten Fläche auf die Platte legen, Passung an dieser Stelle, von Hand bewegen, Baugruppe bewegen,

@@ -374,4 +374,4 @@ kbd {
 #gizmoBar .gnum input[type='number'] { width: 68px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #gizmoBar .gnum input:disabled { opacity: 0.5; }
 #gizmoBar .gsep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
-#selAlign { font: inherit; font-size: 12.5px; }
+#selAlign, #selBool { font: inherit; font-size: 12.5px; max-width: 150px; }
