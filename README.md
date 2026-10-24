@@ -124,6 +124,11 @@ Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder he
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Schnittansicht** (oben „Schnitt", Taste C): schneidet alles entlang X, Y oder Z auf – Lage per Regler unten
+rechts, „⇄ Seite" zeigt die andere Hälfte. Wo die Ebene durch Material geht, erscheint eine Schnittfläche in
+einem dunkleren Ton des Teils (auch bei aufeinanderliegenden Teilen sauber getrennt), so lassen sich
+Wandstärken, Bohrungen und Passungen ansehen. Klicken und Messen treffen nur, was sichtbar ist – z. B. eine
+Bohrung im Inneren.
 **Skalieren und Spiegeln** (Rechtsklick › „Skalieren / Spiegeln …" oder Taste S über einem Teil bzw. für die
 Auswahl): Größe in % oder als Breite/Tiefe/Höhe in mm (gleichmäßig), Schnellwahl 50 %, 200 %, Zoll → mm
 (× 25,4) und cm → mm; Spiegeln an X, Y oder Z. Wahlweise die ganze Baugruppe oder nur ein Teil – um die

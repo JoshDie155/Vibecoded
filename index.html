@@ -117,6 +117,7 @@
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
           <button id="measureTool" class="ghost small" title="Messen: zwei Stellen anklicken für den Abstand, ein Klick auf eine Rundung zeigt ihren Durchmesser, zwei parallele Flächen ihren Abstand (Taste M, Esc beendet)">Messen</button>
+          <button id="sectionTool" class="ghost small" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)">Schnitt</button>
           <button id="fitTool" class="ghost small" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)">Passung</button>
           <button id="layFlat" class="ghost small" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)">Auf Fläche legen</button>
           <button id="helpBtn" class="ghost small help-btn" title="Anleitung und Tastenkürzel (Taste ?)" aria-label="Hilfe">?</button>
@@ -139,6 +140,18 @@
           <button id="fitApply" class="small">Übernehmen</button>
           <button id="fitCancel" class="ghost small">Abbrechen</button>
           <p class="help" id="fitHelp"></p>
+        </div>
+        <div id="sectionBar" hidden>
+          <strong>Schnitt</strong>
+          <span class="seg" role="group" aria-label="Schnittebene">
+            <button data-axis="0" title="Schnitt quer zu X (links/rechts)">X</button>
+            <button data-axis="1" title="Schnitt quer zu Y (vorne/hinten)">Y</button>
+            <button data-axis="2" title="Schnitt quer zu Z (oben/unten)">Z</button>
+          </span>
+          <input type="range" id="sectionPos" aria-label="Lage der Schnittebene" />
+          <span id="sectionVal"></span>
+          <button id="sectionFlip" class="ghost small" title="Die andere Hälfte zeigen">⇄ Seite</button>
+          <button id="sectionClose" class="icon" title="Schnitt beenden (C)" aria-label="Schnitt beenden">✕</button>
         </div>
         <div id="scaleBar" hidden>
           <strong id="scaleTitle"></strong>
@@ -225,6 +238,7 @@
           <dl class="keys">
             <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
             <dt><kbd>M</kbd></dt><dd>Messen: Abstand, Durchmesser, Flächenabstand</dd>
+            <dt><kbd>C</kbd></dt><dd>Schnittansicht ein/aus (Regler unten rechts)</dd>
             <dt><kbd>T</kbd></dt><dd>Passung: Zapfen, Bohrung oder Fläche anpassen</dd>
             <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>

@@ -204,6 +204,8 @@ const jointsEl = document.getElementById('joints')!;
 // Stencil-Puffer für die Darstellung farbiger Modifier (decor.ts)
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, stencil: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Schnittansicht: Schnittebene je Material
+renderer.localClippingEnabled = true;
 view.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -288,6 +290,9 @@ function resize() {
 }
 new ResizeObserver(resize).observe(view);
 resize();
+// Leisten unter der Werkzeugleiste beginnen lassen, auch wenn diese umbricht
+const toolbarEl = document.getElementById('toolbar')!;
+new ResizeObserver(() => view.style.setProperty('--bar-top', `${toolbarEl.offsetTop + toolbarEl.offsetHeight + 6}px`)).observe(toolbarEl);
 
 /** Markierungen behalten auf dem Bildschirm eine feste Größe (in Pixeln). */
 function scaleMarkers() {
@@ -317,6 +322,7 @@ renderer.setAnimationLoop(() => {
     camera.updateProjectionMatrix();
   }
   scaleMarkers();
+  applySectionClip();
   renderer.render(scene, camera);
   updateCube();
 });
@@ -2138,7 +2144,8 @@ interface Hit {
 function pick(e: PointerEvent | MouseEvent): Hit | null {
   setNdc(e);
   const meshes = parts.filter((p) => p.visible).map((p) => p.mesh);
-  const hit = raycaster.intersectObjects(meshes, false)[0];
+  // Im Schnitt nur, was zu sehen ist
+  const hit = raycaster.intersectObjects(meshes, false).find((h) => sectionKeeps(h.point));
   if (!hit || !hit.face || hit.faceIndex == null) return null;
   const part = getPart(hit.object.userData.partId)!;
   const inv = part.mesh.matrixWorld.clone().invert();
@@ -2677,6 +2684,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
+  else if (k === 'c') setSection(!section);
   else if (k === 's') {
     // Auswahl oder das Teil unter dem Mauszeiger (das „s“ soll nicht im Eingabefeld landen)
     e.preventDefault();
@@ -2930,6 +2938,7 @@ function renderAll() {
   drawBed();
   renderStatus();
   if (scaleTarget) renderScaleBar(true);
+  if (section) { sectionRange(); updateSection(); }
   rebuildMarkers();
   void runCheck();
   if (gizmoTarget && !tc.dragging) {
@@ -3590,6 +3599,203 @@ function worldPositions(members: Part[]): Float32Array {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- Schnittansicht
+
+/**
+ * Schnitt entlang X, Y oder Z: Alles auf einer Seite der Ebene wird ausgeblendet (Teile, gewählte Flächen,
+ * Prüfansicht). Wo die Ebene durch Material geht, liegt eine Schnittfläche in einem dunkleren Ton des
+ * Teils: Je Teil zählt der Stencil-Puffer, wie oft der Sehstrahl hinter der Ebene Rück- und Vorderseiten
+ * kreuzt (≠ 0 = innen), dann wird dort eine Fläche in der Schnittebene gezeichnet und der Zähler
+ * zurückgesetzt. Picken und Messen treffen nur, was sichtbar ist.
+ */
+const sectionPlane = new THREE.Plane();
+const sectionPlanes = [sectionPlane];
+/** Achse, Lage (mm) und welche Seite bleibt. */
+let section: { axis: 0 | 1 | 2; value: number; keepHigh: boolean } | null = null;
+let clipApplied = false;
+const sectionBar = document.getElementById('sectionBar')!;
+const sectionPos = document.getElementById('sectionPos') as HTMLInputElement;
+const sectionBtn = document.getElementById('sectionTool')!;
+const sectionOutline = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xe5484d, transparent: true, opacity: 0.8, depthTest: false }));
+sectionOutline.renderOrder = 7;
+sectionOutline.visible = false;
+sectionOutline.raycast = () => {};
+scene.add(sectionOutline);
+
+const capGroup = new THREE.Group();
+scene.add(capGroup);
+const capQuad = new THREE.PlaneGeometry(1, 1);
+/** Je Teil: Zählschritte (hängen am Teil) und die Schnittfläche (in der Ebene). */
+const caps = new Map<Part, { back: THREE.Mesh; front: THREE.Mesh; quad: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial> }>();
+/** Nach allem anderen zeichnen, je Teil drei Schritte direkt hintereinander. */
+let capOrder = 100_000;
+
+function makeCaps(p: Part) {
+  const pass = (side: THREE.Side, op: THREE.StencilOp) => {
+    const m = new THREE.Mesh(p.geom, new THREE.MeshBasicMaterial({
+      side, depthWrite: false, depthTest: false, colorWrite: false, clippingPlanes: sectionPlanes,
+      stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilFail: op, stencilZFail: op, stencilZPass: op,
+    }));
+    m.raycast = () => {};
+    // Wird mit der Darstellung des Teils freigegeben (das Netz gehört dem Teil)
+    m.userData.decor = true;
+    return m;
+  };
+  const back = pass(THREE.BackSide, THREE.IncrementWrapStencilOp);
+  const front = pass(THREE.FrontSide, THREE.DecrementWrapStencilOp);
+  const quad = new THREE.Mesh(capQuad, new THREE.MeshStandardMaterial({
+    roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+    stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
+    stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp,
+  }));
+  quad.raycast = () => {};
+  back.renderOrder = capOrder;
+  front.renderOrder = capOrder + 1;
+  quad.renderOrder = capOrder + 2;
+  capOrder += 3;
+  p.mesh.add(back, front);
+  capGroup.add(quad);
+  caps.set(p, { back, front, quad });
+}
+
+function dropCaps(p: Part) {
+  const c = caps.get(p);
+  if (!c) return;
+  for (const m of [c.back, c.front]) {
+    p.mesh.remove(m);
+    (m.material as THREE.Material).dispose();
+  }
+  capGroup.remove(c.quad);
+  c.quad.material.dispose();
+  caps.delete(p);
+}
+
+/** Schnittflächen in die Ebene legen (groß genug für den ganzen Aufbau). */
+function placeCaps() {
+  if (!section) return;
+  const box = sceneBox();
+  const size = box.isEmpty() ? 1000 : box.getSize(new THREE.Vector3()).length() * 4 + 10;
+  const c = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+  sectionPlane.projectPoint(c, c);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), sectionPlane.normal);
+  for (const { quad } of caps.values()) {
+    quad.position.copy(c);
+    quad.quaternion.copy(q);
+    quad.scale.set(size, size, 1);
+  }
+}
+
+/** Liegt ein Punkt (Welt) im sichtbaren Teil? */
+const sectionKeeps = (p: THREE.Vector3) => !section || sectionPlane.distanceToPoint(p) >= -1e-6;
+
+/** Umriss aller sichtbaren Teile. */
+function sceneBox(): THREE.Box3 {
+  const box = new THREE.Box3();
+  for (const p of parts) if (p.visible) box.union(partBox(p));
+  return box;
+}
+
+function updateSection() {
+  if (!section) return;
+  const { axis, value, keepHigh } = section;
+  const n = new THREE.Vector3().setComponent(axis, keepHigh ? 1 : -1);
+  // Behalten wird, wo n·x + d ≥ 0
+  sectionPlane.set(n, keepHigh ? -value : value);
+  document.getElementById('sectionVal')!.textContent = `${'XYZ'[axis]} = ${mmText1(value)} mm`;
+  // Umriss der Schnittebene über den ganzen Aufbau
+  const box = sceneBox();
+  if (box.isEmpty()) { sectionOutline.visible = false; return; }
+  box.expandByScalar(2);
+  const [a, b] = [0, 1, 2].filter((k) => k !== axis);
+  const corner = (u: number, v: number) => {
+    const c = new THREE.Vector3().setComponent(axis, value);
+    c.setComponent(a, u ? box.max.getComponent(a) : box.min.getComponent(a));
+    c.setComponent(b, v ? box.max.getComponent(b) : box.min.getComponent(b));
+    return c;
+  };
+  sectionOutline.geometry.setFromPoints([corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)]);
+  sectionOutline.visible = true;
+  placeCaps();
+}
+
+/** Schieberegler über die Ausdehnung der Teile entlang der Achse. */
+function sectionRange() {
+  if (!section) return;
+  const box = sceneBox();
+  const lo = box.isEmpty() ? -50 : box.min.getComponent(section.axis);
+  const hi = box.isEmpty() ? 50 : box.max.getComponent(section.axis);
+  sectionPos.min = String(+(lo - 0.5).toFixed(2));
+  sectionPos.max = String(+(hi + 0.5).toFixed(2));
+  sectionPos.step = String(Math.max(0.05, +((hi - lo) / 400).toFixed(2)));
+  section.value = THREE.MathUtils.clamp(section.value, lo - 0.5, hi + 0.5);
+  sectionPos.value = String(section.value);
+}
+
+function setSection(on: boolean, axis?: 0 | 1 | 2) {
+  if (on && !parts.length) { toast('Lade zuerst ein Modell.'); return; }
+  if (!on) {
+    section = null;
+    sectionBar.hidden = true;
+    sectionOutline.visible = false;
+  } else {
+    const ax = axis ?? section?.axis ?? 1;
+    const box = sceneBox();
+    // Zur Kamera hin aufschneiden: vorne (−Y), rechts (+X) bzw. oben (+Z) fällt weg
+    const keepHigh = ax === 1;
+    const mid = box.isEmpty() ? 0 : (box.min.getComponent(ax) + box.max.getComponent(ax)) / 2;
+    section = { axis: ax, value: section && section.axis === ax ? section.value : mid, keepHigh: section && section.axis === ax ? section.keepHigh : keepHigh };
+    sectionBar.hidden = false;
+    sectionRange();
+    sectionBar.querySelectorAll<HTMLElement>('[data-axis]').forEach((b) => b.classList.toggle('on', Number(b.dataset.axis) === ax));
+  }
+  sectionBtn.classList.toggle('on', !!section);
+  view.classList.toggle('cut', !!section);
+  updateSection();
+  updateHover(null);
+}
+
+/** Je Bild: Schnittebene an allen betroffenen Materialien (auch an neu angelegten). */
+function applySectionClip() {
+  if (!section && !clipApplied) return;
+  const planes = section ? sectionPlanes : null;
+  const set = (o: THREE.Object3D) => o.traverse((c) => {
+    const m = (c as THREE.Mesh).material;
+    if (!m) return;
+    for (const mat of Array.isArray(m) ? m : [m]) if (mat.clippingPlanes !== planes) mat.clippingPlanes = planes;
+  });
+  // Schnittflächen für alle sichtbaren Teile, entfernte Teile aufräumen
+  for (const p of [...caps.keys()]) if (!section || !parts.includes(p)) dropCaps(p);
+  if (section) {
+    let added = false;
+    for (const p of parts) {
+      if (!caps.has(p)) { makeCaps(p); added = true; }
+      const c = caps.get(p)!;
+      c.quad.visible = p.visible;
+      const hsl = { h: 0, s: 0, l: 0 };
+      p.color.getHSL(hsl);
+      c.quad.material.color.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), hsl.l * 0.5);
+    }
+    if (added) placeCaps();
+  }
+  for (const p of parts) set(p.mesh);
+  for (const o of [faceGroup, checkGroup, hoverMesh, hoverLine]) set(o);
+  clipApplied = !!section;
+}
+
+sectionBtn.addEventListener('click', () => setSection(!section));
+sectionBar.querySelectorAll<HTMLElement>('[data-axis]').forEach((b) => b.addEventListener('click', () => setSection(true, Number(b.dataset.axis) as 0 | 1 | 2)));
+sectionPos.addEventListener('input', () => {
+  if (!section) return;
+  section.value = Number(sectionPos.value);
+  updateSection();
+});
+document.getElementById('sectionFlip')!.addEventListener('click', () => {
+  if (!section) return;
+  section.keepHigh = !section.keepHigh;
+  updateSection();
+});
+document.getElementById('sectionClose')!.addEventListener('click', () => setSection(false));
 
 // ---------------------------------------------------------------- Skalieren und Spiegeln
 

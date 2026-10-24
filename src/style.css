@@ -216,7 +216,8 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
   color: var(--muted); background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); border-radius: 6px;
 }
 #viewCube #viewHome:hover { color: var(--accent); border-color: var(--accent); }
-#gizmoBar, #fitBar, #measureBar, #scaleBar { top: 58px; font-size: 12.5px; }
+/* Unter der Werkzeugleiste – auch wenn sie in zwei Zeilen umbricht (--bar-top setzt main.ts) */
+#gizmoBar, #fitBar, #measureBar, #scaleBar { top: var(--bar-top, 58px); font-size: 12.5px; }
 #scaleBar input[type='number'] { width: 64px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #scaleBar .dims input[type='number'] { width: 58px; }
 #scaleBar .mirror { gap: 4px; color: var(--muted); }
@@ -334,3 +335,15 @@ kbd {
 #ctxMenu button.danger { color: var(--err); }
 #ctxMenu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
 #ctxColor { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+
+/* Schnittansicht: Regler unten rechts */
+#sectionBar {
+  position: absolute; right: 10px; bottom: 32px; z-index: 3; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  max-width: calc(100% - 20px); font-size: 12.5px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
+}
+#sectionBar input[type='range'] { width: 180px; accent-color: var(--accent); }
+#sectionBar #sectionVal { min-width: 92px; font-variant-numeric: tabular-nums; color: var(--muted); }
+/* Im Schnitt sitzen Hinweis und Meldungen über dem Regler */
+#view.cut #hint { bottom: 80px; }
+#view.cut #toast { bottom: 136px; }
