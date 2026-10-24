@@ -4151,6 +4151,7 @@ function closeCut() {
 
 function renderCutBar() {
   cutBar.querySelectorAll<HTMLElement>('[data-conn]').forEach((b) => b.classList.toggle('on', b.dataset.conn === cutConnector));
+  document.getElementById('cutDiaLabel')!.textContent = cutConnector === 'dovetail' ? 'Breite' : '⌀';
   for (const el of cutBar.querySelectorAll<HTMLElement>('.conn-opt')) el.hidden = cutConnector === 'none';
 }
 
@@ -4209,7 +4210,19 @@ async function updateCutPreview() {
   const W = p.mesh.matrixWorld;
   const n = new THREE.Vector3(...opts.normal).transformDirection(W);
   const color = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde');
-  for (const c of res.connectors) {
+  if (res.shape) {
+    // Schwalbenschwanz: die Feder selbst zeigen
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(res.shape, 3));
+    g.computeVertexNormals();
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false }));
+    m.renderOrder = 8;
+    m.raycast = () => {};
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(W);
+    cutPreview.add(m);
+  }
+  for (const c of res.shape ? [] : res.connectors) {
     const h = c.depthA + c.depthB;
     const m = new THREE.Mesh(new THREE.CylinderGeometry(c.diameter / 2, c.diameter / 2, h, 32), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false }));
     m.renderOrder = 8;
@@ -4221,13 +4234,20 @@ async function updateCutPreview() {
   }
   const kind = cutConnector === 'pin' ? 'Zapfen' : 'Dübel';
   const first = res.connectors[0];
-  cutHelp.textContent = [
-    res.connectors.length
-      ? `${res.connectors.length} ${kind} ⌀ ${mmc(first.diameter)} mm, Spiel ${mmc(opts.clearance)} mm, ${mmc(Math.min(...res.connectors.map((c) => Math.min(c.depthA, c.depthB))))}–${mmc(Math.max(...res.connectors.map((c) => Math.max(c.depthA, c.depthB))))} mm tief.`
-      : 'Kein Platz für Verbinder.',
-    cutConnector === 'pin' ? 'Die sichtbare Hälfte bekommt die Zapfen.' : '',
-    ...res.notes,
-  ].filter(Boolean).join(' ');
+  cutHelp.textContent = cutConnector === 'dovetail'
+    ? [
+      res.connectors.length
+        ? `${res.connectors.length} Schwalbenschwanz${res.connectors.length > 1 ? 'e' : ''}, ${mmc(first.diameter)} mm breit, ${mmc(first.depthB)} mm hoch, Spiel ${mmc(opts.clearance)} mm. Die sichtbare Hälfte bekommt die Feder, die andere wird seitlich aufgeschoben.`
+        : 'Kein Platz für einen Schwalbenschwanz.',
+      ...res.notes,
+    ].filter(Boolean).join(' ')
+    : [
+      res.connectors.length
+        ? `${res.connectors.length} ${kind} ⌀ ${mmc(first.diameter)} mm, Spiel ${mmc(opts.clearance)} mm, ${mmc(Math.min(...res.connectors.map((c) => Math.min(c.depthA, c.depthB))))}–${mmc(Math.max(...res.connectors.map((c) => Math.max(c.depthA, c.depthB))))} mm tief.`
+        : 'Kein Platz für Verbinder.',
+      cutConnector === 'pin' ? 'Die sichtbare Hälfte bekommt die Zapfen.' : '',
+      ...res.notes,
+    ].filter(Boolean).join(' ');
 }
 
 /** Name der Hälfte nach ihrer Lage zur Ebene (Richtung d zeigt in die Hälfte). */
@@ -4280,7 +4300,8 @@ async function applyCut() {
   const dowels = res.dowels.map((d, i) => addPart(`${p.name} Dübel ${i + 1}`, geo(d), { color, layout: W }));
   if (wasBase) baseId = kept.id;
   solveAll();
-  const pins = cutConnector === 'pin' && res.connectors.length > 0;
+  // Zapfen und Feder stehen heraus: diese Hälfte mit der Schnittfläche nach oben
+  const pins = (cutConnector === 'pin' || cutConnector === 'dovetail') && res.connectors.length > 0;
   if (cutFlat.checked) {
     // Schnittflächen nach unten; Zapfen zeigen nach oben; Dübel stehen
     const turn = (q: Part, down: THREE.Vector3) => {
@@ -4311,7 +4332,9 @@ async function applyCut() {
   // Die Teile liegen jetzt woanders: alles ins Bild
   fitView();
   const nc = res.connectors.length;
-  const what = nc ? ` mit ${nc} ${cutConnector === 'pin' ? 'Zapfen' : nc > 1 ? 'Dübeln' : 'Dübel'} ⌀ ${mmc(res.connectors[0].diameter)} mm` : '';
+  const what = !nc ? '' : cutConnector === 'dovetail'
+    ? ` mit ${nc > 1 ? `${nc} Schwalbenschwänzen` : 'Schwalbenschwanz'} (${mmc(res.connectors[0].diameter)} mm breit) – die obere Hälfte seitlich aufschieben`
+    : ` mit ${nc} ${cutConnector === 'pin' ? 'Zapfen' : nc > 1 ? 'Dübeln' : 'Dübel'} ⌀ ${mmc(res.connectors[0].diameter)} mm`;
   toast(`„${p.name}“ zerschnitten${what}.${lost.length ? ` ${lost.join(', ')}.` : ''}${res.notes.length ? ` ${res.notes.join(' ')}` : ''}`, 6000);
 }
 
@@ -4530,7 +4553,7 @@ const splitPreview = new THREE.Group();
 scene.add(splitPreview);
 
 /** Rand je Stück: Zapfen stehen bis zu 12 mm heraus. */
-const splitMargin = () => (splitConnector === 'pin' ? 15 : 3);
+const splitMargin = () => (splitConnector === 'pin' ? 15 : splitConnector === 'dovetail' ? 10 : 3);
 
 /** Passt das Teil (so, wie es liegt) auf die Platte – auch um 90° gedreht? */
 function fitsBed(size: THREE.Vector3, margin = 0): boolean {
@@ -4587,7 +4610,7 @@ function renderSplit() {
   (document.getElementById('splitApply') as HTMLButtonElement).disabled = total < 2;
   document.getElementById('splitHelp')!.innerHTML = `${total} Stück${total > 1 ? 'e' : ''}, je ${mmText1(piece.x)} × ${mmText1(piece.y)} × ${mmText1(piece.z)} mm`
     + (fits ? ' – jedes passt auf die Platte.' : ' – <span class="warn">so passen die Stücke noch nicht auf die Platte.</span>')
-    + (splitConnector === 'none' ? ' Ohne Verbinder (zum Kleben).' : splitConnector === 'pin' ? ' Zapfen zeigen nach +X/+Y/oben.' : ' Dübel werden eigene Teile.');
+    + (splitConnector === 'none' ? ' Ohne Verbinder (zum Kleben).' : splitConnector === 'pin' ? ' Zapfen zeigen nach +X/+Y/oben.' : splitConnector === 'dovetail' ? ' Schwalbenschwänze: die Stücke werden seitlich aufgeschoben.' : ' Dübel werden eigene Teile.');
   // Schnittebenen als rote Rechtecke
   clearSplitPreview();
   const fill = new THREE.Color(0xe5484d);

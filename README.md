@@ -156,8 +156,9 @@ höhere Lagen dahinter auf der Platte, die Dübel davor; „Auf der Platte anord
 **Zerschneiden** (Rechtsklick › „Zerschneiden …"): teilt ein Teil an der Schnittebene in zwei – etwa wenn es
 nicht auf die Platte passt oder ohne Stützen druckbar werden soll. Die Ebene stellt man wie in der
 Schnittansicht ein (X/Y/Z, Regler, Seite); gezeigt wird nur dieses Teil aufgeschnitten. Verbinder: ohne
-(zum Kleben), **Zapfen** an der sichtbaren Hälfte mit passender Bohrung in der anderen, oder **Dübel**
-(Bohrungen in beiden Hälften, Dübel als eigene Teile). Anzahl und ⌀ automatisch oder vorgegeben, Spiel
+(zum Kleben), **Zapfen** an der sichtbaren Hälfte mit passender Bohrung in der anderen, **Dübel**
+(Bohrungen in beiden Hälften, Dübel als eigene Teile) oder **Schwalbenschwanz** (Feder quer über den
+Querschnitt, 15° Flanken, die andere Hälfte wird seitlich aufgeschoben und hält ohne Kleber). Anzahl und ⌀ automatisch oder vorgegeben, Spiel
 einstellbar (Standard 0,2 mm). Die Verbinder sitzen nur dort, wo um die Bohrung genug Wand bleibt, und
 reichen nie bis auf die andere Seite durch; die Vorschau zeigt sie in der Schnittfläche. Danach liegen die
 Hälften mit der Schnittfläche nach unten nebeneinander (Zapfen nach oben), Dübel stehen daneben – alles mit

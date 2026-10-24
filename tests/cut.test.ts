@@ -118,3 +118,33 @@ describe('Zerschneiden: Herkunft der Dreiecke', () => {
     }
   });
 });
+
+describe('Zerschneiden: Schwalbenschwanz', () => {
+  it('Feder an A, Nut mit Spiel in B – zusammengesetzt ohne Überschneidung', async () => {
+    const { booleanParts } = await import('../src/io/boolean');
+    const r = await cutMesh(box(60, 40, 30), { normal: [0, 0, 1], offset: 15, connector: 'dovetail', clearance: 0.2 });
+    expect(r.connectors).toHaveLength(1);
+    const [dt] = r.connectors;
+    expect(dt.slide).toBeDefined();
+    // Feder entlang der kurzen Seite (Y), Breite ein Viertel der langen (60 → 15 mm)
+    expect(Math.abs(dt.slide![1])).toBeCloseTo(1, 6);
+    expect(dt.diameter).toBe(15);
+    expect(volume(r.a)).toBeGreaterThan(60 * 40 * 15 + 100);
+    expect(volume(r.b)).toBeLessThan(60 * 40 * 15 - 100);
+    // Nut etwas größer als die Feder (Spiel)
+    expect(60 * 40 * 15 - volume(r.b)).toBeGreaterThan(volume(r.a) - 60 * 40 * 15);
+    // Zusammengesteckt überschneiden sich die Hälften nicht (höchstens Berührung)
+    const overlap = await booleanParts({ name: 'A', positions: r.a }, [{ name: 'B', positions: r.b }], 'intersect').then((x) => volume(x.positions), () => 0);
+    expect(overlap).toBeLessThan(0.5);
+    // Die Feder steht nirgends über das Teil hinaus
+    const bb = (p: Float32Array) => { let mn = Infinity, mx = -Infinity; for (let i = 1; i < p.length; i += 3) { mn = Math.min(mn, p[i]); mx = Math.max(mx, p[i]); } return [mn, mx]; };
+    expect(bb(r.a)[0]).toBeGreaterThanOrEqual(-20 - 1e-6);
+    expect(bb(r.a)[1]).toBeLessThanOrEqual(20 + 1e-6);
+  });
+
+  it('flache Teile: Feder niedriger, notfalls keine', async () => {
+    const r = await cutMesh(box(60, 40, 6), { normal: [0, 0, 1], offset: 3, connector: 'dovetail' });
+    expect(r.connectors).toEqual([]);
+    expect(r.notes.join(' ')).toMatch(/zu schmal oder zu flach/);
+  });
+});

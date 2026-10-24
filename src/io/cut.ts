@@ -10,7 +10,7 @@ import type { CrossSection, Manifold, ManifoldToplevel, Mat4, SimplePolygon } fr
 import { type Vec3, cross, len, normalize } from '../math/align';
 import { loadManifold, originalIdOf, positionsOfSolid, solidOf, trackedPositions } from './union';
 
-export type Connector = 'none' | 'pin' | 'dowel';
+export type Connector = 'none' | 'pin' | 'dowel' | 'dovetail';
 
 export interface CutOptions {
   /** Schnittebene in den Koordinaten des Netzes: normal·x = offset. Hälfte B liegt in Richtung normal. */
@@ -19,7 +19,7 @@ export interface CutOptions {
   connector: Connector;
   /** Anzahl der Verbinder, 0 = automatisch (je Querschnittsfläche einer, bei langen zwei). */
   count?: number;
-  /** Durchmesser in mm, 0 = automatisch aus dem Querschnitt. */
+  /** Durchmesser in mm (Schwalbenschwanz: Breite am Fuß), 0 = automatisch aus dem Querschnitt. */
   diameter?: number;
   /** Spiel (radial) zwischen Zapfen bzw. Dübel und Bohrung in mm. */
   clearance?: number;
@@ -28,6 +28,9 @@ export interface CutOptions {
 export interface Placed {
   /** Mitte in der Schnittebene (Koordinaten des Netzes). */
   center: Vec3;
+  /** Schwalbenschwanz: Schieberichtung (Koordinaten des Netzes) und Länge. */
+  slide?: Vec3;
+  length?: number;
   diameter: number;
   /** Einstecktiefe in Hälfte A bzw. B (mm). */
   depthA: number;
@@ -229,8 +232,96 @@ function plan(solid: Manifold, positions: Float32Array, n: Vec3, d: number, opts
   return { frame, n, dia, r, c, spots: out, notes };
 }
 
+
+/** Flankenwinkel des Schwalbenschwanzes (gegen die Senkrechte) – druckt ohne Stützen. */
+const DOVE_ANGLE = (15 * Math.PI) / 180;
+
+interface DovePlan {
+  frame: ReturnType<typeof planeFrame>;
+  /** In Ebenenkoordinaten: Feder (an A) und Nut (aus B, mit Spiel). */
+  tails: Manifold[];
+  slots: Manifold[];
+  placed: Placed[];
+  notes: string[];
+}
+
+/**
+ * Schwalbenschwanz quer über den Querschnitt: Trapez (unten schmal, oben breit) entlang der kurzen
+ * Richtung jeder Querschnittsfläche – die andere Hälfte wird seitlich aufgeschoben und kann sich nur
+ * entlang der Feder bewegen. Auf den Querschnitt begrenzt, damit nichts übersteht.
+ */
+function planDovetail(wasm: ManifoldToplevel, solid: Manifold, positions: Float32Array, n: Vec3, d: number, opts: CutOptions, keep: <T extends { delete(): void }>(x: T) => T): DovePlan {
+  const { Manifold, CrossSection } = wasm;
+  const frame = planeFrame(n, d);
+  const notes: string[] = [];
+  const c = Math.max(0, opts.clearance ?? 0.2);
+  const section = keep(keep(solid.transform(frame.toPlane)).slice(0));
+  const comps = section.decompose().map(keep).filter((x) => x.area() > 1e-6).sort((a, b) => b.area() - a.area());
+  const tails: Manifold[] = [];
+  const slots: Manifold[] = [];
+  const placed: Placed[] = [];
+  const tan = Math.tan(DOVE_ANGLE);
+  let skipped = 0;
+  for (const comp of comps) {
+    // Hauptrichtungen der Fläche
+    const pts = comp.toPolygons().flat();
+    const mx = pts.reduce((s, q) => s + q[0], 0) / pts.length;
+    const my = pts.reduce((s, q) => s + q[1], 0) / pts.length;
+    let sxx = 0, sxy = 0, syy = 0;
+    for (const [x, y] of pts) { sxx += (x - mx) ** 2; sxy += (x - mx) * (y - my); syy += (y - my) ** 2; }
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const a: [number, number] = [Math.cos(ang), Math.sin(ang)];
+    const b: [number, number] = [-a[1], a[0]];
+    const along = (q: [number, number], v: [number, number]) => q[0] * v[0] + q[1] * v[1];
+    const amin = Math.min(...pts.map((q) => along(q, a))), amax = Math.max(...pts.map((q) => along(q, a)));
+    const bmin = Math.min(...pts.map((q) => along(q, b))), bmax = Math.max(...pts.map((q) => along(q, b)));
+    const major = amax - amin;
+    // Breite am Fuß: vorgegeben oder ein Viertel der langen Seite (6–25 mm)
+    const w0 = opts.diameter && opts.diameter > 0 ? opts.diameter : Math.min(25, Math.max(6, Math.round(major / 4)));
+    let h = Math.min(8, Math.max(3, w0 * 0.6));
+    const w1 = (hh: number) => w0 + 2 * hh * tan;
+    const inset = keep(comp.offset(-(w1(h) / 2 + c + WALL), 'Round'));
+    if (inset.isEmpty()) { skipped++; continue; }
+    const count = opts.count && opts.count > 0 ? Math.min(opts.count, 4) : major > 8 * w1(h) ? 2 : 1;
+    for (const tries of spots(inset, count)) {
+      const [cx, cy] = tries[0];
+      // Höhe begrenzen: hinter der Nut muss in B noch Wand bleiben (entlang der Feder geprüft)
+      let thick = Infinity;
+      for (let k = 0; k <= 8; k++) {
+        const t = bmin + ((bmax - bmin) * k) / 8;
+        const ca = along([cx, cy], a);
+        for (const off of [-w1(h) / 2, 0, w1(h) / 2]) {
+          const px = a[0] * (ca + off) + b[0] * t, py = a[1] * (ca + off) + b[1] * t;
+          if (!inside(comp.toPolygons(), px, py)) continue;
+          thick = Math.min(thick, rayDistance(positions, frame.point(px, py, 0), n));
+        }
+      }
+      h = Math.min(h, thick - c - WALL);
+      if (!(h >= 2)) { skipped++; continue; }
+      const L = bmax - bmin + 2;
+      // Profil in (Breite, Höhe), entlang der dritten Achse ausgezogen
+      const trapezoid = (grow: number, z0: number, z1: number) => [[
+        [-(w0 / 2 + grow + z0 * tan), z0], [w0 / 2 + grow + z0 * tan, z0], [w1(z1) / 2 + grow, z1], [-(w1(z1) / 2 + grow), z1],
+      ]] as [number, number][][];
+      const ca = along([cx, cy], a);
+      // (x, y, z) → Ebene: x entlang a, y = Höhe, z gegen b (Rechtssystem)
+      const toPlane: Mat4 = [a[0], a[1], 0, 0, 0, 0, 1, 0, -b[0], -b[1], 0, 0, a[0] * ca + b[0] * (bmax + 1), a[1] * ca + b[1] * (bmax + 1), 0, 1];
+      const prism = (z0: number, z1: number) => keep(keep(Manifold.extrude(comp, z1 - z0)).translate([0, 0, z0]));
+      const tail = keep(keep(keep(Manifold.extrude(keep(CrossSection.ofPolygons(trapezoid(0, 0, h - 0.3))), L)).transform(toPlane)).intersect(prism(0, h)));
+      const slot = keep(keep(keep(Manifold.extrude(keep(CrossSection.ofPolygons(trapezoid(c, -0.5, h + c))), L)).transform(toPlane)).intersect(prism(-0.5, h + c + 0.5)));
+      tails.push(tail);
+      slots.push(slot);
+      const center = frame.point(a[0] * ca + b[0] * (bmin + bmax) / 2, a[1] * ca + b[1] * (bmin + bmax) / 2, 0);
+      const tip = frame.point(a[0] * ca + b[0] * (bmax + 1), a[1] * ca + b[1] * (bmax + 1), 0);
+      placed.push({ center, diameter: w0, depthA: 0, depthB: h, slide: normalize([tip[0] - center[0], tip[1] - center[1], tip[2] - center[2]]), length: L - 2 });
+    }
+  }
+  if (skipped) notes.push(placed.length ? 'Schmale Stellen des Querschnitts bekommen keinen Schwalbenschwanz.' : 'Der Querschnitt ist zu schmal oder zu flach für einen Schwalbenschwanz.');
+  return { frame, tails, slots, placed, notes };
+}
+
 /** Nur die Lage der Verbinder (Vorschau), ohne zu schneiden. */
-export async function planConnectors(positions: Float32Array, opts: CutOptions, wasmUrl?: string): Promise<{ connectors: Placed[]; notes: string[]; closed: boolean }> {
+export async function planConnectors(positions: Float32Array, opts: CutOptions, wasmUrl?: string): Promise<{ connectors: Placed[]; notes: string[]; closed: boolean; shape?: Float32Array }> {
   const wasm = await loadManifold(wasmUrl);
   const solid = solidFor(wasm, positions);
   if (!solid) return { connectors: [], notes: [], closed: false };
@@ -241,6 +332,11 @@ export async function planConnectors(positions: Float32Array, opts: CutOptions, 
   };
   try {
     const n = normalize(opts.normal);
+    if (opts.connector === 'dovetail') {
+      const dp = planDovetail(wasm, solid, positions, n, opts.offset / len(opts.normal), opts, keep);
+      const shape = dp.tails.length ? positionsOfSolid(keep(keep(wasm.Manifold.union(dp.tails)).transform(dp.frame.fromPlane))) : undefined;
+      return { connectors: dp.placed, notes: dp.notes, closed: true, shape };
+    }
     const pl = plan(solid, positions, n, opts.offset / len(opts.normal), opts, keep);
     return { connectors: pl.spots.map((s) => ({ center: pl.frame.point(s.x, s.y, 0), diameter: pl.dia, depthA: s.depthA, depthB: s.depthB })), notes: pl.notes, closed: true };
   } finally {
@@ -273,7 +369,16 @@ export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: C
     const dowels: Float32Array[] = [];
     let A: Manifold = aSide;
     let B: Manifold = bSide;
-    if (opts.connector !== 'none') {
+    if (opts.connector === 'dovetail') {
+      const dp = planDovetail(wasm, solid, positions, n, d, opts, keep);
+      notes.push(...dp.notes);
+      connectors.push(...dp.placed);
+      const place = (list: Manifold[]) => keep(keep(wasm.Manifold.union(list)).transform(dp.frame.fromPlane));
+      if (dp.tails.length) {
+        A = keep(A.add(place(dp.tails)));
+        B = keep(B.subtract(place(dp.slots)));
+      }
+    } else if (opts.connector !== 'none') {
       const pl = plan(solid, positions, n, d, opts, keep);
       notes.push(...pl.notes);
       const { r, c } = pl;
