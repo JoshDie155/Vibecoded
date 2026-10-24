@@ -35,8 +35,10 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
      Fläche (eben oder Freiform). Praktisch, wo die automatische Flächenerkennung nicht passt.
    - *Flächen zusammenfassen:* in der Flächenliste zwei oder mehr Flächen anhaken und „… zu einer
      zusammenfassen" klicken – oder mit Alt/⌥ + Klick eine Fläche direkt an die zuletzt gewählte anhängen.
-     Das geht auch über fest verbundene Teile hinweg (z. B. ein Aussparungsgrund, der halb zu den Haaren und
-     halb zum Kopf gehört); „⇹" trennt sie wieder.
+     Das geht mit ebenen, runden und Freiformflächen (nicht mit Kanten) und auch über fest verbundene Teile
+     hinweg (z. B. ein Aussparungsgrund, der halb zu den Haaren und halb zum Kopf gehört). Liegt alles auf
+     einem Zylinder (etwa eine Rundung, deren grobe Facette einzeln erkannt wurde), bleibt das Ergebnis
+     eine runde Fläche; „⇹" trennt sie wieder.
    Punkte, Kanten und Flächen lassen sich auch kombinieren. Besteht das Gegenstück aus mehreren Teilen (z. B.
    eine Maske, die auf Kopf *und* Haare passt), dürfen Flächen auch auf Nachbarteilen liegen, die schon fest mit
    Teil 1 verbunden sind – PartJoin rechnet und prüft den Kontakt dann mit allen diesen Teilen.

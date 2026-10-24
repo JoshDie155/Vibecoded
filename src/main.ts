@@ -7,7 +7,7 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } fro
 import { type Rigid, type Vec3, IDENTITY, compose, rotate, rotationAbout } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
-import { type EdgeFeature, type Feature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, transformFeature } from './math/features';
+import { type CylinderFeature, type EdgeFeature, type Feature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, transformFeature } from './math/features';
 import { detectEdge } from './math/edges';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
@@ -876,7 +876,8 @@ function helperParts(j: Joint, side: Side): number[] {
 
 /** Zum Zusammenfassen angehakte Flächen je Verbindung (eine Seite). */
 const mergePick = new Map<number, { side: Side; idx: Set<number> }>();
-const mergeable = (f: Feature) => f.kind === 'plane' || f.kind === 'surface';
+/** Zusammenfassen lassen sich alle Flächen, nur Kanten nicht. */
+const mergeable = (f: Feature) => f.kind !== 'edge';
 
 /**
  * Fasst Einzelflächen einer Seite zu einer Fläche zusammen – im Koordinatensystem des Teils dieser Seite,
@@ -885,10 +886,14 @@ const mergeable = (f: Feature) => f.kind === 'plane' || f.kind === 'surface';
 function mergeOf(j: Joint, side: Side, pieces: PickedFeature[], worldOf: (id: number) => THREE.Matrix4): PickedFeature {
   const own = getPart(side === 'a' ? j.a : j.b)!;
   const inv = worldOf(own.id).clone().invert();
-  const merged = mergeFeatures(pieces.map((f) => {
+  const list = pieces.map((f) => {
     const part = featurePart(j, side, f)!;
     return { positions: positionsOf(part), tris: f.tris, T: matrixToRigid(inv.clone().multiply(worldOf(part.id))) };
-  }));
+  });
+  // Runde Fläche dabei: Achse als Startwert, damit z. B. zwei Stücke einer Bohrung rund bleiben
+  const k = pieces.findIndex((f) => f.kind === 'cylinder');
+  const round = k >= 0 ? rotate(list[k].T.R, (pieces[k] as CylinderFeature).axis) : undefined;
+  const merged = mergeFeatures(list, round);
   return { ...merged, tris: pieces[0].tris, pieces };
 }
 
@@ -2198,12 +2203,14 @@ function toggleFace(j: Joint, side: Side, part: Part, tri: number, on?: number, 
   else {
     const f: PickedFeature = detectFeature(topologyOf(part), tri, FEATURE_OPTS);
     if (on !== undefined) f.on = on;
-    // Alt/⌥ + Klick: zur zuletzt gewählten Fläche dieser Seite hinzufügen
-    const last = add ? list[list.length - 1] : undefined;
-    if (last && mergeable(last) && mergeable(f)) {
-      list[list.length - 1] = mergeOf(j, side, [...(last.pieces ?? [last]), f], (id) => getPart(id)!.mesh.matrixWorld);
+    // Alt/⌥ + Klick: zur zuletzt gewählten Fläche dieser Seite hinzufügen (Kanten zählen nicht)
+    let lastIdx = add ? list.length - 1 : -1;
+    while (lastIdx >= 0 && !mergeable(list[lastIdx])) lastIdx--;
+    const last = list[lastIdx];
+    if (last) {
+      list[lastIdx] = mergeOf(j, side, [...(last.pieces ?? [last]), f], (id) => getPart(id)!.mesh.matrixWorld);
     } else {
-      if (add) toast('Hinzufügen geht nur zu einer ebenen oder Freiformfläche – die Fläche wurde einzeln gewählt.');
+      if (add) toast('Auf dieser Seite ist noch keine Fläche gewählt – die Fläche wurde einzeln gewählt. Alt/⌥ + Klick hängt die nächste daran.');
       list.push(f);
     }
   }

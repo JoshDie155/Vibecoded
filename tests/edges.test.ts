@@ -185,4 +185,44 @@ describe('mergeFeatures (Flächen zusammenfassen)', () => {
     ]);
     expect(f.kind).toBe('surface');
   });
+
+  // Mantel eines Zapfens (r 7,5, 48 Facetten), aufgeteilt nach Winkel um die Achse
+  const pin = cylinder(7.5, 4, 48);
+  const side = (pred: (angle: number) => boolean) => {
+    const tris: number[] = [];
+    for (let t = 0; t < pin.length / 9; t++) {
+      const z = [2, 5, 8].map((k) => pin[t * 9 + k]);
+      if (z.every((v) => Math.abs(v - z[0]) < 1e-6)) continue; // Deckel
+      const x = (pin[t * 9] + pin[t * 9 + 3] + pin[t * 9 + 6]) / 3;
+      const y = (pin[t * 9 + 1] + pin[t * 9 + 4] + pin[t * 9 + 7]) / 3;
+      if (pred(Math.atan2(y, x))) tris.push(t);
+    }
+    return tris;
+  };
+
+  it('zwei Stücke einer runden Fläche bleiben rund (Achse der runden Fläche als Startwert)', () => {
+    const f = mergeFeatures([
+      { positions: pin, tris: side((a) => a >= 0 && a < 1), T: IDENTITY },
+      { positions: pin, tris: side((a) => a >= 1 && a < 2.2), T: IDENTITY },
+    ], [0, 0, 1]);
+    expect(f.kind).toBe('cylinder');
+    if (f.kind !== 'cylinder') return;
+    expect(f.radius).toBeCloseTo(7.5, 3);
+    expect(f.hole).toBe(false);
+    expect(Math.abs(f.axis[2])).toBeCloseTo(1, 6);
+    expect(f.arc).toBeGreaterThan(1.9);
+  });
+
+  it('runde Fläche mit einer ebenen zusammen: Freiformfläche', () => {
+    const b = transformPositions(box(10, 10, 4), new THREE.Matrix4().makeTranslation(12, 0, 0));
+    const both = new Float32Array(pin.length + b.length);
+    both.set(pin);
+    both.set(b, pin.length);
+    const top = triNear(b, [12, 0, 4]) + pin.length / 9;
+    const f = mergeFeatures([
+      { positions: both, tris: side((a) => a >= 0 && a < 1), T: IDENTITY },
+      { positions: both, tris: [top], T: IDENTITY },
+    ], [0, 0, 1]);
+    expect(f.kind).toBe('surface');
+  });
 });

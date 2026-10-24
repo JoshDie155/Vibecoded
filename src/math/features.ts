@@ -1867,14 +1867,27 @@ export interface MergePiece {
   T: Rigid;
 }
 
+/** Zylinderfläche genau aus diesen Dreiecken, falls sie auf einem Zylinder liegen (sonst null). */
+function cylinderFromTris(topo: Topology, tris: number[], axisGuess: Vec3): CylinderFeature | null {
+  const list = tris.filter((t) => !isDegenerate(topo, t));
+  if (list.length < 2) return null;
+  const ctx = makeCtx(topo, list.length + 1);
+  const smoothAngle = FEATURE_DEFAULTS.smoothAngleDeg * DEG;
+  const m = fitCylinderModel(ctx, list, axisGuess, 2 * smoothAngle);
+  if (!m) return null;
+  return finishCylinder(ctx, { region: { tris: list, stamp: 0 }, model: m }, Math.cos(smoothAngle), 0);
+}
+
 /**
  * Mehrere gewählte Flächen zu einer zusammenfassen – auch über mehrere Teile hinweg (z. B. ein
  * Aussparungsgrund, der halb zu den Haaren und halb zum Kopf gehört). Die Dreiecke werden in ein
  * gemeinsames Koordinatensystem übertragen und wie bemalte Dreiecke ausgewertet: eben, wenn alles in
- * einer Ebene liegt, sonst Freiformfläche. Die Dreiecksliste des Ergebnisses bezieht sich auf das
+ * einer Ebene liegt, sonst Freiformfläche. Ist eine der Flächen rund (roundAxis: ihre Achse im
+ * gemeinsamen System) und liegt alles auf einem Zylinder, bleibt das Ergebnis rund – etwa zwei
+ * getrennt erkannte Stücke einer Bohrung. Die Dreiecksliste des Ergebnisses bezieht sich auf das
  * zusammengesetzte Hilfsnetz.
  */
-export function mergeFeatures(pieces: MergePiece[]): Feature {
+export function mergeFeatures(pieces: MergePiece[], roundAxis?: Vec3): Feature {
   const total = pieces.reduce((n, p) => n + p.tris.length, 0);
   if (!total) throw new RangeError('Keine Flächen zum Zusammenfassen.');
   const out = new Float32Array(total * 9);
@@ -1891,5 +1904,7 @@ export function mergeFeatures(pieces: MergePiece[]): Feature {
     }
   }
   const topo = buildTopology(out);
-  return featureFromTris(topo, Array.from({ length: total }, (_, i) => i));
+  const all = Array.from({ length: total }, (_, i) => i);
+  const round = roundAxis && cylinderFromTris(topo, all, roundAxis);
+  return round || featureFromTris(topo, all);
 }
