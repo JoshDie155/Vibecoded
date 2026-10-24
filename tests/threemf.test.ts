@@ -596,3 +596,35 @@ describe('Bambu-Export: mehrere Druckplatten', () => {
     expect(at(plates[2][0])[10]).toBeCloseTo(-40 + 128 - W, 3);
   });
 });
+
+describe('Vorschaubilder', () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const thumbRel = 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail';
+
+  it('Standard-3MF: Metadata/thumbnail.png mit Verweis im Paket', () => {
+    const files = unzipSync(write3MF([{ name: 'A', positions: box(10, 10, 10), color: '#ff0000' }], 'multicolor', png));
+    expect(files['Metadata/thumbnail.png']).toEqual(png);
+    const rels = strFromU8(files['_rels/.rels']);
+    expect(rels).toContain(`Target="/Metadata/thumbnail.png"`);
+    expect(rels).toContain(thumbRel);
+    expect(strFromU8(files['[Content_Types].xml'])).toContain('Extension="png"');
+    // ohne Bild bleibt das Paket wie bisher
+    const plain = unzipSync(write3MF([{ name: 'A', positions: box(10, 10, 10), color: '#ff0000' }], 'multicolor'));
+    expect(plain['Metadata/thumbnail.png']).toBeUndefined();
+    expect(strFromU8(plain['_rels/.rels'])).not.toContain(thumbRel);
+  });
+
+  it('Bambu: ein Bild je Platte, in den Platten-Einstellungen eingetragen', () => {
+    const W = 256 * 1.2;
+    const parts = [
+      { name: 'A', color: '#ff0000', object: 'a', plate: 0, positions: box(20, 20, 10) },
+      { name: 'B', color: '#00ff00', object: 'b', plate: 1, positions: transformPositions(box(20, 20, 10), new THREE.Matrix4().makeTranslation(W, 0, 0)) },
+    ];
+    const files = unzipSync(write3MFBambu(parts, { printer: 'P2S', plateCenters: [[0, 0], [W, 0]], thumbnails: [png, png] }));
+    expect(files['Metadata/plate_1.png']).toEqual(png);
+    expect(files['Metadata/plate_2.png']).toEqual(png);
+    const cfg = strFromU8(files['Metadata/model_settings.config']);
+    expect([...cfg.matchAll(/key="thumbnail_file" value="([^"]+)"/g)].map((m) => m[1])).toEqual(['Metadata/plate_1.png', 'Metadata/plate_2.png']);
+    expect(strFromU8(files['_rels/.rels'])).toContain('Target="/Metadata/plate_1.png"');
+  });
+});

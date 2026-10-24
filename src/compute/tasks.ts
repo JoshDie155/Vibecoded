@@ -38,8 +38,8 @@ export const TASKS = {
     const r = write3MFBambu(a.parts, a.opts);
     return { result: r, transfer: buffers([r]) };
   },
-  write3mf(a: { parts: ColoredPart[]; mode: 'single' | 'multicolor' }): TaskResult<Uint8Array> {
-    const r = write3MF(a.parts, a.mode);
+  write3mf(a: { parts: ColoredPart[]; mode: 'single' | 'multicolor'; thumbnail?: Uint8Array }): TaskResult<Uint8Array> {
+    const r = write3MF(a.parts, a.mode, a.thumbnail);
     return { result: r, transfer: buffers([r]) };
   },
   /** Größte ebene Auflage (Dreiecke in Weltkoordinaten). */

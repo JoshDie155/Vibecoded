@@ -3594,6 +3594,103 @@ document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
   b.addEventListener('click', () => void exportAs(b.dataset.export ?? 'stl')),
 );
 
+/**
+ * Vorschaubild (PNG) der sichtbaren Teile – schräg von vorne, durchsichtiger Hintergrund, nur die Teile.
+ * within: nur, was in diesem Umriss liegt (eine Platte). Doppelt groß gezeichnet und verkleinert, damit
+ * die Kanten weich werden.
+ */
+async function thumbnail(within?: THREE.Box3, size = 512): Promise<Uint8Array | undefined> {
+  const shown = parts.filter((p) => p.visible && (!within || within.containsPoint(partBox(p).getCenter(new THREE.Vector3()))));
+  if (!shown.length) return undefined;
+  const box = unitBox(shown);
+  const c = box.getCenter(new THREE.Vector3());
+  const r = Math.max(1, box.getSize(new THREE.Vector3()).length() / 2);
+  const cam = new THREE.PerspectiveCamera(30, 1, r / 50, r * 50);
+  cam.up.set(0, 0, 1);
+  cam.position.copy(c).add(new THREE.Vector3(0.75, -1.15, 0.85).normalize().multiplyScalar(r / Math.sin(THREE.MathUtils.degToRad(15)) * 1.02));
+  cam.lookAt(c);
+  cam.updateMatrixWorld();
+  // Ausschnitt eng um die Punkte der Teile legen, mittig und quadratisch
+  const S = size * 2;
+  const lo = new THREE.Vector2(Infinity, Infinity), hi = new THREE.Vector2(-Infinity, -Infinity);
+  const v = new THREE.Vector3();
+  for (const p of shown) {
+    p.mesh.updateMatrixWorld();
+    const pos = p.mesh.geometry.getAttribute('position');
+    const step = Math.max(1, Math.floor(pos.count / 20000));
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(p.mesh.matrixWorld).project(cam);
+      lo.set(Math.min(lo.x, v.x), Math.min(lo.y, -v.y));
+      hi.set(Math.max(hi.x, v.x), Math.max(hi.y, -v.y));
+    }
+  }
+  const side = Math.max(hi.x - lo.x, hi.y - lo.y) * 1.08 * S / 2;
+  cam.setViewOffset(S, S, ((lo.x + hi.x) / 2 + 1) * S / 2 - side / 2, ((lo.y + hi.y) / 2 + 1) * S / 2 - side / 2, side, side);
+  // Licht wie in der Ansicht: an der Kamera befestigt
+  cam.add(sun.clone());
+  scene.add(cam);
+  // Nur die Teile zeigen (samt ihrer Darstellung), alles andere kurz ausblenden
+  const hidden: THREE.Object3D[] = [];
+  for (const o of scene.children) {
+    if (o === cam || (o as THREE.Light).isLight || parts.some((p) => p.mesh === o)) continue;
+    if (o.visible) { o.visible = false; hidden.push(o); }
+  }
+  for (const p of parts) if (p.visible && !shown.includes(p)) { p.mesh.visible = false; hidden.push(p.mesh); }
+  const clip = renderer.localClippingEnabled;
+  renderer.localClippingEnabled = false;
+  const rt = new THREE.WebGLRenderTarget(S, S, { colorSpace: THREE.SRGBColorSpace });
+  const clear = renderer.getClearColor(new THREE.Color());
+  const alpha = renderer.getClearAlpha();
+  const pixels = new Uint8Array(S * S * 4);
+  try {
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear();
+    renderer.render(scene, cam);
+    renderer.readRenderTargetPixels(rt, 0, 0, S, S, pixels);
+  } finally {
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(clear, alpha);
+    renderer.localClippingEnabled = clip;
+    for (const o of hidden) o.visible = true;
+    scene.remove(cam);
+    rt.dispose();
+  }
+  // Zeilen umdrehen (WebGL zählt von unten) und verkleinern
+  const big = document.createElement('canvas');
+  big.width = big.height = S;
+  const img = new ImageData(S, S);
+  for (let y = 0; y < S; y++) img.data.set(pixels.subarray((S - 1 - y) * S * 4, (S - y) * S * 4), y * S * 4);
+  big.getContext('2d')!.putImageData(img, 0, 0);
+  const small = document.createElement('canvas');
+  small.width = small.height = size;
+  const g = small.getContext('2d')!;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(big, 0, 0, size, size);
+  const blob = await new Promise<Blob | null>((res) => small.toBlob(res, 'image/png'));
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : undefined;
+}
+
+/** Vorschaubilder je Platte (Bambu) bzw. eines für alles. */
+async function thumbnails(plates: number): Promise<Uint8Array[]> {
+  try {
+    if (plates <= 1) {
+      const t = await thumbnail();
+      return t ? [t] : [];
+    }
+    const [w, d] = currentPrinter().bed;
+    const out: Uint8Array[] = [];
+    for (let i = 0; i < plates; i++) {
+      const b = new THREE.Box3(new THREE.Vector3(plateCenterX(i) - w / 2, -d / 2, -1e6), new THREE.Vector3(plateCenterX(i) + w / 2, d / 2, 1e6));
+      out.push((await thumbnail(b)) ?? new Uint8Array(0));
+    }
+    return out;
+  } catch {
+    // Ohne Vorschaubild geht der Export trotzdem
+    return [];
+  }
+}
+
 function transformed(positions: Float32Array, m: THREE.Matrix4): Float32Array {
   const out = new Float32Array(positions.length);
   const v = new THREE.Vector3();
@@ -3644,9 +3741,10 @@ async function exportAs(kind: string) {
             printer: bambuPrinter.value,
             plateCenter: onBed ? [0, 0] : undefined,
             plateCenters: onBed && plates > 1 ? Array.from({ length: plates }, (_, i) => [plateCenterX(i), 0] as [number, number]) : undefined,
+            thumbnails: await thumbnails(plates),
           },
         })
-        : await compute('write3mf', { parts: world, mode: 'multicolor' });
+        : await compute('write3mf', { parts: world, mode: 'multicolor', thumbnail: (await thumbnails(1))[0] });
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
       const slots = colorSlots(world);
       const objects = new Set(world.map((w) => w.object)).size;
@@ -3678,7 +3776,7 @@ async function exportAs(kind: string) {
     if (kind === 'stl') await download(toSTL(list), 'zusammengefuegt.stl');
     else if (kind === 'obj') await download(toOBJ(list), 'zusammengefuegt.obj');
     else {
-      const data = await compute('write3mf', { parts: body.map((p) => ({ name: p.name, positions: p.positions, color: '#cccccc' })), mode: 'single' });
+      const data = await compute('write3mf', { parts: body.map((p) => ({ name: p.name, positions: p.positions, color: '#cccccc' })), mode: 'single', thumbnail: (await thumbnails(1))[0] });
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
     }
   } catch (e) {

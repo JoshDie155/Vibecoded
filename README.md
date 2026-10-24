@@ -117,6 +117,8 @@ und Mausaktionen.
    - **STL, OBJ, 3MF (ein Körper)**: mit „Zu einem Körper vereinigen" werden die Teile per
      boolescher Vereinigung zu einem geschlossenen Netz (Überlappungen und Innenflächen verschwinden).
      Nicht geschlossene Teile werden unverändert angehängt und genannt.
+   - **Vorschaubild**: Jede 3MF-Datei bekommt ein Bild der Teile (schräg von vorne, ohne Hintergrund) – der
+     Bambu-Export eines je Druckplatte, wie Bambu Studio es in seiner Plattenliste und Dateivorschau zeigt.
 
 Mehr als zwei Teile: einfach weitere Verbindungen anlegen. Alles wird ausgehend vom **Basisteil**
 zusammengesetzt (Basis in der Teileliste wählbar).

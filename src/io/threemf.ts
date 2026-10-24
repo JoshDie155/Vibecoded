@@ -745,7 +745,8 @@ const settingLines = (settings: Record<string, string> | undefined, indent: stri
  * @param mode 'single': ein Körper aus allen Teilen (ohne Farben),
  *             'multicolor': ein Objekt aus mehreren Teilen mit je eigener Farbe/eigenem Extruder.
  */
-export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor'): Uint8Array {
+/** thumbnail: PNG als Vorschaubild (3MF-Standard, z. B. für Dateimanager und Slicer). */
+export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor', thumbnail?: Uint8Array): Uint8Array {
   const slots = colorSlots(parts);
   const vChunks: string[] = [];
   const tChunks: string[] = [];
@@ -785,15 +786,18 @@ export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor'): U
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
 <Default Extension="config" ContentType="text/xml"/>
+<Default Extension="png" ContentType="image/png"/>
 </Types>`;
   const rels = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>${thumbnail ? `
+<Relationship Target="/Metadata/thumbnail.png" Id="rel1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>` : ''}
 </Relationships>`;
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8(contentTypes),
     '_rels/.rels': strToU8(rels),
     '3D/3dmodel.model': strToU8(model),
+    ...(thumbnail ? { 'Metadata/thumbnail.png': thumbnail } : {}),
   };
   if (mode === 'multicolor') {
     // PrusaSlicer-Format (von Bambu Studio und OrcaSlicer ebenfalls gelesen): ein Objekt, Teile als
@@ -870,6 +874,8 @@ export interface BambuOptions {
    * Jedes Objekt kommt so auf seine Platte, wie es dort in PartJoin liegt.
    */
   plateCenters?: [number, number][];
+  /** Vorschaubilder (PNG) je Platte – Bambu Studio zeigt sie in der Plattenliste und beim Öffnen. */
+  thumbnails?: Uint8Array[];
   /** Versionsangabe für Bambu Studio (Format „BambuStudio-xx.xx.xx.xx"). */
   version?: string;
 }
@@ -1098,7 +1104,8 @@ ${configObjects.join('\n')}
 ${plateInstances.map((list, i) => `  <plate>
     <metadata key="plater_id" value="${i + 1}"/>
     <metadata key="plater_name" value=""/>
-    <metadata key="locked" value="false"/>
+    <metadata key="locked" value="false"/>${opts.thumbnails?.[i] ? `
+    <metadata key="thumbnail_file" value="Metadata/plate_${i + 1}.png"/>` : ''}
 ${list.join('\n')}
   </plate>`).join('\n')}
   <assemble>
@@ -1113,10 +1120,13 @@ ${assemble.join('\n')}
  <Default Extension="png" ContentType="image/png"/>
  <Default Extension="gcode" ContentType="text/x.gcode"/>
 </Types>`;
+  const thumbs = opts.thumbnails ?? [];
   const rels = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
- <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+ <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>${thumbs[0] ? `
+ <Relationship Target="/Metadata/plate_1.png" Id="rel-2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>` : ''}
 </Relationships>`;
+  for (const [i, png] of thumbs.entries()) if (png) files[`Metadata/plate_${i + 1}.png`] = png;
   const modelRels = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 ${subRels.join('\n')}
