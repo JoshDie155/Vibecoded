@@ -131,6 +131,8 @@ interface Joint {
   last?: { side: Side; rel: Rigid };
   /** Gewählte der gleich gut passenden Drehungen (0 = automatisch bestimmte). */
   turnIdx?: number;
+  /** Teile nur vorläufig automatisch eingetragen: der erste Klick bestimmt Teil 1, der zweite Teil 2. */
+  auto?: boolean;
 }
 
 const PART_COLORS = ['#8fa7c9', '#d9a066', '#88b98a', '#c58fb8', '#d7c46a', '#7fbfbf', '#c98f8f', '#a3a3d6'];
@@ -580,6 +582,7 @@ function ensureJoint() {
   const j = addJoint();
   j.a = a.id;
   j.b = b.id;
+  j.auto = true;
 }
 
 async function loadFiles(files: FileList | File[]) {
@@ -2133,6 +2136,12 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     if (parts.length < 2) { toast('Lade mindestens zwei Teile.'); return; }
     j = addJoint();
   }
+  // Automatisch angelegte, noch leere Verbindung: der erste Klick bestimmt Teil 1, der nächste Teil 2
+  if (j.auto && !j.applied && j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) {
+    j.a = h.part.id;
+    j.b = null;
+  }
+  j.auto = false;
   // Teile der Verbindung per Klick zuweisen, wenn noch nicht gewählt
   if (j.a === null && j.b !== h.part.id) j.a = h.part.id;
   else if (j.b === null && j.a !== h.part.id) j.b = h.part.id;
@@ -2453,7 +2462,17 @@ function renderHint() {
   if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
   else if (!j) el.textContent = 'Lege links eine Verbindung an.';
-  else if (j.a === null || j.b === null) el.textContent = 'Klicke die beiden Teile an, die verbunden werden sollen.';
+  else if (j.auto && !j.ma.length && !j.mb.length && !j.fa.length && !j.fb.length) {
+    el.textContent = {
+      face: 'Klicke die Kontaktfläche auf einem Teil – danach die passende Fläche auf dem Teil, das daran soll. Oder links „Alles automatisch verbinden".',
+      edge: 'Klicke eine gerade Kante auf einem Teil – danach die passende Kante auf dem Teil, das daran soll.',
+      point: 'Klicke markante Punkte auf einem Teil – danach dieselben Stellen auf dem Teil, das daran soll.',
+      brush: 'Male die Kontaktstelle auf einem Teil an – danach die passende Stelle auf dem Teil, das daran soll.',
+    }[pickMode];
+  } else if (j.a !== null && j.b === null) {
+    const what = { face: 'Fläche', edge: 'Kante', point: 'Stelle', brush: 'Stelle' }[pickMode];
+    el.textContent = `Jetzt die passende ${what} auf dem Teil anklicken, das an „${nameOf(j.a)}" soll.`;
+  } else if (j.a === null || j.b === null) el.textContent = 'Klicke die beiden Teile an, die verbunden werden sollen.';
   else if (j.applied) el.textContent = `Verbunden. Weitere ${what} verfeinern das Ergebnis live · Rechtsklick entfernt eine Auswahl.`;
   else if (pickMode === 'brush') {
     el.textContent = `Pinsel: mit gedrückter Maustaste über die Kontaktstelle auf „${nameOf(j.fa.length <= j.fb.length ? j.a : j.b)}" streichen – beim Loslassen wird daraus eine Fläche. Daneben ziehen dreht die Ansicht.`;
@@ -2741,6 +2760,7 @@ document.getElementById('panel')!.addEventListener('change', (e) => {
     case 'sel-b': {
       if (!j) break;
       const v = t.value ? Number(t.value) : null;
+      j.auto = false;
       if (t.dataset.act === 'sel-a') { j.a = v; j.ma = []; j.fa = []; } else { j.b = v; j.mb = []; j.fb = []; }
       j.applied = false;
       j.proposals = undefined;
