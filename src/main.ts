@@ -51,6 +51,8 @@ interface Part extends SlicerExtras {
   group?: string;
   /** Markante Flächen für automatische Vorschläge (wird erst bei Bedarf berechnet). */
   candidates?: Feature[];
+  /** Mit „Lage aus der Datei übernehmen" geladen: steht mit allen so geladenen Teilen gemeinsam auf der Platte. */
+  fromFile?: boolean;
 }
 
 /** Vorschlag für eine Verbindung: diese Fläche am einen Teil passt zu jener am anderen. */
@@ -165,10 +167,13 @@ const EDGE_PX = 10;
 const movedBy = new Map<number, number>();
 /** Von welchem Ausgangsteil aus wurde jedes Teil platziert (Teile mit gleichem Wert hängen zusammen). */
 const seedOf = new Map<number, number>();
+/** Um so viel hat der feste Boden jedes Teil angehoben (z, nach dem letzten solveAll). */
+const floorShift = new Map<number, number>();
 
 // ---------------------------------------------------------------- Szene
 
 const view = document.getElementById('view')!;
+const onFloor = document.getElementById('onFloor') as HTMLInputElement;
 const partsEl = document.getElementById('parts')!;
 const jointsEl = document.getElementById('joints')!;
 // Stencil-Puffer für die Darstellung farbiger Modifier (decor.ts)
@@ -440,6 +445,22 @@ const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt
 const hasFeatures = (j: Joint) => j.fa.length > 0 || j.fb.length > 0;
 const positionsOf = (p: Part) => p.geom.getAttribute('position').array as Float32Array;
 
+/** Tiefster Punkt eines Teils in der Lage M (Welt-z); je Drehung zwischengespeichert, Verschieben kostet nichts. */
+const lowCache = new WeakMap<Part, { key: string; z: number }>();
+function lowestZ(p: Part, M: THREE.Matrix4): number {
+  const e = M.elements;
+  const key = `${e[2]},${e[6]},${e[10]}`;
+  let c = lowCache.get(p);
+  if (c?.key !== key) {
+    const pos = positionsOf(p);
+    let z = Infinity;
+    for (let i = 0; i < pos.length; i += 3) z = Math.min(z, e[2] * pos[i] + e[6] * pos[i + 1] + e[10] * pos[i + 2]);
+    c = { key, z };
+    lowCache.set(p, c);
+  }
+  return c.z + e[14];
+}
+
 function rigidToMatrix(T: Rigid): THREE.Matrix4 {
   const R = T.R;
   return new THREE.Matrix4().set(R[0], R[1], R[2], T.t[0], R[3], R[4], R[5], T.t[1], R[6], R[7], R[8], T.t[2], 0, 0, 0, 1);
@@ -644,7 +665,8 @@ async function loadFiles(files: FileList | File[]) {
       const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
       for (const l of loaded) {
         const { paint, palette, modifiers, settings } = l;
-        addPart(l.name, l.geom, { color: l.color, group: l.group, layout, extras: { paint, palette, modifiers, settings } });
+        const part = addPart(l.name, l.geom, { color: l.color, group: l.group, layout, extras: { paint, palette, modifiers, settings } });
+        if (keep) part.fromFile = true;
       }
       if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
     } catch (e) {
@@ -848,8 +870,32 @@ function solveAll() {
   }
   deferred = [];
 
+  // Fester Boden: jede Baugruppe steht mit ihrem tiefsten Punkt auf der Druckplatte (z = 0). Teile mit
+  // der Lage aus der Datei bleiben dabei untereinander, wie sie geladen wurden (z. B. Kopf über Körper).
+  floorShift.clear();
+  if (onFloor.checked) {
+    const fileSeed = parts.find((p) => p.fromFile)?.id;
+    const unit = (p: Part) => (p.fromFile && fileSeed !== undefined ? seedOf.get(fileSeed) ?? fileSeed : seedOf.get(p.id) ?? p.id);
+    // Baugruppen, in denen ein Teil aus der Datei steckt, gehören zur selben Einheit
+    const merged = new Map<number, number>();
+    for (const p of parts) if (p.fromFile) merged.set(seedOf.get(p.id) ?? p.id, unit(p));
+    const key = (p: Part) => merged.get(seedOf.get(p.id) ?? p.id) ?? unit(p);
+    const low = new Map<number, number>();
+    for (const p of parts) low.set(key(p), Math.min(low.get(key(p)) ?? Infinity, lowestZ(p, placed.get(p.id) ?? p.layout)));
+    for (const p of parts) {
+      const z = low.get(key(p))!;
+      if (Number.isFinite(z) && z !== 0) floorShift.set(p.id, -z);
+    }
+    // Freie Bewegungen der Verbindungen liegen in Weltkoordinaten: mit anheben
+    for (const j of joints) {
+      const dz = j.a !== null ? floorShift.get(j.a) : undefined;
+      if (dz && j.free) j.free = j.free.map((m) => (m.kind === 'rotate' ? { ...m, point: [m.point[0], m.point[1], m.point[2] + dz] as Vec3 } : m));
+    }
+  }
   for (const p of parts) {
     p.mesh.matrix.copy(placed.get(p.id) ?? p.layout);
+    const dz = floorShift.get(p.id);
+    if (dz) p.mesh.matrix.premultiply(new THREE.Matrix4().makeTranslation(0, 0, dz));
     p.mesh.matrixWorldNeedsUpdate = true;
     p.mesh.updateMatrixWorld(true);
   }
@@ -1415,7 +1461,8 @@ tc.addEventListener('dragging-changed', (e) => {
     dragStart = {
       anchor: gizmoAnchor.matrixWorld.clone(),
       adjust: j?.adjust ?? IDENTITY,
-      layouts: new Map((p ? groupOf(p) : []).map((q) => [q.id, q.layout.clone()])),
+      // Anhebung durch den Boden übernehmen, sonst verschöbe ein Drehen das Teil seitlich
+      layouts: new Map((p ? groupOf(p) : []).map((q) => [q.id, new THREE.Matrix4().makeTranslation(0, 0, floorShift.get(q.id) ?? 0).multiply(q.layout)])),
     };
   } else {
     dragStart = null;
@@ -1508,8 +1555,10 @@ function updateGizmoAxes() {
   const hint = document.getElementById('gizmoHint')!;
   tc.showX = tc.showY = tc.showZ = true;
   if (!motions) {
-    gizmoLocked = [false, false, false];
-    hint.textContent = '';
+    // Fester Boden: die Höhe eines Teils (einer Baugruppe) gibt die Druckplatte vor
+    const floorLock = onFloor.checked && gizmoTarget?.kind === 'part' && gizmoMode === 'translate';
+    gizmoLocked = [false, false, floorLock];
+    hint.textContent = floorLock ? 'Die Höhe gibt die Druckplatte vor (grau gestrichelt). Zum freien Anheben „Auf die Druckplatte stellen" ausschalten.' : '';
     return;
   }
   const axes = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
@@ -2958,6 +3007,15 @@ function setBambuPrinter(id: string) {
   try { localStorage.setItem('partjoin.bambuPrinter', id); } catch { /* ohne Speicher */ }
 }
 bambuPrinter.addEventListener('change', () => setBambuPrinter(bambuPrinter.value));
+
+onFloor.addEventListener('change', () => {
+  // Ausschalten: alles bleibt, wo es gerade steht (die Anhebung wird Teil der Ausgangslage)
+  if (!onFloor.checked) for (const p of parts) p.layout.premultiply(new THREE.Matrix4().makeTranslation(0, 0, floorShift.get(p.id) ?? 0));
+  solveAll();
+  if (gizmoTarget) placeGizmo();
+  renderAll();
+  toast(onFloor.checked ? 'Jede Baugruppe steht jetzt auf der Druckplatte.' : 'Teile bleiben frei im Raum, wo sie gerade sind.');
+});
 
 document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
   b.addEventListener('click', () => void exportAs(b.dataset.export ?? 'stl')),

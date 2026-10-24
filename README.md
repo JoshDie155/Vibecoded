@@ -14,6 +14,13 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    bilden eine Gruppe (⛓) und bewegen sich gemeinsam; jedes Teil lässt sich aus seiner Gruppe lösen
    und per Farbwähler umfärben. Liegen die Teile in den Dateien schon richtig zueinander,
    „Lage aus der Datei übernehmen" anhaken.
+   **Fester Boden** („Auf die Druckplatte stellen", Standard): Jede Baugruppe – alles, was über
+   Verbindungen oder Gruppen zusammenhängt – steht mit ihrem tiefsten Punkt auf der Druckplatte,
+   egal welches Teil die Basis ist. So schwebt im Slicer nichts, obwohl der Export ein einziges
+   Objekt ist. Teile, die mit „Lage aus der Datei übernehmen" geladen wurden, stehen gemeinsam auf der
+   Platte und bleiben untereinander, wie sie in den Dateien liegen (z. B. Kopf über Körper). Das Gizmo
+   verschiebt Teile dann nur über die Platte; zum freien Anheben den Haken entfernen – alles bleibt
+   dabei, wo es steht.
    Aus Slicer-Projekten kommen auch **Aufschriften und Logos als Modifier** (z. B. eingelassener Text
    in anderem Filament), **Farbbemalung**, Fuzzy-Skin-, Stützen- und Naht-Bemalung sowie die
    Druckeinstellungen je Teil mit: Sie werden angezeigt (die Oberfläche erscheint dort in der

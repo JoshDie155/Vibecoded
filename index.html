@@ -28,6 +28,9 @@
             <label class="check small" title="3MF-Dateien mit mehreren Objekten oder Teilen (z. B. aus Bambu Studio, OrcaSlicer, PrusaSlicer) und GLB/OBJ mit mehreren Netzen werden in einzelne Teile mit ihrer Farbe zerlegt.">
               <input type="checkbox" id="splitParts" checked /> Mehrteilige Dateien in Teile zerlegen
             </label>
+            <label class="check small" title="Fester Boden: Jede Baugruppe (alles, was zusammenhängt) steht mit ihrem tiefsten Punkt auf der Druckplatte – in PartJoin und im Export für den Slicer. Teile mit „Lage aus der Datei" stehen gemeinsam darauf und bleiben untereinander, wie sie geladen wurden. Ausschalten, um Teile frei im Raum zu lassen.">
+              <input type="checkbox" id="onFloor" checked /> Auf die Druckplatte stellen
+            </label>
           </div>
           <div id="partsBar" class="partsbar" hidden>
             <button id="partsToggle" class="icon fold" aria-expanded="true" aria-controls="parts" title="Teileliste ein- oder ausklappen">▾</button>
