@@ -185,13 +185,16 @@ button.icon:hover { color: var(--err); }
 button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
-#toolbar, #gizmoBar {
+#toolbar, #gizmoBar, #fitBar {
   position: absolute; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   max-width: calc(100% - 20px);
   background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
 }
 #toolbar { top: 10px; }
-#gizmoBar { top: 58px; font-size: 12.5px; }
+#gizmoBar, #fitBar { top: 58px; font-size: 12.5px; }
+#fitBar input[type='number'] { width: 76px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
+#fitBar .help { margin: 0; flex-basis: 100%; }
+#fitBar .help:empty { display: none; }
 #checkResult { margin: 8px 0 12px; font-size: 12.5px; display: grid; gap: 6px; }
 #checkResult:empty { display: none; }
 #checkResult .legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); }

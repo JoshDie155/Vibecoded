@@ -28,7 +28,8 @@ export interface ProjectPart {
   palette?: string[];
   settings?: Record<string, string>;
   objectSettings?: Record<string, string>;
-  modifiers?: (Omit<Modifier, 'positions'> & { geometry: string })[];
+  /** Modifier: Netz (geometry) und bei Text sein Netz in eigenen Koordinaten (localGeometry). */
+  modifiers?: (Omit<Modifier, 'positions' | 'local'> & { geometry: string; localGeometry?: string })[];
 }
 
 export interface ProjectData {
@@ -85,7 +86,10 @@ export function referencedKeys(data: ProjectData): Set<string> {
   const keys = new Set<string>();
   for (const p of data.parts) {
     keys.add(p.geometry);
-    for (const m of p.modifiers ?? []) keys.add(m.geometry);
+    for (const m of p.modifiers ?? []) {
+      keys.add(m.geometry);
+      if (m.localGeometry) keys.add(m.localGeometry);
+    }
   }
   return keys;
 }

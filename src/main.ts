@@ -7,7 +7,7 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } fro
 import { type Rigid, type Vec3, IDENTITY, compose, rotate, rotationAbout } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
-import { type CylinderFeature, type EdgeFeature, type Feature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, transformFeature } from './math/features';
+import { type CylinderFeature, type EdgeFeature, type Feature, type PlaneFeature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, transformFeature } from './math/features';
 import { detectEdge } from './math/edges';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
@@ -18,6 +18,7 @@ import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag } from './math/mate';
 import { fitFeatures } from './math/fit';
 import { layFlat } from './math/orient';
+import { offsetCylinder, offsetPlane } from './math/offset';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
 import { BAMBU_PRINTERS, type ColoredPart, type SlicerExtras, colorSlots } from './io/threemf';
@@ -153,6 +154,9 @@ let baseId: number | null = null;
 let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
+/** Werkzeug im 3D-Fenster (siehe setTool) und die im Passungs-Werkzeug gewählte Fläche. */
+let tool: 'lay' | 'fit' | null = null;
+let fitTarget: { part: Part; f: CylinderFeature | PlaneFeature } | null = null;
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
 let hiddenFolded = false;
 /** Teileliste eingeklappt (bleibt im Browser gespeichert). */
@@ -334,7 +338,7 @@ function stateSig(): string {
   const fs = (f: PickedFeature) => [f.kind, f.on ?? 0, f.tris[0], f.tris.length, f.pieces?.length ?? 0];
   return JSON.stringify([
     baseId,
-    parts.map((p) => [p.id, p.name, p.visible, p.color.getHexString(), p.group ?? '', p.layout.elements.map(r)]),
+    parts.map((p) => [p.id, p.geom.uuid, p.name, p.visible, p.color.getHexString(), p.group ?? '', p.layout.elements.map(r)]),
     joints.map((j) => [
       j.id, j.a, j.b, j.applied, j.alt, j.seat, j.ordered, j.normals, j.overlap, j.spin, j.turnIdx ?? 0, j.proposalIdx ?? 0,
       j.adjust ? [...j.adjust.R, ...j.adjust.t].map(r) : 0,
@@ -583,7 +587,7 @@ function nextLayout(bb: THREE.Box3): THREE.Matrix4 {
 
 function addPart(
   name: string, geom: THREE.BufferGeometry,
-  opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras; samples?: Sample[] } = {},
+  opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras; samples?: Sample[]; id?: number } = {},
 ) {
   if (!geom.boundsTree) geom.computeBoundsTree();
   const color = new THREE.Color(opts.color ?? PART_COLORS[(nextPartId - 1) % PART_COLORS.length]);
@@ -599,7 +603,7 @@ function addPart(
   mesh.matrixWorldNeedsUpdate = true;
 
   const part: Part = {
-    id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: opts.samples ?? sampleSurface(geom, 6000), group: opts.group, ...opts.extras,
+    id: opts.id ?? nextPartId++, name, geom, mesh, color, layout, visible: true, samples: opts.samples ?? sampleSurface(geom, 6000), group: opts.group, ...opts.extras,
   };
   decorate(mesh, part);
   mesh.userData.partId = part.id;
@@ -1994,6 +1998,8 @@ function usableFor(j: Joint | undefined, part: Part) {
 
 function updateHover(h: Hit | null, anyFace = false) {
   hoverLine.visible = false;
+  // Während das Passungs-Feld offen ist, bleibt die gewählte Fläche markiert
+  if (fitTarget) return;
   if (pickMode === 'brush' && !anyFace) return;
   if (!h || (!anyFace && (pickMode === 'point' || !(usableFor(activeJoint(), h.part) || helperSide(activeJoint(), h.part))))) {
     hoverMesh.visible = false;
@@ -2248,8 +2254,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
   const h = pick(e);
   hoverName(e, h?.part ?? null);
-  if (layMode) {
-    // Auf Fläche legen: jede Fläche jedes Teils
+  if (tool) {
+    // Werkzeug (Auf Fläche legen, Passung): jede Fläche jedes Teils
     cursor.visible = false;
     updateHover(h, true);
     renderer.domElement.style.cursor = h ? 'pointer' : 'default';
@@ -2281,8 +2287,12 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const h = pick(e);
   if (!h) return;
-  if (layMode) {
+  if (tool === 'lay') {
     layOnFace(h);
+    return;
+  }
+  if (tool === 'fit') {
+    pickFit(h);
     return;
   }
   if (e.shiftKey) {
@@ -2440,8 +2450,9 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'f') setPickMode('face');
   else if (k === 'k') setPickMode('edge');
   else if (k === 'b') setPickMode('brush');
-  else if (k === 'l') setLayMode(!layMode);
-  else if (layMode && k === 'escape') setLayMode(false);
+  else if (k === 'l') setTool(tool === 'lay' ? null : 'lay');
+  else if (k === 't') setTool(tool === 'fit' ? null : 'fit');
+  else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
     updateGizmoAxes();
@@ -2621,7 +2632,8 @@ function renderHint() {
   const el = document.getElementById('hint')!;
   const j = activeJoint();
   const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
-  if (layMode) el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
+  if (tool === 'lay') el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
+  else if (tool === 'fit') el.textContent = fitTarget ? 'Wert oben eingeben und „Übernehmen" – oder eine andere Fläche anklicken. Esc bricht ab.' : 'Klicke einen Zapfen, eine Bohrung oder eine ebene Fläche an, deren Passung du ändern willst. Esc bricht ab.';
   else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
   else if (!j) el.textContent = 'Lege links eine Verbindung an.';
@@ -3133,7 +3145,12 @@ async function exportAs(kind: string) {
     // Jede Baugruppe ein eigenes Objekt im Slicer, benannt nach ihrem ersten Teil
     object: String(unitOf.get(p.id) ?? p.id),
     objectName: getPart(unitOf.get(p.id) ?? p.id)?.name,
-    modifiers: p.modifiers?.map((m) => ({ ...m, positions: transformed(m.positions, p.mesh.matrixWorld) })),
+    modifiers: p.modifiers?.map((m) => ({
+      ...m,
+      positions: transformed(m.positions, p.mesh.matrixWorld),
+      // Text: Lage mitziehen, das eigene Netz bleibt
+      transform: m.transform && new THREE.Matrix4().fromArray(m.transform).premultiply(p.mesh.matrixWorld).toArray(),
+    })),
   }));
   try {
     if (kind === '3mf-color' || kind === '3mf-bambu') {
@@ -3182,16 +3199,22 @@ async function exportAs(kind: string) {
 
 // ---------------------------------------------------------------- Druckausrichtung
 
-/** „Auf Fläche legen": der nächste Klick wählt die Fläche, die unten auf der Druckplatte liegen soll. */
-let layMode = false;
+/**
+ * Werkzeuge im 3D-Fenster: „Auf Fläche legen" (der nächste Klick wählt die Fläche, die unten liegen soll)
+ * und „Passung" (Klick auf Zapfen, Bohrung oder ebene Fläche, dann Maß eingeben).
+ */
 const layBtn = document.getElementById('layFlat')!;
-function setLayMode(on: boolean) {
-  layMode = on && parts.length > 0;
-  layBtn.classList.toggle('on', layMode);
-  if (!layMode) updateHover(null);
+const fitBtn = document.getElementById('fitTool')!;
+function setTool(t: typeof tool) {
+  tool = t && parts.length > 0 ? t : null;
+  layBtn.classList.toggle('on', tool === 'lay');
+  fitBtn.classList.toggle('on', tool === 'fit');
+  if (tool !== 'fit') closeFit();
+  if (!tool) updateHover(null);
   renderHint();
 }
-layBtn.addEventListener('click', () => setLayMode(!layMode));
+layBtn.addEventListener('click', () => setTool(tool === 'lay' ? null : 'lay'));
+fitBtn.addEventListener('click', () => setTool(tool === 'fit' ? null : 'fit'));
 
 /** Teile der Baugruppe (siehe unitOf), zu der p gehört. */
 function unitMembers(p: Part): Part[] {
@@ -3236,7 +3259,7 @@ function layOnFace(h: Hit) {
   const members = unitMembers(h.part);
   const c = unitBox(members).getCenter(new THREE.Vector3());
   turnUnit(members, layFlat([n.x, n.y, n.z], [c.x, c.y, c.z]));
-  setLayMode(false);
+  setTool(null);
   renderAll();
   toast(`${unitName(members)} liegt jetzt mit dieser Fläche auf der Druckplatte.${f.kind === 'surface' ? ' (gekrümmte Fläche: ausgerichtet nach ihrer mittleren Richtung)' : ''}`, 5000);
 }
@@ -3296,6 +3319,127 @@ function worldPositions(members: Part[]): Float32Array {
   return out;
 }
 
+// ---------------------------------------------------------------- Passung
+
+const fitBar = document.getElementById('fitBar')!;
+const fitValue = document.getElementById('fitValue') as HTMLInputElement;
+
+function closeFit() {
+  fitTarget = null;
+  fitBar.hidden = true;
+  updateHover(null);
+}
+
+const mm2 = (x: number) => x.toFixed(2).replace('.', ',');
+
+function pickFit(h: Hit) {
+  const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
+  if (f.kind !== 'cylinder' && f.kind !== 'plane') {
+    toast('Passung geht für Zapfen, Bohrungen und ebene Flächen – hier ist eine Freiformfläche.');
+    return;
+  }
+  fitTarget = null;
+  updateHover(h, true);
+  fitTarget = { part: h.part, f };
+  const quick = document.getElementById('fitQuick')!;
+  const help = document.getElementById('fitHelp')!;
+  if (f.kind === 'cylinder') {
+    const d = 2 * f.radius;
+    document.getElementById('fitTitle')!.textContent = `${f.hole ? 'Bohrung' : 'Zapfen'} ⌀ ${mm2(d)} mm · ${h.part.name}`;
+    document.getElementById('fitLabel')!.textContent = 'Neuer Durchmesser';
+    fitValue.value = d.toFixed(2);
+    // Zapfen dünner, Bohrung weiter
+    const sign = f.hole ? 1 : -1;
+    quick.innerHTML = [0.1, 0.2, 0.3].map((x) => `<button class="ghost small" data-fit="${(d + sign * x).toFixed(2)}">${sign > 0 ? '+' : '−'}${mm2(x).replace(/0$/, '')}</button>`).join('');
+    help.textContent = f.hole
+      ? 'Die Bohrung wird weiter – für ein Gegenstück, das sich später hineinstecken lässt.'
+      : 'Der Zapfen wird dünner – üblich sind 0,1–0,3 mm, damit getrennt gedruckte Teile ineinanderpassen.';
+  } else {
+    document.getElementById('fitTitle')!.textContent = `Ebene Fläche · ${h.part.name}`;
+    document.getElementById('fitLabel')!.textContent = 'Zurücksetzen um';
+    fitValue.value = '0.20';
+    quick.innerHTML = [0.1, 0.2, 0.3].map((x) => `<button class="ghost small" data-fit="${x.toFixed(2)}">${mm2(x).replace(/0$/, '')}</button>`).join('');
+    help.textContent = 'Die Fläche wandert ins Teil hinein und lässt so viel Spalt zum Gegenstück (negativ: nach außen).';
+  }
+  fitBar.hidden = false;
+  fitValue.focus();
+  fitValue.select();
+  renderHint();
+}
+
+document.getElementById('fitQuick')!.addEventListener('click', (e) => {
+  const v = (e.target as HTMLElement).closest<HTMLElement>('[data-fit]')?.dataset.fit;
+  if (v) fitValue.value = v;
+});
+document.getElementById('fitCancel')!.addEventListener('click', () => setTool(null));
+document.getElementById('fitApply')!.addEventListener('click', () => applyFit());
+fitValue.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyFit();
+  if (e.key === 'Escape') setTool(null);
+});
+
+function applyFit() {
+  if (!fitTarget) return;
+  const { part, f } = fitTarget;
+  const v = Number(fitValue.value.replace(',', '.'));
+  if (!Number.isFinite(v)) { toast('Bitte eine Zahl eingeben.'); return; }
+  const topo = topologyOf(part);
+  let res;
+  let text: string;
+  if (f.kind === 'cylinder') {
+    const d = 2 * f.radius;
+    if (!(v > 0) || Math.abs(v - d) > Math.max(2, d * 0.3)) { toast(`Der neue Durchmesser sollte nahe bei ${mm2(d)} mm liegen.`); return; }
+    if (Math.abs(v - d) < 0.005) { setTool(null); return; }
+    res = offsetCylinder(topo, f, v / 2);
+    text = `${f.hole ? 'Bohrung' : 'Zapfen'} jetzt ⌀ ${mm2(v)} mm (vorher ${mm2(d)} mm).`;
+  } else {
+    if (Math.abs(v) > 3) { toast('Mehr als 3 mm ist keine Passung mehr – bitte einen kleineren Wert.'); return; }
+    if (Math.abs(v) < 0.005) { setTool(null); return; }
+    res = offsetPlane(topo, f, -v);
+    text = v > 0 ? `Fläche um ${mm2(v)} mm zurückgesetzt.` : `Fläche um ${mm2(-v)} mm vorgezogen.`;
+  }
+  // Kippen Nachbarflächen um, wäre das Teil kaputt – winzige Splitter einer Deckel-Triangulierung sind harmlos
+  const area = f.area;
+  if (res.flippedArea > Math.max(0.5, area * 0.02)) {
+    toast('So viel geht nicht: angrenzende Flächen würden umklappen. Bitte einen kleineren Wert.', 6000);
+    return;
+  }
+  beginAction();
+  replaceGeometry(part, res.positions);
+  setTool(null);
+  solveAll();
+  renderAll();
+  if (checkOn) void runCheck();
+  toast(`${text} Strg+Z macht es rückgängig.`, 6000);
+}
+
+/**
+ * Teil mit neuer Form (gleiche Dreiecke, andere Eckpunkte): ein neues Teil-Objekt mit derselben Id an
+ * seiner Stelle. Das alte bleibt für „Rückgängig" erhalten; Verbindungen bleiben, wo sie sind.
+ */
+function replaceGeometry(old: Part, positions: Float32Array): Part {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  g.computeVertexNormals();
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  const fresh = addPart(old.name, g, {
+    id: old.id, color: `#${old.color.getHexString()}`, group: old.group, layout: old.layout,
+    extras: { paint: old.paint, palette: old.palette, modifiers: old.modifiers, settings: old.settings, objectSettings: old.objectSettings },
+  });
+  fresh.visible = old.visible;
+  fresh.mesh.visible = old.visible;
+  if (old.fromFile) fresh.fromFile = true;
+  parts.splice(parts.indexOf(fresh), 1);
+  parts.splice(parts.indexOf(old), 1, fresh);
+  scene.remove(old.mesh);
+  removedParts.add(old);
+  if (gizmoTarget) closeGizmo();
+  // Zwischengespeicherte Netze der Gegenstücke neu aufbauen
+  for (const j of joints) mergedTargets.delete(j);
+  return fresh;
+}
+
 // ---------------------------------------------------------------- Projekt speichern / öffnen
 
 /** Schlüssel der Netze eines Teils in Projektdatei und Sitzungssicherung (bleibt für das Teil gleich). */
@@ -3320,9 +3464,10 @@ function projectState(): { data: ProjectData; blobs: Blobs } {
       id: p.id, name: p.name, color: `#${p.color.getHexString()}`, group: p.group, layout: p.layout.toArray(),
       visible: p.visible, fromFile: p.fromFile, geometry: key,
       paint: p.paint, palette: p.palette, settings: p.settings, objectSettings: p.objectSettings,
-      modifiers: p.modifiers?.map(({ positions, ...m }, i) => {
+      modifiers: p.modifiers?.map(({ positions, local, ...m }, i) => {
         blobs.set(`${key}-m${i}`, positions);
-        return { ...m, geometry: `${key}-m${i}` };
+        if (local) blobs.set(`${key}-l${i}`, local);
+        return { ...m, geometry: `${key}-m${i}`, localGeometry: local ? `${key}-l${i}` : undefined };
       }),
     };
   });
@@ -3362,7 +3507,9 @@ function openProject(data: ProjectData, blobs: Blobs) {
     g.computeVertexNormals();
     g.computeBoundingBox();
     g.computeBoundingSphere();
-    const modifiers = sp.modifiers?.map(({ geometry, ...m }) => ({ ...m, positions: blobs.get(geometry)! }));
+    const modifiers = sp.modifiers?.map(({ geometry, localGeometry, ...m }) => ({
+      ...m, positions: blobs.get(geometry)!, ...(localGeometry ? { local: blobs.get(localGeometry) } : {}),
+    }));
     const p = addPart(sp.name, g, {
       color: sp.color, group: sp.group, layout: new THREE.Matrix4().fromArray(sp.layout),
       extras: { paint: sp.paint, palette: sp.palette, modifiers, settings: sp.settings, objectSettings: sp.objectSettings },

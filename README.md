@@ -74,6 +74,11 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
    was schon gut liegt, bleibt. Von Hand: oben „Auf Fläche legen" (Taste L), dann die Fläche
    anklicken, die unten liegen soll – die ganze Baugruppe dreht sich mit. Strg+Z macht beides rückgängig.
+   **Passung**: oben „Passung" (Taste T), dann einen Zapfen, eine Bohrung oder eine ebene Fläche
+   anklicken und das neue Maß eingeben – z. B. Zapfen 0,2 mm dünner (Schnellknöpfe −0,1/−0,2/−0,3),
+   Bohrung weiter oder eine Fläche zurücksetzen. Nur die Form ändert sich, die Verbindungen bleiben,
+   wo sie sind; so entsteht genau dieser Spalt (gut für getrennt gedruckte Steckteile oder bewegliche
+   Gelenke). Strg+Z macht es rückgängig.
 5. **Exportieren**
    - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): **jede Baugruppe ein eigenes
      Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in PartJoin und
@@ -84,7 +89,8 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
      Bambu Studio ab 2.8.2 nur die Geometrie.
      Der Drucker eines geladenen Bambu-Projekts wird vorausgewählt.
      Modifier (Aufschriften, negative Volumen, Stützen-Volumen), Bemalung und Druckeinstellungen je
-     Teil (Wände, Infill, Muster …) bleiben erhalten; die Filamentnummern werden dabei auf die
+     Teil (Wände, Infill, Muster …) bleiben erhalten; Texte aus Bambu Studio bleiben dort bearbeitbar
+     (Textangaben, eigenes Netz und Lage werden mitgeschrieben); die Filamentnummern werden dabei auf die
      Filamente des Exports umgestellt. Einstellungen, die nur für ein ganzes Objekt gelten (z. B.
      Schichthöhe, Brim), bleiben erhalten, solange alle Teile eines Objekts dieselben Werte mitbringen;
      sonst gilt das Druckprofil.
@@ -182,4 +188,3 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 ## Ideen für später
 
 - CAD-Formate STEP/IGES (z. B. über `occt-import-js`)
-- Passungshilfe (Zapfen gezielt dünner machen)

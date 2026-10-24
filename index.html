@@ -106,10 +106,19 @@
           </span>
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
+          <button id="fitTool" class="ghost small" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)">Passung</button>
           <button id="layFlat" class="ghost small" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)">Auf Fläche legen</button>
           <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen.">Gesamtes Modell bewegen</button>
         </div>
         <div id="tip" hidden></div>
+        <div id="fitBar" hidden>
+          <strong id="fitTitle"></strong>
+          <label class="small"><span id="fitLabel"></span> <input type="number" id="fitValue" step="0.05" /> mm</label>
+          <span class="row" id="fitQuick"></span>
+          <button id="fitApply" class="small">Übernehmen</button>
+          <button id="fitCancel" class="ghost small">Abbrechen</button>
+          <p class="help" id="fitHelp"></p>
+        </div>
         <div id="gizmoBar" hidden>
           <strong data-g="title"></strong>
           <span class="seg" role="group" aria-label="Gizmo-Modus">

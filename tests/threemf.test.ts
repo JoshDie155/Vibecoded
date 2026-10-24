@@ -517,3 +517,54 @@ describe('write3MFBambu: ein Objekt je Baugruppe', () => {
     expect(cfg).not.toContain('layer_height');
   });
 });
+
+describe('Text-Modifier (Bambu Studio): bleibt bearbeitbar', () => {
+  // Schild mit Text-Modifier: Netz in Textkoordinaten, Lage über die Komponente (um 90° um x gedreht, verschoben)
+  const plate = box(40, 10, 2);
+  const letters = box(10, 4, 0.5);
+  const tf = '1 0 0 0 0 1 0 -1 0 5 -1 0.2';
+  const textInfo = '<text_info text="Hallo" font_name="Unispace" font_version="2.3" style_name="Recommend" font_size="10" thickness="0.5" embeded_depth="0" surface_type="0" />';
+  const project = () => zipSync({
+    '_rels/.rels': strToU8(RELS),
+    '3D/3dmodel.model': strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+<resources><object id="3" type="model"><components>
+<component p:path="/3D/Objects/object_1.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+<component p:path="/3D/Objects/object_1.model" objectid="2" transform="${tf}"/>
+</components></object></resources>
+<build><item objectid="3" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/></build></model>`),
+    '3D/Objects/object_1.model': strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+<resources><object id="1" type="model">${meshXml(plate)}</object><object id="2" type="model">${meshXml(letters)}</object></resources><build/></model>`),
+    'Metadata/model_settings.config': strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<config><object id="3"><metadata key="name" value="Schild"/><metadata key="extruder" value="1"/>
+<part id="1" subtype="normal_part"><metadata key="name" value="Schild"/></part>
+<part id="2" subtype="modifier_part"><metadata key="name" value="text_shape"/><metadata key="extruder" value="2"/>
+${textInfo}
+</part></object></config>`),
+    'Metadata/project_settings.config': strToU8(JSON.stringify({ filament_colour: ['#0000FF', '#FFFFFF'] })),
+  });
+
+  it('liest Textangaben, eigenes Netz und Lage', () => {
+    const m = read3MF(project())[0].modifiers![0];
+    expect(m.textInfo).toBe(textInfo);
+    expect(Array.from(m.local!)).toEqual(Array.from(letters));
+    expect(m.transform).toEqual([1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 5, -1, 0.2, 1]);
+  });
+
+  it('schreibt den Text in eigenen Koordinaten mit Lage und Textangaben zurück', () => {
+    const [p] = read3MF(project());
+    const files = unzipSync(write3MFBambu([{ ...p, color: p.color! }]));
+    const cfg = strFromU8(files['Metadata/model_settings.config']);
+    expect(cfg).toContain(textInfo);
+    const main = strFromU8(files['3D/3dmodel.model']);
+    const transforms = [...main.matchAll(/<component [^>]*transform="([^"]+)"/g)].map((m) => m[1]);
+    expect(transforms[1]).not.toBe('1 0 0 0 1 0 0 0 1 0 0 0');
+    // Zurückgelesen: dasselbe eigene Netz, dieselbe Lage relativ zum Schild
+    const back = read3MF(write3MFBambu([{ ...p, color: p.color! }]))[0];
+    const mb = back.modifiers![0];
+    expect(Array.from(mb.local!).map((x) => +x.toFixed(4))).toEqual(Array.from(letters).map((x) => +x.toFixed(4)));
+    const shift = [0, 1, 2].map((k) => back.positions[k] - p.positions[k]);
+    for (let i = 0; i < mb.positions.length; i++) expect(mb.positions[i] - p.modifiers![0].positions[i] - shift[i % 3]).toBeCloseTo(0, 4);
+  });
+});

@@ -47,6 +47,14 @@ export interface Modifier {
   color?: string;
   /** Übrige Einstellungen des Modifiers. */
   settings: Record<string, string>;
+  /**
+   * Nur bei Text (Bambu Studio): Textangaben (das text_info-Element), das Netz in eigenen Koordinaten
+   * und seine Lage (4×4 spaltenweise, eigene Koordinaten → Koordinaten von positions). Damit bleibt der
+   * Text nach dem Export in Bambu Studio bearbeitbar – es erzeugt ihn in diesen Koordinaten neu.
+   */
+  textInfo?: string;
+  local?: Float32Array;
+  transform?: number[];
 }
 
 export interface ImportedPart extends SlicerExtras {
@@ -152,6 +160,14 @@ function mul(a: M12, b: M12): M12 {
     a[9] * b[2] + a[10] * b[5] + a[11] * b[8] + b[11],
   ];
 }
+
+/** 3MF-Matrix (Zeilenvektoren, Verschiebung in Modelleinheiten) → 4×4 spaltenweise in mm. */
+function m12ToMatrix(tf: M12, scale: number): number[] {
+  return [tf[0], tf[1], tf[2], 0, tf[3], tf[4], tf[5], 0, tf[6], tf[7], tf[8], 0, tf[9] * scale, tf[10] * scale, tf[11] * scale, 1];
+}
+
+/** 4×4 spaltenweise → 3MF-Matrix (transform-Attribut). */
+const matrixToM12 = (e: number[]) => [e[0], e[1], e[2], e[4], e[5], e[6], e[8], e[9], e[10], e[12], e[13], e[14]];
 
 function normColor(c: string | undefined): string | undefined {
   if (!c) return undefined;
@@ -271,7 +287,7 @@ interface SlicerObject {
   /** Einstellungen, die nur je Objekt gelten (OBJECT_KEYS) */
   objectSettings: Record<string, string>;
   /** Bambu/Orca: Teil-ID (= objectid der Komponente) → Name/Extruder/Art/Einstellungen */
-  parts: Map<string, { name?: string; extruder?: number; subtype?: string; settings: Record<string, string> }>;
+  parts: Map<string, { name?: string; extruder?: number; subtype?: string; settings: Record<string, string>; textInfo?: string }>;
   /** PrusaSlicer: Dreiecksbereiche im Netz des Objekts */
   volumes: { first: number; last: number; name?: string; extruder?: number; subtype?: string }[];
 }
@@ -382,6 +398,7 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
         if (pa.id) {
           entry.parts.set(pa.id, {
             name: md.name, extruder: md.extruder ? Number(md.extruder) : undefined, subtype: pa.subtype, settings: regionSettings(md),
+            textInfo: /<text_info\b[^>]*?\/>/.exec(p[2])?.[0],
           });
         }
       }
@@ -578,10 +595,17 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
       const part = meta.slicer?.parts.get(id);
       if (part?.subtype && MODIFIER_SUBTYPES.has(part.subtype)) {
         // Modifier, negative Volumen, Stützen-Volumen: kein eigenes Teil, gehört zum Objekt
-        modifiers.push({
+        const m: Modifier = {
           name: stripExt(part.name ?? obj.name ?? 'Modifier'), subtype: part.subtype,
           positions: place(model, obj.mesh, allTris(obj.mesh), tf), color: extruderColor(part.extruder), settings: part.settings,
-        });
+        };
+        if (part.textInfo) {
+          // Text: Netz in eigenen Koordinaten und seine Lage merken (siehe Modifier.textInfo)
+          m.textInfo = part.textInfo;
+          m.local = place(model, obj.mesh, allTris(obj.mesh), IDENT);
+          m.transform = m12ToMatrix(tf, model.scale);
+        }
+        modifiers.push(m);
       } else {
         const name = part?.name ?? obj.name ?? meta.name ?? 'Teil';
         const color = extruderColor(part?.extruder) ?? meta.color;
@@ -938,11 +962,18 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
     const sub: string[] = [];
     const components: string[] = [];
     const settings: string[] = [];
-    /** Netz als eigenes Objekt in der Unterdatei plus Komponente im Objekt. */
-    const meshObject = (positions: Float32Array, triAttrs?: (src: number) => string) => {
+    /**
+     * Netz als eigenes Objekt in der Unterdatei plus Komponente im Objekt. Mit place (4×4, spaltenweise,
+     * Weltkoordinaten) bleibt das Netz in eigenen Koordinaten und die Komponente bekommt diese Lage.
+     */
+    const meshObject = (positions: Float32Array, triAttrs?: (src: number) => string, place?: number[]) => {
       const id = nextId++;
       const local = new Float32Array(positions.length);
-      for (let k = 0; k < local.length; k++) local[k] = positions[k] - o[k % 3];
+      if (place) local.set(positions);
+      else for (let k = 0; k < local.length; k++) local[k] = positions[k] - o[k % 3];
+      const transform = place
+        ? matrixToM12([...place.slice(0, 12), place[12] - o[0], place[13] - o[1], place[14] - o[2], 1]).map(f5).join(' ')
+        : '1 0 0 0 1 0 0 0 1 0 0 0';
       const { verts, tris, kept } = weld(local);
       const v: string[] = [];
       for (let k = 0; k < verts.length; k += 3) v.push(`<vertex x="${f5(verts[k])}" y="${f5(verts[k + 1])}" z="${f5(verts[k + 2])}"/>`);
@@ -951,7 +982,7 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
       sub.push(`  <object id="${id}" p:UUID="${uuid(1, id)}" type="model">
    <mesh><vertices>${v.join('')}</vertices><triangles>${t.join('')}</triangles></mesh>
   </object>`);
-      components.push(`    <component p:path="/${path}" objectid="${id}" p:UUID="${uuid(2, id)}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>`);
+      components.push(`    <component p:path="/${path}" objectid="${id}" p:UUID="${uuid(2, id)}" transform="${transform}"/>`);
       return id;
     };
     for (const part of list) {
@@ -966,11 +997,14 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
     // Modifier nach den Teilen; im Slicer wirken sie auf alle Teile des Objekts, die sie berühren
     for (const part of list) {
       for (const m of part.modifiers ?? []) {
-        const id = meshObject(m.positions);
+        // Text: in eigenen Koordinaten mit Lage, damit Bambu Studio ihn bearbeiten kann
+        const text = m.textInfo && m.local && m.transform ? m : undefined;
+        const id = text ? meshObject(text.local!, undefined, text.transform) : meshObject(m.positions);
         const slot = m.color ? slots.indexOf(m.color.toLowerCase()) + 1 : 0;
+        const matrix = text ? rowMajor(text.transform!, o) : identity;
         settings.push(`    <part id="${id}" subtype="${esc(m.subtype)}">
       <metadata key="name" value="${esc(m.name)}"/>
-      <metadata key="matrix" value="${identity}"/>${slot ? `\n      <metadata key="extruder" value="${slot}"/>` : ''}${settingLines(m.settings, '      ')}
+      <metadata key="matrix" value="${matrix}"/>${slot ? `\n      <metadata key="extruder" value="${slot}"/>` : ''}${settingLines(m.settings, '      ')}${text ? `\n      ${text.textInfo}` : ''}
     </part>`);
       }
     }
@@ -1060,6 +1094,12 @@ ${subRels.join('\n')}
     'Metadata/model_settings.config': strToU8(config),
     'Metadata/project_settings.config': strToU8(bambuProjectSettings(printer, slots, version.replace(/^BambuStudio-/, ''))),
   });
+}
+
+/** Lage eines Teils im Objekt (Ursprung o) als Text: 4×4 zeilenweise, wie Bambu Studio „matrix" schreibt. */
+function rowMajor(e: number[], o: number[]): string {
+  const t = [e[12] - o[0], e[13] - o[1], e[14] - o[2]];
+  return [e[0], e[4], e[8], t[0], e[1], e[5], e[9], t[1], e[2], e[6], e[10], t[2], 0, 0, 0, 1].map(f5).join(' ');
 }
 
 /**
