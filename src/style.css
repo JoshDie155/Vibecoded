@@ -370,3 +370,8 @@ kbd {
 .parts button.icon.warn { color: var(--warn); font-size: 14px; }
 .parts button.icon.warn:hover { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 #cutHelp button { margin-left: 6px; }
+#gizmoBar .gnum { gap: 6px; flex-basis: 100%; }
+#gizmoBar .gnum input[type='number'] { width: 68px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
+#gizmoBar .gnum input:disabled { opacity: 0.5; }
+#gizmoBar .gsep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+#selAlign { font: inherit; font-size: 12.5px; }

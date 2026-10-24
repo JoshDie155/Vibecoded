@@ -55,6 +55,17 @@
             <button class="ghost small" data-sel="ungroup" title="Alle Teile der Gruppen bewegen sich danach einzeln">Gruppe auflösen</button>
             <button class="ghost small" data-sel="hide">Ausblenden</button>
             <button class="ghost small" data-sel="color">Farbe</button>
+            <select id="selAlign" title="Baugruppen der Auswahl ausrichten oder gleichmäßig verteilen">
+              <option value="">Ausrichten …</option>
+              <option value="0-min">Links bündig</option>
+              <option value="0-mid">Mittig (links/rechts)</option>
+              <option value="0-max">Rechts bündig</option>
+              <option value="1-min">Vorne bündig</option>
+              <option value="1-mid">Mittig (vorne/hinten)</option>
+              <option value="1-max">Hinten bündig</option>
+              <option value="0-dist">Gleichmäßig verteilen (X)</option>
+              <option value="1-dist">Gleichmäßig verteilen (Y)</option>
+            </select>
             <button class="ghost small danger" data-sel="remove">Entfernen</button>
             <button class="icon" data-sel="clear" title="Auswahl aufheben (Esc)" aria-label="Auswahl aufheben">✕</button>
           </div>
@@ -255,6 +266,17 @@
               <option value="90">90°</option>
             </select>
           </label>
+          <span class="row gnum" data-g="num">
+            <span title="Mitte der Baugruppe (X, Y) und Unterkante (Z) in mm – Wert eingeben und Enter">Lage</span>
+            <label>X <input type="number" step="0.5" data-gpos="0" /></label>
+            <label>Y <input type="number" step="0.5" data-gpos="1" /></label>
+            <label>Z <input type="number" step="0.5" data-gpos="2" /></label>
+            <span class="gsep"></span>
+            <label>Drehen <input type="number" step="5" id="gRotDeg" value="90" /> ° um</label>
+            <button class="ghost small" data-grot="0" title="Um die X-Achse drehen (durch die Mitte)">X</button>
+            <button class="ghost small" data-grot="1" title="Um die Y-Achse drehen (durch die Mitte)">Y</button>
+            <button class="ghost small" data-grot="2" title="Um die Z-Achse drehen (durch die Mitte)">Z</button>
+          </span>
           <button class="ghost small" data-g="reset" title="Handkorrektur verwerfen">Zurücksetzen</button>
           <button class="small" data-g="done">Fertig</button>
           <span id="gizmoHint" class="help"></span>
@@ -308,6 +330,7 @@
             <dt><kbd>S</kbd></dt><dd>Skalieren/Spiegeln: Teil unter dem Zeiger oder Auswahl</dd>
             <dt><kbd>E</kbd></dt><dd>Aussparung: Magnet, Gewindeeinsatz, Schraube, Mutter, Bohrung an der Klickstelle</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
+            <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Auswahl (oder Gizmo-Teil) 1 mm verschieben – passend zur Blickrichtung; mit <kbd>⇧</kbd> 10 mm, mit <kbd>Alt/⌥</kbd> 0,1 mm; <kbd>Bild↑</kbd> <kbd>Bild↓</kbd> Höhe</dd>
             <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie in Bambu Studio</dd>
             <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden, sonst Auswahl aufheben</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>A</kbd></dt><dd>alle sichtbaren Teile auswählen</dd>

@@ -175,6 +175,12 @@ und Bearbeitbarkeit des Textes verloren (die Textform bleibt), PartJoin sagt das
 über der Liste (und per Rechtsklick) lassen sie sich **gruppieren** – sie bleiben, wo sie sind, und bewegen
 sich danach gemeinsam (auch beim Strg+Ziehen und im Gizmo) –, ausblenden, gemeinsam einfärben oder
 entfernen. „Gruppe auflösen" macht alle Teile einer Gruppe wieder einzeln beweglich.
+**Genau platzieren**: Im Gizmo (✥) eines frei liegenden Teils stehen Lage (Mitte X/Y, Unterkante Z) und
+„Drehen … ° um X/Y/Z" als Zahlen – Wert eingeben, Enter. Die Pfeiltasten verschieben die Auswahl (oder das
+Teil im Gizmo) um 1 mm, mit Umschalt um 10 mm, mit Alt/⌥ um 0,1 mm – passend zur Blickrichtung
+(rechts ist rechts im Bild); Bild↑/Bild↓ hebt und senkt (bei ausgeschalteter Druckplatte). Eine Tastenfolge
+nimmt Strg/⌘+Z in einem Schritt zurück. Mehrere ausgewählte Baugruppen lassen sich über „Ausrichten …"
+links/mittig/rechts bzw. vorne/hinten bündig stellen oder gleichmäßig verteilen.
 **Rechtsklick auf ein Teil** (im 3D-Fenster oder in der Teileliste) öffnet ein Menü: ausblenden, nur dieses
 Teil oder diese Baugruppe zeigen, Farbe, umbenennen, als Basis festlegen, in der Liste zeigen, mit der
 angeklickten Fläche auf die Platte legen, Passung an dieser Stelle, von Hand bewegen, Baugruppe bewegen,

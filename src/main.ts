@@ -1786,6 +1786,7 @@ tc.addEventListener('objectChange', () => {
   }
   solveAll();
   renderLight();
+  updateGizmoNumbers();
 });
 
 /** Freie Bewegungen, die das Gizmo zeigen soll (Weltkoordinaten). Leer = alles frei. */
@@ -1920,7 +1921,138 @@ function renderGizmoBar() {
   (bar.querySelector('[data-g="free"]') as HTMLElement).hidden = gizmoTarget.kind === 'part';
   (bar.querySelector('#gizmoSnap') as HTMLSelectElement).value = String(gizmoSnapDeg);
   (bar.querySelector('[data-g="reset"]') as HTMLElement).hidden = gizmoTarget.kind === 'part';
+  updateGizmoNumbers();
 }
+
+// ---------------------------------------------------------------- Genau platzieren
+
+/** Frei liegendes Teil des Gizmos und alles, was mit ihm platziert wird. */
+function gizmoUnit(): { seed: Part; members: Part[] } | null {
+  if (!gizmoTarget || gizmoTarget.kind !== 'part') return null;
+  const seed = getPart(gizmoTarget.id);
+  return seed ? { seed, members: assemblyOf(seed) } : null;
+}
+
+/** Ausgangslage einer frei liegenden Gruppe ändern – alles, was daran hängt, folgt. */
+function moveSeedBy(seed: Part, T: THREE.Matrix4) {
+  for (const q of groupOf(seed)) q.layout.premultiply(T);
+}
+
+const gposInputs = [...document.querySelectorAll<HTMLInputElement>('[data-gpos]')];
+/** Lage im Gizmo: Mitte X/Y und Unterkante Z der Baugruppe. */
+function updateGizmoNumbers() {
+  const row = document.querySelector<HTMLElement>('#gizmoBar [data-g="num"]')!;
+  const u = gizmoUnit();
+  row.hidden = !u;
+  if (!u) return;
+  const b = unitBox(u.members);
+  const vals = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, b.min.z];
+  gposInputs.forEach((el, i) => { if (document.activeElement !== el) el.value = String(+vals[i].toFixed(2)); });
+  gposInputs[2].disabled = onFloor.checked;
+  gposInputs[2].title = onFloor.checked ? 'Die Druckplatte gibt die Höhe vor („Auf die Druckplatte stellen“ ausschalten zum Anheben)' : 'Unterkante (mm)';
+}
+
+for (const [i, el] of gposInputs.entries()) {
+  el.addEventListener('change', () => {
+    const u = gizmoUnit();
+    const want = Number(el.value);
+    if (!u || !Number.isFinite(want)) return;
+    const b = unitBox(u.members);
+    const cur = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, b.min.z][i];
+    const d = new THREE.Vector3().setComponent(i, want - cur);
+    moveSeedBy(u.seed, new THREE.Matrix4().makeTranslation(d.x, d.y, d.z));
+    solveAll();
+    renderAll();
+  });
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.dispatchEvent(new Event('change')); });
+}
+document.querySelectorAll<HTMLButtonElement>('[data-grot]').forEach((b) => b.addEventListener('click', () => {
+  const u = gizmoUnit();
+  const deg = Number((document.getElementById('gRotDeg') as HTMLInputElement).value);
+  if (!u || !Number.isFinite(deg) || !deg) return;
+  const c = unitBox(u.members).getCenter(new THREE.Vector3());
+  const axis = new THREE.Vector3().setComponent(Number(b.dataset.grot), 1);
+  turnUnit(groupOf(u.seed), rotationAbout([c.x, c.y, c.z], [axis.x, axis.y, axis.z], THREE.MathUtils.degToRad(deg)));
+  renderAll();
+}));
+
+/** Pfeiltasten: was bewegt wird – die Auswahl (je Baugruppe einmal) oder das Teil im Gizmo. */
+function nudgeTargets(): Part[] {
+  const list = selected.size ? selectedParts() : gizmoUnit() ? [gizmoUnit()!.seed] : [];
+  const seeds = new Map<number, Part>();
+  for (const q of list) {
+    const s = getPart(seedOf.get(q.id) ?? q.id) ?? q;
+    seeds.set(s.id, s);
+  }
+  return [...seeds.values()];
+}
+
+/** Richtung auf der Platte zur Bildschirmrichtung (an die nächste Achse gerastet). */
+function screenAxis(dx: number, dy: number): THREE.Vector3 {
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).setZ(0);
+  const fwd = controls.target.clone().sub(camera.position).setZ(0);
+  const v = right.normalize().multiplyScalar(dx).add(fwd.normalize().multiplyScalar(dy));
+  return Math.abs(v.x) >= Math.abs(v.y) ? new THREE.Vector3(Math.sign(v.x), 0, 0) : new THREE.Vector3(0, Math.sign(v.y), 0);
+}
+
+let nudging = 0;
+function nudge(e: KeyboardEvent): boolean {
+  const dirs: Record<string, [number, number] | 'up' | 'down'> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1], PageUp: 'up', PageDown: 'down' };
+  const d = dirs[e.key];
+  if (!d || e.ctrlKey || e.metaKey) return false;
+  const seeds = nudgeTargets();
+  if (!seeds.length) return false;
+  e.preventDefault();
+  const step = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+  const v = d === 'up' ? new THREE.Vector3(0, 0, 1) : d === 'down' ? new THREE.Vector3(0, 0, -1) : screenAxis(d[0], d[1]);
+  v.multiplyScalar(step);
+  // Schnelle Folge von Tastendrücken = ein Schritt zum Rückgängigmachen
+  if (!nudging) beginAction();
+  clearTimeout(nudging);
+  nudging = window.setTimeout(() => { nudging = 0; }, 900);
+  for (const sd of seeds) moveSeedBy(sd, new THREE.Matrix4().makeTranslation(v.x, v.y, v.z));
+  solveAll();
+  renderAll();
+  return true;
+}
+
+/** Baugruppen der Auswahl ausrichten (min/mid/max) oder gleichmäßig verteilen. */
+function alignSelection(axis: number, how: 'min' | 'mid' | 'max' | 'dist') {
+  const seeds = nudgeTargets();
+  if (seeds.length < 2) { toast('Zum Ausrichten mindestens zwei Baugruppen auswählen.'); return; }
+  const items = seeds.map((sd) => ({ seed: sd, box: unitBox(assemblyOf(sd)) }));
+  const lo = (b: THREE.Box3) => b.min.getComponent(axis);
+  const hi = (b: THREE.Box3) => b.max.getComponent(axis);
+  const shift = (sd: Part, by: number) => moveSeedBy(sd, new THREE.Matrix4().makeTranslation(...(new THREE.Vector3().setComponent(axis, by).toArray() as [number, number, number])));
+  if (how === 'dist') {
+    items.sort((a, b) => lo(a.box) + hi(a.box) - lo(b.box) - hi(b.box));
+    const span = hi(items[items.length - 1].box) - lo(items[0].box);
+    const sum = items.reduce((n, it) => n + hi(it.box) - lo(it.box), 0);
+    let gap = (span - sum) / (items.length - 1);
+    if (gap < 2) gap = 5;
+    let at = lo(items[0].box);
+    for (const it of items) {
+      shift(it.seed, at - lo(it.box));
+      at += hi(it.box) - lo(it.box) + gap;
+    }
+  } else {
+    const target = how === 'min' ? Math.min(...items.map((it) => lo(it.box)))
+      : how === 'max' ? Math.max(...items.map((it) => hi(it.box)))
+      : items.reduce((n, it) => n + (lo(it.box) + hi(it.box)) / 2, 0) / items.length;
+    for (const it of items) {
+      const cur = how === 'min' ? lo(it.box) : how === 'max' ? hi(it.box) : (lo(it.box) + hi(it.box)) / 2;
+      shift(it.seed, target - cur);
+    }
+  }
+  solveAll();
+  renderAll();
+}
+const selAlign = document.getElementById('selAlign') as HTMLSelectElement;
+selAlign.addEventListener('change', () => {
+  const [axis, how] = selAlign.value.split('-');
+  selAlign.value = '';
+  if (how) alignSelection(Number(axis), how as 'min' | 'mid' | 'max' | 'dist');
+});
 
 // ---------------------------------------------------------------- Markierungen und Flächen (3D)
 
@@ -2704,6 +2836,8 @@ window.addEventListener('keydown', (e) => {
     else undo();
     return;
   }
+  // Pfeiltasten: Auswahl verschieben
+  if (nudge(e)) return;
   // Strg/⌘+A: alle sichtbaren Teile auswählen
   if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'a') {
     if (!parts.length) return;
