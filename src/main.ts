@@ -5687,6 +5687,35 @@ function clearMeasure() {
 
 const mmText2 = (x: number) => x.toFixed(2).replace('.', ',');
 
+const degText = (x: number) => `${x.toFixed(1).replace('.', ',')}°`;
+
+/** Richtung eines Merkmals (Welt): Fläche → Normale, Zylinder → Achse, Kante → Richtung. */
+function featureDir(x: { f: Feature; part: Part }): { v: THREE.Vector3; line: boolean } | null {
+  const W = x.part.mesh.matrixWorld;
+  const f = x.f;
+  if (f.kind === 'plane' || f.kind === 'surface') return { v: new THREE.Vector3(...f.normal).transformDirection(W), line: false };
+  if (f.kind === 'cylinder') return { v: new THREE.Vector3(...f.axis).transformDirection(W), line: true };
+  if (f.kind === 'edge') return { v: new THREE.Vector3(...f.dir).transformDirection(W), line: true };
+  return null;
+}
+
+/** Winkel zweier gemessener Stellen – leer, wenn sie parallel sind (dann zählt der Abstand). */
+function measureAngle(a: { f: Feature; part: Part }, b: { f: Feature; part: Part }): string {
+  const da = featureDir(a);
+  const db = featureDir(b);
+  if (!da || !db) return '';
+  const deg = THREE.MathUtils.radToDeg(da.v.angleTo(db.v));
+  if (!da.line && !db.line) {
+    if (deg < 0.5 || deg > 179.5) return '';
+    return `Winkel <b>${degText(deg)}</b> (Innenwinkel ${degText(180 - deg)})`;
+  }
+  // Achsen haben keine Richtung: 0–90°
+  const line = Math.min(deg, 180 - deg);
+  if (da.line && db.line) return line < 0.5 ? 'Achsen parallel' : `Winkel der Achsen <b>${degText(line)}</b>`;
+  // Achse gegen Fläche: 90° = senkrecht auf der Fläche
+  return `Winkel zur Fläche <b>${degText(90 - line)}</b>`;
+}
+
 function pickMeasure(h: Hit) {
   if (measure.length >= 2) clearMeasure();
   const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
@@ -5708,6 +5737,9 @@ function pickMeasure(h: Hit) {
     line.renderOrder = 10;
     measureGroup.add(line);
     out.push(`Abstand <b>${mmText2(d.length())} mm</b>`, `ΔX ${mmText2(Math.abs(d.x))}`, `ΔY ${mmText2(Math.abs(d.y))}`, `ΔZ ${mmText2(Math.abs(d.z))}`);
+    // Winkel zwischen Flächen, Achsen oder Achse und Fläche
+    const ang = measureAngle(a, b);
+    if (ang) out.push(ang);
     // Zwei parallele ebene Flächen: ihr Abstand (Wandstärke, Spalt)
     if (a.f.kind === 'plane' && b.f.kind === 'plane') {
       const na = new THREE.Vector3(...a.f.normal).transformDirection(a.part.mesh.matrixWorld);
