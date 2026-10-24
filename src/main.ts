@@ -33,6 +33,7 @@ import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
 import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, PocketError, type PocketSpec, addPocket, pocketPreview } from './io/pocket';
 import { carryPaint } from './io/paint';
+import { clearanceLabel, makeToleranceTest } from './io/testpiece';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -2736,6 +2737,7 @@ window.addEventListener('keydown', (e) => {
   } else if (scaleTarget && k === 'escape') closeScale();
   else if (cutTarget && k === 'escape') setSection(false);
   else if (splitTarget && k === 'escape') closeSplit();
+  else if (!tolBar.hidden && k === 'escape') tolBar.hidden = true;
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
@@ -4604,6 +4606,83 @@ splitBar.addEventListener('click', (e) => {
 });
 document.getElementById('splitApply')!.addEventListener('click', () => void applySplit());
 document.getElementById('splitCancel')!.addEventListener('click', closeSplit);
+
+// ---------------------------------------------------------------- Toleranz-Test
+
+/**
+ * Testkörper fürs eigene Spiel: Platte mit Löchern in steigendem Spiel und ein Zapfen. Das ermittelte
+ * Spiel lässt sich als Standard speichern – Zerschneiden und Zerteilen nehmen es dann vor.
+ */
+const tolBar = document.getElementById('tolBar')!;
+const tolDia = document.getElementById('tolDia') as HTMLInputElement;
+const tolList = document.getElementById('tolList') as HTMLInputElement;
+const tolMine = document.getElementById('tolMine') as HTMLInputElement;
+
+/** Gespeichertes eigenes Spiel (oder 0,2 mm). */
+function myClearance(): number {
+  try {
+    const v = Number(localStorage.getItem('partjoin.clearance'));
+    return v > 0 && v < 2 ? v : 0.2;
+  } catch {
+    return 0.2;
+  }
+}
+function applyMyClearance() {
+  const c = String(myClearance());
+  cutGap.value = c;
+  splitGap.value = c;
+  tolMine.value = clearanceLabel(myClearance());
+}
+
+const parseList = (s: string) => s.split(/[\s;]+/).map((x) => Number(x.replace(',', '.'))).filter((x) => x >= 0 && x < 2);
+
+async function generateTolerance() {
+  const d = Math.max(2, Math.min(30, Number(tolDia.value.replace(',', '.')) || 10));
+  const list = parseList(tolList.value).slice(0, 12);
+  if (!list.length) { toast('Bitte mindestens einen Spielwert eingeben, z. B. „0,1 0,2 0,3“.'); return; }
+  toast('Erzeuge den Testkörper …', 20000);
+  let r;
+  try {
+    r = await makeToleranceTest({ diameter: d, clearances: list }, manifoldWasm);
+  } catch (err) {
+    toast(`Testkörper nicht möglich: ${(err as Error).message}`);
+    return;
+  }
+  const geo = (pos: Float32Array) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  };
+  const gp = geo(r.plate);
+  const plate = addPart(`Toleranztest Platte (${list.map(clearanceLabel).join(' / ')} mm)`, gp, { color: '#8fa7c9', layout: nextLayout(gp.boundingBox!) });
+  const gz = geo(r.pin);
+  const pin = addPart(`Toleranztest Zapfen ⌀ ${clearanceLabel(d)}`, gz, { color: '#d9a066', layout: nextLayout(gz.boundingBox!) });
+  selected.clear();
+  selected.add(plate.id);
+  selected.add(pin.id);
+  solveAll();
+  renderAll();
+  fitView();
+  toast('Testkörper erzeugt. Drucken, dann den Zapfen der Reihe nach in die Löcher stecken: Das erste, in das er ohne Gewalt passt, ist dein Spiel – oben bei „Mein Spiel“ speichern.', 10000);
+}
+
+document.getElementById('tolTest')!.addEventListener('click', () => {
+  setTool(null);
+  tolBar.hidden = !tolBar.hidden;
+});
+document.getElementById('tolMake')!.addEventListener('click', () => void generateTolerance());
+document.getElementById('tolClose')!.addEventListener('click', () => { tolBar.hidden = true; });
+document.getElementById('tolSave')!.addEventListener('click', () => {
+  const v = Number(tolMine.value.replace(',', '.'));
+  if (!(v >= 0 && v < 2)) { toast('Bitte ein Spiel zwischen 0 und 2 mm eingeben.'); return; }
+  try { localStorage.setItem('partjoin.clearance', String(v)); } catch { /* ohne Speicher */ }
+  applyMyClearance();
+  toast(`Spiel ${clearanceLabel(v)} mm gespeichert – Zerschneiden und Zerteilen nehmen es jetzt vor.`);
+});
+applyMyClearance();
 
 // ---------------------------------------------------------------- Skalieren und Spiegeln
 

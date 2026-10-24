@@ -62,6 +62,7 @@
           <div class="row wrap">
             <button id="demo" class="ghost small">Beispiel: Haus</button>
             <button id="demoRound" class="ghost small">Beispiel: runder Zapfen</button>
+            <button id="tolTest" class="ghost small" title="Testkörper drucken und das passende Spiel für Steckverbindungen auf deinem Drucker herausfinden">Toleranz-Test</button>
           </div>
         </section>
 
@@ -167,6 +168,15 @@
           <button id="cutApply" class="small">Zerschneiden</button>
           <button id="cutCancel" class="ghost small">Abbrechen</button>
           <p class="help" id="cutHelp">Lage der Schnittebene unten rechts einstellen.</p>
+        </div>
+        <div id="tolBar" hidden>
+          <strong>Toleranz-Test</strong>
+          <label class="small">Zapfen ⌀ <input type="text" id="tolDia" value="10" inputmode="decimal" /> mm</label>
+          <label class="small" title="Spiel je Seite, je Loch ein Wert">Spiel je Loch <input type="text" id="tolList" value="0,1 0,15 0,2 0,25 0,3 0,4" /> mm</label>
+          <button id="tolMake" class="small">Erzeugen</button>
+          <span class="row mine">Mein Spiel <input type="text" id="tolMine" inputmode="decimal" /> mm <button id="tolSave" class="ghost small" title="Als Standard für Zerschneiden und Zerteilen speichern">Speichern</button></span>
+          <button id="tolClose" class="ghost small">Schließen</button>
+          <p class="help">Platte und Zapfen drucken (wie sie liegen), dann den Zapfen der Reihe nach in die Löcher stecken. Das erste Loch, in das er ohne Gewalt ganz hineingeht, nennt dein Spiel für Steckverbindungen. Stramm sitzend: ein Loch davor.</p>
         </div>
         <div id="pocketBar" hidden>
           <strong id="pocketTitle"></strong>

@@ -136,6 +136,10 @@ Innenwände, gleicht den Umlaufsinn an, dreht nach innen zeigende Netze nach au�
 (ebene Ränder sauber abgetragen, verwinkelte mit einem Fächer). Gewählte Flächen und Bemalung bleiben
 erhalten. Zerschneiden und Vereinigen brauchen ein geschlossenes Netz – beim Zerschneiden gibt es dafür
 direkt einen Knopf. Zusammengefallene Dreiecke ohne Fläche gelten nicht als Fehler.
+**Toleranz-Test** (links unter den Beispielen): erzeugt eine Platte mit Löchern in steigendem Spiel (0,1 bis
+0,4 mm, beschriftet) und einen Zapfen mit Griff – beides drucken, den Zapfen der Reihe nach in die Löcher
+stecken; das erste Loch, in das er ohne Gewalt ganz hineingeht, nennt das passende Spiel für deinen Drucker.
+Unter „Mein Spiel" gespeichert, nehmen Zerschneiden und Zerteilen es als Standard.
 **Aussparungen** (Rechtsklick › „Aussparung hier …" oder Taste E und auf die Stelle klicken): Tasche für einen
 Scheibenmagneten (5 × 2 bis 20 × 3 mm), Loch für einen Gewindeeinsatz zum Einschmelzen (M2–M5, übliche
 Maße – mit dem Datenblatt abgleichen), Schraubenloch mit Zylinder- oder Senkkopf (M2–M6), Sechskant-Tasche
