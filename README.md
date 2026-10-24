@@ -126,6 +126,11 @@ Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder he
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Überhänge & Wände** (Abschnitt 3 oder Taste U): färbt Flächen rot, die zu flach nach unten zeigen und
+Stützen brauchen (ab einstellbarem Winkel von der Senkrechten, Standard 45° – auf der Platte liegende und
+innere Flächen zählen nicht), und lila, wo eine Wand dünner ist als eingestellt (Standard 0,8 mm = zwei
+Bahnen bei 0,4-mm-Düse). Die Flächen stehen in der Leiste; nach dem Drehen („Auf Fläche legen", „Für den
+Druck ausrichten") rechnet die Ansicht sofort neu.
 **Explosionsansicht** (oben „Explosion", Taste X): zieht jede Baugruppe auseinander, damit man sieht, wie die
 Teile zusammengehören – Regler unten rechts für den Abstand. Nur zum Ansehen: Lage, Export und Prüfungen
 bleiben unverändert, Markierungen und Anklicken ruhen, bis sie wieder zu ist.

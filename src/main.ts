@@ -31,6 +31,7 @@ import { unionParts } from './io/union';
 import { type Connector, CutError, cutMesh, planConnectors, releaseCut } from './io/cut';
 import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
+import { overhangs, pickTriangles, thinWalls } from './math/printcheck';
 import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, PocketError, type PocketSpec, addPocket, pocketPreview } from './io/pocket';
 import { carryPaint } from './io/paint';
 import { clearanceLabel, makeToleranceTest } from './io/testpiece';
@@ -2867,6 +2868,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (k === 'c') setSection(!section);
+  else if (k === 'u') setAnalysis(!anaOn);
   else if (k === 'x') setExplode(explode > 0 || explodeAnim?.to ? 0 : 0.8);
   else if (k === 'escape' && (explode > 0 || explodeAnim?.to)) setExplode(0);
   else if (k === 's') {
@@ -3131,6 +3133,7 @@ function renderAll() {
   renderStatus();
   if (scaleTarget) renderScaleBar(true);
   if (section) { sectionRange(); updateSection(); }
+  scheduleAnalysis();
   rebuildMarkers();
   void runCheck();
   if (gizmoTarget && !tc.dragging) {
@@ -3799,6 +3802,167 @@ function worldPositions(members: Part[]): Float32Array {
   return out;
 }
 
+// ---------------------------------------------------------------- Druckprüfung: Überhänge und Wände
+
+/**
+ * Überhänge (rot: braucht Stützen) und dünne Wände (lila) einfärben – für die Lage, wie sie gerade ist.
+ * Die Wandstärke misst je Dreieck ein Strahl entgegen der Flächennormale bis zur Gegenseite; bei sehr
+ * feinen Netzen nur eine Stichprobe. Sie hängt nicht von der Lage ab und wird je Netz einmal berechnet.
+ */
+let anaOn = false;
+let anaGen = 0;
+let anaTimer = 0;
+const anaGroup = new THREE.Group();
+scene.add(anaGroup);
+const anaBar = document.getElementById('anaBar')!;
+const anaOver = document.getElementById('anaOver') as HTMLInputElement;
+const anaAngle = document.getElementById('anaAngle') as HTMLInputElement;
+const anaThin = document.getElementById('anaThin') as HTMLInputElement;
+const anaMin = document.getElementById('anaMin') as HTMLInputElement;
+const anaInfo = document.getElementById('anaInfo')!;
+const anaBtn = document.getElementById('anaBtn')!;
+const thickCache = new WeakMap<Part, { th: Float32Array; sampled: boolean }>();
+
+async function thicknessOf(p: Part, gen: number): Promise<{ th: Float32Array; sampled: boolean } | null> {
+  const hit = thickCache.get(p);
+  if (hit) return hit;
+  const pos = positionsOf(p);
+  const n = pos.length / 9;
+  const stride = Math.max(1, Math.ceil(n / 250_000));
+  const th = new Float32Array(n).fill(NaN);
+  const bvh = p.geom.boundsTree as MeshBVH;
+  const ray = new THREE.Ray();
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e = new THREE.Vector3(), nrm = new THREE.Vector3();
+  let k = 0;
+  for (let t = 0; t < n; t += stride) {
+    a.fromArray(pos, 9 * t);
+    b.fromArray(pos, 9 * t + 3);
+    c.fromArray(pos, 9 * t + 6);
+    nrm.subVectors(b, a).cross(e.subVectors(c, a));
+    if (nrm.lengthSq() > 0) {
+      nrm.normalize();
+      const o = a.add(b).add(c).multiplyScalar(1 / 3).addScaledVector(nrm, -1e-3);
+      ray.set(o, nrm.negate());
+      const h = bvh.raycastFirst(ray, THREE.DoubleSide);
+      th[t] = h ? h.distance + 1e-3 : Infinity;
+    }
+    if (++k % 20000 === 0) {
+      await new Promise((r) => setTimeout(r, 0));
+      if (gen !== anaGen || getPart(p.id) !== p) return null;
+    }
+  }
+  const res = { th, sampled: stride > 1 };
+  thickCache.set(p, res);
+  return res;
+}
+
+/**
+ * Liegt direkt unter dem Dreieck Material desselben Teils? Dann ist es eine innere Fläche (z. B. wo zwei
+ * nicht vereinigte Körper ineinanderstecken) und braucht keine Stütze.
+ */
+function restsOnSelf(p: Part, t: number): boolean {
+  const pos = positionsOf(p);
+  const inv = p.mesh.matrixWorld.clone().invert();
+  const down = new THREE.Vector3(0, 0, -1).transformDirection(inv);
+  const c = new THREE.Vector3(
+    (pos[9 * t] + pos[9 * t + 3] + pos[9 * t + 6]) / 3,
+    (pos[9 * t + 1] + pos[9 * t + 4] + pos[9 * t + 7]) / 3,
+    (pos[9 * t + 2] + pos[9 * t + 5] + pos[9 * t + 8]) / 3,
+  ).addScaledVector(down, 1e-3);
+  const h = (p.geom.boundsTree as MeshBVH).raycastFirst(new THREE.Ray(c, down), THREE.DoubleSide);
+  if (!h) return false;
+  // Trifft der Strahl zuerst eine nach unten zeigende Fläche, beginnt er im Material: innere Fläche.
+  // Sonst liegt die Fläche höchstens dicht über Material desselben Teils auf.
+  return (h.face?.normal.dot(down) ?? 0) > 0 || h.distance < 0.3;
+}
+
+function areaOf(pos: Float32Array, tris: number[]): number {
+  let a = 0;
+  for (const t of tris) {
+    const o = 9 * t;
+    const ax = pos[o + 3] - pos[o], ay = pos[o + 4] - pos[o + 1], az = pos[o + 5] - pos[o + 2];
+    const bx = pos[o + 6] - pos[o], by = pos[o + 7] - pos[o + 1], bz = pos[o + 8] - pos[o + 2];
+    a += Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx) / 2;
+  }
+  return a;
+}
+
+function scheduleAnalysis() {
+  if (!anaOn) return;
+  clearTimeout(anaTimer);
+  anaTimer = window.setTimeout(() => void runAnalysis(), 120);
+}
+
+const cm2 = (mm2: number) => (mm2 >= 100 ? `${(mm2 / 100).toFixed(1).replace('.', ',')} cm²` : `${Math.round(mm2)} mm²`);
+
+async function runAnalysis() {
+  const gen = ++anaGen;
+  if (!anaOn) { disposeGroup(anaGroup); return; }
+  const angle = Math.min(89, Math.max(1, Number(anaAngle.value) || 45));
+  const min = Math.max(0.05, Number(String(anaMin.value).replace(',', '.')) || 0.8);
+  const visible = parts.filter((p) => p.visible);
+  // Plattenhöhe je Baugruppe: ihr tiefster Punkt
+  const low = new Map<number, number>();
+  for (const p of visible) {
+    const key = unitOf.get(p.id) ?? p.id;
+    low.set(key, Math.min(low.get(key) ?? Infinity, partBox(p).min.z));
+  }
+  const layers: { p: Part; tris: Float32Array; color: number; order: number }[] = [];
+  let over = 0, thin = 0, sampled = false;
+  for (const p of visible) {
+    p.mesh.updateMatrixWorld();
+    const pos = positionsOf(p);
+    if (anaOver.checked) {
+      const r = overhangs(pos, p.mesh.matrixWorld.elements, low.get(unitOf.get(p.id) ?? p.id) ?? 0, angle);
+      const tris = r.tris.filter((t) => !restsOnSelf(p, t));
+      over += r.tris.length === tris.length ? r.area : areaOf(pos, tris);
+      if (tris.length) layers.push({ p, tris: pickTriangles(pos, tris), color: 0xe5484d, order: 4 });
+    }
+    if (anaThin.checked) {
+      if (!thickCache.has(p)) anaInfo.textContent = 'Messe Wandstärken …';
+      const th = await thicknessOf(p, gen);
+      if (!th || gen !== anaGen) return;
+      sampled ||= th.sampled;
+      const r = thinWalls(pos, th.th, min);
+      thin += r.area;
+      if (r.tris.length) layers.push({ p, tris: pickTriangles(pos, r.tris), color: 0x9b5de5, order: 5 });
+    }
+  }
+  disposeGroup(anaGroup);
+  for (const l of layers) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(l.tris, 3));
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: l.color, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    }));
+    m.renderOrder = l.order;
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(l.p.mesh.matrixWorld);
+    m.raycast = () => {};
+    anaGroup.add(m);
+  }
+  const mm = String(min).replace('.', ',');
+  anaInfo.innerHTML = [
+    anaOver.checked ? (over > 0.5 ? `<span class="chip over"></span>Überhang ${cm2(over)} – braucht Stützen` : 'keine Überhänge') : '',
+    anaThin.checked ? (thin > 0.5 ? `<span class="chip thin"></span>dünner als ${mm} mm: ${cm2(thin)}` : `keine Wände unter ${mm} mm`) : '',
+    sampled ? '(Wandstärke als Stichprobe)' : '',
+  ].filter(Boolean).join(' · ');
+}
+
+function setAnalysis(on: boolean) {
+  if (on && !parts.length) { toast('Lade zuerst ein Modell.'); return; }
+  anaOn = on;
+  anaBar.hidden = !on;
+  anaBtn.classList.toggle('on', on);
+  if (on) void runAnalysis();
+  else { anaGen++; disposeGroup(anaGroup); }
+}
+anaBtn.addEventListener('click', () => setAnalysis(!anaOn));
+document.getElementById('anaClose')!.addEventListener('click', () => setAnalysis(false));
+for (const el of [anaOver, anaThin]) el.addEventListener('change', scheduleAnalysis);
+for (const el of [anaAngle, anaMin]) el.addEventListener('input', scheduleAnalysis);
+
 // ---------------------------------------------------------------- Explosionsansicht
 
 /**
@@ -3873,7 +4037,7 @@ function explodeForRender(): () => void {
 
 /** Was in der Explosionsansicht nicht passt, ausblenden. */
 function setExplodeVisuals(on: boolean) {
-  for (const g of [markerGroup, faceGroup, selGroup, checkGroup]) g.visible = !on;
+  for (const g of [markerGroup, faceGroup, selGroup, checkGroup, anaGroup]) g.visible = !on;
   view.classList.toggle('exploded', on);
 }
 
@@ -4085,7 +4249,7 @@ function applySectionClip() {
     if (added) placeCaps();
   }
   for (const p of parts) set(p.mesh, cutsPart(p));
-  for (const o of [faceGroup, checkGroup, hoverMesh, hoverLine]) set(o, !!section && !cutTarget);
+  for (const o of [faceGroup, checkGroup, anaGroup, hoverMesh, hoverLine]) set(o, !!section && !cutTarget);
   clipApplied = !!section;
 }
 

@@ -97,6 +97,7 @@
           <h2><span class="step">3</span> Prüfen &amp; exportieren</h2>
           <div class="row wrap">
             <button id="checkBtn" class="ghost" title="Zeigt, wo sich die Teile berühren, wo ein Spalt bleibt und wo sie ineinander eindringen.">Passung prüfen</button>
+            <button id="anaBtn" class="ghost" title="Zeigt Überhänge, die Stützen brauchen (rot), und zu dünne Wände (lila) – für die Lage, wie sie gerade ist (Taste U)">Überhänge &amp; Wände</button>
             <button id="autoOrient" class="ghost" title="Legt jede Baugruppe mit ihrer größten ebenen Auflage auf die Druckplatte – steht stabil und braucht meist weniger Stützen. Von Hand: oben „Auf Fläche legen“.">Für den Druck ausrichten</button>
             <button id="arrange" class="ghost" title="Legt alle sichtbaren Baugruppen platzsparend nebeneinander auf die Druckplatte des gewählten Druckers (Taste A). Was nicht mehr passt, liegt rechts daneben.">Auf der Platte anordnen</button>
           </div>
@@ -188,6 +189,14 @@
           <button id="cutApply" class="small">Zerschneiden</button>
           <button id="cutCancel" class="ghost small">Abbrechen</button>
           <p class="help" id="cutHelp">Lage der Schnittebene unten rechts einstellen.</p>
+        </div>
+        <div id="anaBar" hidden>
+          <strong>Druckprüfung</strong>
+          <label class="check small"><input type="checkbox" id="anaOver" checked /> Überhänge ab <input type="number" id="anaAngle" value="45" min="1" max="89" step="5" />°</label>
+          <label class="check small"><input type="checkbox" id="anaThin" checked /> Wände dünner als <input type="number" id="anaMin" value="0.8" min="0.1" max="10" step="0.1" /> mm</label>
+          <span id="anaInfo" class="small"></span>
+          <button id="anaClose" class="ghost small">Schließen</button>
+          <p class="help">Rot: hängt über (Winkel von der Senkrechten, wie im Slicer) – drehen („Auf Fläche legen“, „Für den Druck ausrichten“) oder Stützen. Lila: dünner als erlaubt – bei 0,4-mm-Düse sind 0,8 mm zwei Bahnen.</p>
         </div>
         <div id="tolBar" hidden>
           <strong>Toleranz-Test</strong>
@@ -335,6 +344,7 @@
             <dt><kbd>M</kbd></dt><dd>Messen: Abstand, Durchmesser, Flächenabstand, Winkel</dd>
             <dt><kbd>C</kbd></dt><dd>Schnittansicht ein/aus (Regler unten rechts)</dd>
             <dt><kbd>X</kbd></dt><dd>Explosionsansicht ein/aus – Baugruppen auseinandergezogen ansehen</dd>
+            <dt><kbd>U</kbd></dt><dd>Überhänge und dünne Wände einfärben</dd>
             <dt><kbd>T</kbd></dt><dd>Passung: Zapfen, Bohrung oder Fläche anpassen</dd>
             <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
