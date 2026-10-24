@@ -124,6 +124,9 @@ Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder he
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+Der **Ansichtswürfel** oben rechts dreht sich mit: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht
+dorthin (Drehpunkt und Abstand bleiben), Ziehen am Würfel dreht sie, ⌂ zeigt die Schrägansicht. Tasten wie
+in Bambu Studio: 1 oben, 2 unten, 3 vorne, 4 hinten, 5 links, 6 rechts, 0 schräg.
 Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick zeigt es in der Teileliste,
 Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
 am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).

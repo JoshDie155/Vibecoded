@@ -115,6 +115,10 @@
         </div>
         <div id="tip" hidden></div>
         <div id="status"></div>
+        <div id="viewCube" title="Ansicht wählen: Fläche, Kante oder Ecke anklicken – ziehen dreht die Ansicht (Tasten 0–6)">
+          <div class="cube"></div>
+          <button id="viewHome" title="Schrägansicht (Taste 0)" aria-label="Schrägansicht">⌂</button>
+        </div>
         <div id="measureBar" hidden>
           <strong>Messen</strong>
           <span id="measureText"></span>
@@ -190,6 +194,7 @@
             <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
+            <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie in Bambu Studio</dd>
             <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>Z</kbd></dt><dd>Rückgängig – jede Aktion</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd></dt><dd>Wiederholen (auch <kbd>Strg</kbd> <kbd>Y</kbd>)</dd>
@@ -206,6 +211,7 @@
             <dt>Links ziehen</dt><dd>Ansicht drehen</dd>
             <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben</dd>
             <dt>Mausrad</dt><dd>zoomen, dorthin, wo der Zeiger steht</dd>
+            <dt>Ansichtswürfel</dt><dd>oben rechts: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht dorthin, Ziehen dreht sie, ⌂ = Schrägansicht</dd>
             <dt><kbd>Strg/⌘</kbd> + ziehen</dt><dd>Teil (mit allem, was daran hängt) über die Platte schieben</dd>
             <dt>Pinsel</dt><dd>Maustaste halten und über die Kontaktstelle streichen</dd>
           </dl>

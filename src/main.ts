@@ -297,6 +297,7 @@ function scaleMarkers() {
 }
 
 renderer.setAnimationLoop(() => {
+  stepViewAnim();
   controls.update();
   // Clipping-Ebenen an den Abstand anpassen – beim Heranzoomen an den Mauszeiger wird sonst abgeschnitten
   const dist = camera.position.distanceTo(controls.target);
@@ -308,6 +309,7 @@ renderer.setAnimationLoop(() => {
   }
   scaleMarkers();
   renderer.render(scene, camera);
+  updateCube();
 });
 
 /** Vier Pfeile: Teil frei bewegen */
@@ -575,6 +577,127 @@ function fitView() {
   camera.far = d * 100;
   camera.updateProjectionMatrix();
 }
+
+// ---------------------------------------------------------------- Ansichtswürfel
+
+/**
+ * Würfel oben rechts, der sich mit der Ansicht dreht (CSS 3D). Fläche, Kante oder Ecke anklicken
+ * schwenkt die Kamera dorthin – um den Drehpunkt, mit gleichem Abstand. Vorne ist −Y, oben +Z.
+ */
+const CUBE_FACES: { name: string; n: THREE.Vector3Tuple; r: THREE.Vector3Tuple; u: THREE.Vector3Tuple }[] = [
+  // r × u = n: von außen gesehen rechts und oben
+  { name: 'Vorne', n: [0, -1, 0], r: [1, 0, 0], u: [0, 0, 1] },
+  { name: 'Hinten', n: [0, 1, 0], r: [-1, 0, 0], u: [0, 0, 1] },
+  { name: 'Rechts', n: [1, 0, 0], r: [0, 1, 0], u: [0, 0, 1] },
+  { name: 'Links', n: [-1, 0, 0], r: [0, -1, 0], u: [0, 0, 1] },
+  { name: 'Oben', n: [0, 0, 1], r: [1, 0, 0], u: [0, 1, 0] },
+  { name: 'Unten', n: [0, 0, -1], r: [1, 0, 0], u: [0, -1, 0] },
+];
+/** Tasten wie in Bambu Studio: 0 Schrägansicht, 1 oben, 2 unten, 3 vorne, 4 hinten, 5 links, 6 rechts. */
+const VIEW_KEYS: Record<string, THREE.Vector3Tuple> = {
+  0: [0.6, -0.8, 0.6], 1: [0, 0, 1], 2: [0, 0, -1], 3: [0, -1, 0], 4: [0, 1, 0], 5: [-1, 0, 0], 6: [1, 0, 0],
+};
+const cubeEl = document.getElementById('viewCube')!;
+const cubeInner = cubeEl.querySelector<HTMLElement>('.cube')!;
+const CUBE_HALF = 30;
+cubeInner.innerHTML = CUBE_FACES.map(({ name, n, r, u }) => {
+  const m = [r[0], r[1], r[2], 0, -u[0], -u[1], -u[2], 0, n[0], n[1], n[2], 0, n[0] * CUBE_HALF, n[1] * CUBE_HALF, n[2] * CUBE_HALF, 1];
+  const cells: string[] = [];
+  for (const j of [1, 0, -1]) {
+    for (const i of [-1, 0, 1]) {
+      const d = [0, 1, 2].map((k) => n[k] + i * r[k] + j * u[k]);
+      cells.push(`<span data-dir="${d.join(',')}">${i === 0 && j === 0 ? name : ''}</span>`);
+    }
+  }
+  return `<div class="face" style="transform: matrix3d(${m.join(',')})">${cells.join('')}</div>`;
+}).join('');
+
+let cubeTransform = '';
+const cubeMatrix = new THREE.Matrix4();
+/** Würfel nach der Kamera drehen: Welt → Ansicht, dann y nach unten wie in CSS. */
+function updateCube() {
+  cubeMatrix.extractRotation(camera.matrixWorldInverse).premultiply(new THREE.Matrix4().makeScale(1, -1, 1));
+  const t = `matrix3d(${Array.from(cubeMatrix.elements, (v) => v.toFixed(4)).join(',')})`;
+  if (t !== cubeTransform) cubeInner.style.transform = cubeTransform = t;
+}
+
+let viewAnim: { from: THREE.Vector3; q: THREE.Quaternion; t0: number; ms: number } | null = null;
+/** Kamera auf die Richtung dir (vom Drehpunkt aus) schwenken. */
+function viewFrom(dir: THREE.Vector3Tuple) {
+  const to = new THREE.Vector3(...dir).normalize();
+  // Genau von oben oder unten: vorne soll unten (bzw. oben) im Bild liegen
+  if (Math.abs(to.z) > 0.9999) to.set(0, -1e-3, Math.sign(to.z)).normalize();
+  const from = camera.position.clone().sub(controls.target).normalize();
+  const angle = from.angleTo(to);
+  if (angle < 1e-4) return;
+  // Schwung der letzten Mausbewegung verwerfen, sonst dreht die Ansicht danach weiter
+  const c = controls as unknown as { _sphericalDelta?: THREE.Spherical; _panOffset?: THREE.Vector3 };
+  c._sphericalDelta?.set(0, 0, 0);
+  c._panOffset?.set(0, 0, 0);
+  viewAnim = { from, q: new THREE.Quaternion().setFromUnitVectors(from, to), t0: performance.now(), ms: 180 + 220 * (angle / Math.PI) };
+}
+/** Ein Schritt der Schwenkbewegung (in der Zeichenschleife). */
+function stepViewAnim() {
+  if (!viewAnim) return;
+  const t = Math.min(1, (performance.now() - viewAnim.t0) / viewAnim.ms);
+  const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+  const dir = viewAnim.from.clone().applyQuaternion(new THREE.Quaternion().slerp(viewAnim.q, e));
+  const dist = camera.position.distanceTo(controls.target);
+  camera.position.copy(controls.target).addScaledVector(dir, dist);
+  if (t >= 1) viewAnim = null;
+}
+// Selbst drehen oder schieben beendet das Schwenken
+controls.addEventListener('start', () => { viewAnim = null; });
+
+/** Ansicht um den Drehpunkt drehen (Ziehen am Würfel): wie Ziehen in der Ansicht. */
+function orbitBy(dTheta: number, dPhi: number) {
+  const o = camera.position.clone().sub(controls.target);
+  const r = o.length();
+  const theta = Math.atan2(o.y, o.x) - dTheta;
+  const phi = THREE.MathUtils.clamp(Math.acos(THREE.MathUtils.clamp(o.z / r, -1, 1)) - dPhi, 1e-3, Math.PI - 1e-3);
+  o.set(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+  camera.position.copy(controls.target).add(o);
+}
+
+let cubeDrag: { x: number; y: number; moved: boolean; cell: HTMLElement | null } | null = null;
+const cubeCell = (t: EventTarget | null) => (t as HTMLElement | null)?.closest<HTMLElement>('[data-dir]') ?? null;
+function highlightCell(cell: HTMLElement | null) {
+  for (const el of cubeInner.querySelectorAll('.hl')) el.classList.remove('hl');
+  // Kanten und Ecken gehören zu mehreren Flächen: alle Teile hervorheben
+  if (cell) for (const el of cubeInner.querySelectorAll(`[data-dir="${cell.dataset.dir}"]`)) el.classList.add('hl');
+}
+cubeEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+  cubeDrag = { x: e.clientX, y: e.clientY, moved: false, cell: cubeCell(e.target) };
+  cubeEl.setPointerCapture(e.pointerId);
+});
+cubeEl.addEventListener('pointermove', (e) => {
+  if (!cubeDrag) {
+    highlightCell(cubeCell(e.target));
+    return;
+  }
+  const dx = e.clientX - cubeDrag.x, dy = e.clientY - cubeDrag.y;
+  if (!cubeDrag.moved && Math.hypot(dx, dy) < 4) return;
+  if (!cubeDrag.moved) {
+    viewAnim = null;
+    highlightCell(null);
+  }
+  cubeDrag.moved = true;
+  cubeDrag.x = e.clientX;
+  cubeDrag.y = e.clientY;
+  orbitBy(dx * Math.PI / 110, dy * Math.PI / 110);
+});
+const endCubeDrag = (e: PointerEvent) => {
+  if (!cubeDrag) return;
+  const { moved, cell } = cubeDrag;
+  cubeDrag = null;
+  if (cubeEl.hasPointerCapture(e.pointerId)) cubeEl.releasePointerCapture(e.pointerId);
+  if (!moved && cell && e.type === 'pointerup') viewFrom(cell.dataset.dir!.split(',').map(Number) as THREE.Vector3Tuple);
+};
+cubeEl.addEventListener('pointerup', endCubeDrag);
+cubeEl.addEventListener('pointercancel', endCubeDrag);
+cubeEl.addEventListener('pointerleave', () => { if (!cubeDrag) highlightCell(null); });
+document.getElementById('viewHome')!.addEventListener('click', () => viewFrom(VIEW_KEYS[0]));
 
 // ---------------------------------------------------------------- Teile
 
@@ -2492,6 +2615,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 't') setTool(tool === 'fit' ? null : 'fit');
   else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
   else if (k === 'a') void arrangeOnBed();
+  else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
