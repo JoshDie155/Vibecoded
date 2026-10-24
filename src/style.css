@@ -193,14 +193,14 @@ button.icon:hover { color: var(--err); }
 button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
-#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar {
+#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar {
   position: absolute; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   max-width: calc(100% - 20px);
   background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
 }
 #toolbar { top: 10px; }
 /* Platz für den Ansichtswürfel oben rechts */
-#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar { max-width: calc(100% - 130px); }
+#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar { max-width: calc(100% - 130px); }
 #viewCube { position: absolute; top: 6px; right: 6px; width: 108px; height: 108px; z-index: 3; user-select: none; -webkit-user-select: none; touch-action: none; }
 #viewCube .cube { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; }
 #viewCube .face {
@@ -217,7 +217,14 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 }
 #viewCube #viewHome:hover { color: var(--accent); border-color: var(--accent); }
 /* Unter der Werkzeugleiste – auch wenn sie in zwei Zeilen umbricht (--bar-top setzt main.ts) */
-#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar { top: var(--bar-top, 58px); font-size: 12.5px; }
+#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar { top: var(--bar-top, 58px); font-size: 12.5px; }
+#splitBar .counts { gap: 10px; }
+#splitBar .counts b { display: inline-block; min-width: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+#splitBar .counts button { padding: 1px 7px; }
+#splitBar input[type='number'] { width: 58px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
+#splitBar .help { margin: 0; flex-basis: 100%; }
+#splitBar .warn { color: var(--warn); }
+#status button.linkish { pointer-events: auto; font: inherit; padding: 0 4px; border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; }
 #cutBar input[type='number'] { width: 58px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #cutBar select { font: inherit; }
 #cutBar .help { margin: 0; flex-basis: 100%; }

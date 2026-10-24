@@ -136,6 +136,12 @@ Innenwände, gleicht den Umlaufsinn an, dreht nach innen zeigende Netze nach au�
 (ebene Ränder sauber abgetragen, verwinkelte mit einem Fächer). Gewählte Flächen und Bemalung bleiben
 erhalten. Zerschneiden und Vereinigen brauchen ein geschlossenes Netz – beim Zerschneiden gibt es dafür
 direkt einen Knopf. Zusammengefallene Dreiecke ohne Fläche gelten nicht als Fehler.
+**Auf Druckplattengröße zerteilen**: Ist ein Teil zu groß für den gewählten Drucker, bietet die Statuszeile
+„Zerteilen …" an (auch per Rechtsklick). PartJoin schlägt vor, wie viele gleich große Stücke je Achse nötig
+sind, damit jedes mit Rand für die Verbinder auf die Platte passt (auch um 90° gedreht); mit − / + lässt sich
+das ändern, die Schnittebenen sind rot vorgezeigt. Verbinder: Dübel (Standard – auch an senkrechten
+Schnitten gut druckbar), Zapfen oder ohne. Danach liegen die Stücke auseinandergerückt wie im Ganzen,
+höhere Lagen dahinter auf der Platte, die Dübel davor; „Auf der Platte anordnen" verteilt sie.
 **Zerschneiden** (Rechtsklick › „Zerschneiden …"): teilt ein Teil an der Schnittebene in zwei – etwa wenn es
 nicht auf die Platte passt oder ohne Stützen druckbar werden soll. Die Ebene stellt man wie in der
 Schnittansicht ein (X/Y/Z, Regler, Seite); gezeigt wird nur dieses Teil aufgeschnitten. Verbinder: ohne

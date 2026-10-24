@@ -30,6 +30,7 @@ import {
 import { unionParts } from './io/union';
 import { type Connector, CutError, cutMesh, planConnectors, releaseCut } from './io/cut';
 import type { MeshHealth } from './math/repair';
+import { planSplit, splitPlanes } from './math/split';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import { makeDemo, makeRoundDemo } from './demo';
 
@@ -2725,6 +2726,7 @@ window.addEventListener('keydown', (e) => {
     } else toast('Zum Skalieren mit der Maus auf ein Teil zeigen (oder Teile auswählen) und S drücken.');
   } else if (scaleTarget && k === 'escape') closeScale();
   else if (cutTarget && k === 'escape') setSection(false);
+  else if (splitTarget && k === 'escape') closeSplit();
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
@@ -3414,6 +3416,7 @@ bambuPrinter.addEventListener('change', () => {
   setBambuPrinter(bambuPrinter.value);
   drawBed();
   renderStatus();
+  if (splitTarget) renderSplit();
 });
 
 onFloor.addEventListener('change', () => {
@@ -4148,6 +4151,228 @@ cutHelp.addEventListener('click', (e) => {
 });
 document.getElementById('cutCancel')!.addEventListener('click', () => setSection(false));
 
+// ---------------------------------------------------------------- Auf Druckplattengröße zerteilen
+
+/**
+ * Ein Teil, das nicht auf die Platte passt, in gleich große Stücke zerteilen – so viele wie nötig, damit
+ * jedes Stück (mit Rand für die Verbinder) auf die Platte des gewählten Druckers passt. Die Stücke
+ * bekommen Dübel (oder Zapfen) und liegen danach auseinandergerückt wie im Ganzen.
+ */
+let splitTarget: { partId: number; counts: [number, number, number] } | null = null;
+let splitConnector: Connector = 'dowel';
+let splitBusy = false;
+const splitBar = document.getElementById('splitBar')!;
+const splitGap = document.getElementById('splitGap') as HTMLInputElement;
+const splitPreview = new THREE.Group();
+scene.add(splitPreview);
+
+/** Rand je Stück: Zapfen stehen bis zu 12 mm heraus. */
+const splitMargin = () => (splitConnector === 'pin' ? 15 : 3);
+
+/** Passt das Teil (so, wie es liegt) auf die Platte – auch um 90° gedreht? */
+function fitsBed(size: THREE.Vector3, margin = 0): boolean {
+  const printer = currentPrinter();
+  const [w, d] = printer.bed.map((x) => x - margin);
+  const flat = (size.x <= w + 0.01 && size.y <= d + 0.01) || (size.x <= d + 0.01 && size.y <= w + 0.01);
+  return flat && (!printer.height || size.z <= printer.height - margin + 0.01);
+}
+
+function openSplit(p: Part) {
+  setTool(null);
+  closeScale();
+  if (section) setSection(false);
+  if (gizmoTarget) closeGizmo();
+  const printer = currentPrinter();
+  const s = partBox(p).getSize(new THREE.Vector3());
+  const plan = planSplit([s.x, s.y, s.z], printer.bed, printer.height, splitMargin());
+  splitTarget = { partId: p.id, counts: plan.counts };
+  splitBar.hidden = false;
+  renderSplit();
+}
+
+function closeSplit() {
+  splitTarget = null;
+  splitBar.hidden = true;
+  clearSplitPreview();
+}
+
+function clearSplitPreview() {
+  for (const o of [...splitPreview.children]) {
+    splitPreview.remove(o);
+    (o as THREE.Mesh).geometry.dispose();
+    ((o as THREE.Mesh).material as THREE.Material).dispose();
+  }
+}
+
+function renderSplit() {
+  const p = splitTarget && getPart(splitTarget.partId);
+  if (!p || !splitTarget) { closeSplit(); return; }
+  const printer = currentPrinter();
+  const box = partBox(p);
+  const s = box.getSize(new THREE.Vector3());
+  const c = splitTarget.counts;
+  document.getElementById('splitTitle')!.textContent = `„${p.name}“ (${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm) für den ${printer.label} zerteilen`;
+  for (let a = 0; a < 3; a++) {
+    splitBar.querySelector(`[data-split-count="${a}"]`)!.textContent = String(c[a]);
+    (splitBar.querySelector(`[data-split-dec="${a}"]`) as HTMLButtonElement).disabled = c[a] <= 1;
+    (splitBar.querySelector(`[data-split-inc="${a}"]`) as HTMLButtonElement).disabled = c[a] >= 12;
+  }
+  splitBar.querySelectorAll<HTMLElement>('[data-sconn]').forEach((b) => b.classList.toggle('on', b.dataset.sconn === splitConnector));
+  const piece = new THREE.Vector3(s.x / c[0], s.y / c[1], s.z / c[2]);
+  const total = c[0] * c[1] * c[2];
+  const fits = fitsBed(piece, splitMargin());
+  (document.getElementById('splitApply') as HTMLButtonElement).disabled = total < 2;
+  document.getElementById('splitHelp')!.innerHTML = `${total} Stück${total > 1 ? 'e' : ''}, je ${mmText1(piece.x)} × ${mmText1(piece.y)} × ${mmText1(piece.z)} mm`
+    + (fits ? ' – jedes passt auf die Platte.' : ' – <span class="warn">so passen die Stücke noch nicht auf die Platte.</span>')
+    + (splitConnector === 'none' ? ' Ohne Verbinder (zum Kleben).' : splitConnector === 'pin' ? ' Zapfen zeigen nach +X/+Y/oben.' : ' Dübel werden eigene Teile.');
+  // Schnittebenen als rote Rechtecke
+  clearSplitPreview();
+  const fill = new THREE.Color(0xe5484d);
+  for (let a = 0; a < 3; a++) {
+    for (const v of splitPlanes(box.min.getComponent(a), box.max.getComponent(a), c[a])) {
+      const [u, w] = [0, 1, 2].filter((k) => k !== a);
+      const corner = (i: number, j: number) => new THREE.Vector3().setComponent(a, v)
+        .setComponent(u, i ? box.max.getComponent(u) : box.min.getComponent(u))
+        .setComponent(w, j ? box.max.getComponent(w) : box.min.getComponent(w));
+      const pts = [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)];
+      const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: fill, depthTest: false, transparent: true, opacity: 0.9 }));
+      const g = new THREE.BufferGeometry().setFromPoints([pts[0], pts[1], pts[2], pts[0], pts[2], pts[3]]);
+      const quad = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: fill, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+      for (const o of [line, quad]) {
+        o.raycast = () => {};
+        o.renderOrder = 7;
+        splitPreview.add(o);
+      }
+    }
+  }
+}
+
+/** Ausdehnung eines Netzes (eigene Koordinaten) entlang einer Weltachse. */
+function extentAlong(positions: Float32Array, W: THREE.Matrix4, axis: number): [number, number] {
+  const e = W.elements;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < positions.length; i += 3) {
+    const v = e[axis] * positions[i] + e[4 + axis] * positions[i + 1] + e[8 + axis] * positions[i + 2] + e[12 + axis];
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  return [lo, hi];
+}
+
+async function applySplit() {
+  const p = splitTarget && getPart(splitTarget.partId);
+  if (!p || !splitTarget || splitBusy) return;
+  const counts = splitTarget.counts;
+  const W = p.mesh.matrixWorld.clone();
+  const inv = W.clone().invert();
+  const box = partBox(p);
+  const size = box.getSize(new THREE.Vector3());
+  const planes: { axis: number; value: number }[] = [];
+  for (let a = 0; a < 3; a++) for (const v of splitPlanes(box.min.getComponent(a), box.max.getComponent(a), counts[a])) planes.push({ axis: a, value: v });
+  if (!planes.length) return;
+  const clearance = Math.max(0, Number(splitGap.value) || 0);
+  let pieces: { positions: Float32Array; cell: number[] }[] = [{ positions: positionsOf(p), cell: [0, 0, 0] }];
+  const dowels: Float32Array[] = [];
+  const notes = new Set<string>();
+  splitBusy = true;
+  let done = 0;
+  const cuts = counts[0] * counts[1] * counts[2] - 1;
+  try {
+    for (const pl of planes) {
+      const next: typeof pieces = [];
+      for (const piece of pieces) {
+        const [lo, hi] = extentAlong(piece.positions, W, pl.axis);
+        if (!(lo < pl.value - 0.01 && hi > pl.value + 0.01)) { next.push(piece); continue; }
+        toast(`Zerteile „${p.name}“ … ${done + 1} von ${cuts}`, 30000);
+        await new Promise((r) => setTimeout(r, 20));
+        // Ebene in Teilkoordinaten; Hälfte B liegt in Richtung der Achse
+        const local = new THREE.Plane(new THREE.Vector3().setComponent(pl.axis, 1), -pl.value).applyMatrix4(inv);
+        const r = await cutMesh(piece.positions, { normal: [local.normal.x, local.normal.y, local.normal.z], offset: -local.constant, connector: splitConnector, clearance }, manifoldWasm);
+        for (const n of r.notes) notes.add(n);
+        const up = [...piece.cell];
+        up[pl.axis]++;
+        next.push({ positions: r.a, cell: piece.cell }, { positions: r.b, cell: up });
+        dowels.push(...r.dowels);
+        done++;
+      }
+      pieces = next;
+    }
+  } catch (err) {
+    toast(err instanceof CutError ? `${err.message}${/wasserdicht/.test(err.message) ? ' Erst „Netz reparieren“.' : ''}` : `Zerteilen fehlgeschlagen: ${(err as Error).message}`, 7000);
+    return;
+  } finally {
+    splitBusy = false;
+    releaseCut();
+  }
+  if (getPart(p.id) !== p) return;
+  // Was am Teil hängt, bleibt, wo es ist; die Verbindungen zum Teil selbst entfallen
+  for (const q of unitMembers(p)) q.layout.copy(q.mesh.matrixWorld);
+  const wasBase = baseId === p.id;
+  const color = `#${p.color.getHexString()}`;
+  const extras = { settings: p.settings, objectSettings: p.objectSettings };
+  const geo = (pos: Float32Array) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  };
+  removePart(p.id);
+  // Reihenfolge: von unten nach oben, vorne nach hinten, links nach rechts
+  pieces.sort((a, b) => a.cell[2] - b.cell[2] || a.cell[1] - b.cell[1] || a.cell[0] - b.cell[0]);
+  const made = pieces.map((pc, i) => ({ part: addPart(`${p.name} ${i + 1}/${pieces.length}`, geo(pc.positions), { color, layout: W, extras }), cell: pc.cell }));
+  if (wasBase) baseId = made[0].part.id;
+  solveAll();
+  // Auseinanderrücken; höhere Lagen kommen hinter die unteren auf die Platte
+  const gap = Math.max(8, Math.min(size.x, size.y) * 0.04);
+  for (const { part, cell } of made) {
+    const b = partBox(part);
+    part.layout.premultiply(new THREE.Matrix4().makeTranslation(
+      cell[0] * gap,
+      cell[1] * gap + cell[2] * (size.y + counts[1] * gap + gap),
+      box.min.z - b.min.z,
+    ));
+  }
+  solveAll();
+  // Dübel stehend in einer Reihe davor
+  let x = box.min.x;
+  for (const [i, d] of dowels.entries()) {
+    const q = addPart(`${p.name} Dübel ${i + 1}`, geo(d), { color, layout: W });
+    const s = partBox(q).getSize(new THREE.Vector3());
+    const axis = s.x >= s.y && s.x >= s.z ? new THREE.Vector3(1, 0, 0) : s.y >= s.z ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    const c = partBox(q).getCenter(new THREE.Vector3());
+    turnUnit([q], layFlat([axis.x, axis.y, axis.z], [c.x, c.y, c.z]));
+    const b = partBox(q);
+    q.layout.premultiply(new THREE.Matrix4().makeTranslation(x - b.min.x, box.min.y - gap * 2 - b.max.y, 0));
+    solveAll();
+    x = partBox(q).max.x + 4;
+    made.push({ part: q, cell: [0, 0, 0] });
+  }
+  selected.clear();
+  for (const { part } of made) selected.add(part.id);
+  closeSplit();
+  solveAll();
+  renderAll();
+  fitView();
+  toast(`„${p.name}“ in ${pieces.length} Stücke zerteilt${dowels.length ? ` + ${dowels.length} Dübel` : ''}. „Auf der Platte anordnen“ (A) legt sie auf die Platte.${notes.size ? ` ${[...notes].join(' ')}` : ''}`, 8000);
+}
+
+splitBar.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (!splitTarget) return;
+  const dec = t.closest<HTMLElement>('[data-split-dec]');
+  const inc = t.closest<HTMLElement>('[data-split-inc]');
+  const conn = t.closest<HTMLElement>('[data-sconn]');
+  if (dec) splitTarget.counts[Number(dec.dataset.splitDec)] = Math.max(1, splitTarget.counts[Number(dec.dataset.splitDec)] - 1);
+  else if (inc) splitTarget.counts[Number(inc.dataset.splitInc)] = Math.min(12, splitTarget.counts[Number(inc.dataset.splitInc)] + 1);
+  else if (conn) splitConnector = conn.dataset.sconn as Connector;
+  else return;
+  renderSplit();
+});
+document.getElementById('splitApply')!.addEventListener('click', () => void applySplit());
+document.getElementById('splitCancel')!.addEventListener('click', closeSplit);
+
 // ---------------------------------------------------------------- Skalieren und Spiegeln
 
 /**
@@ -4606,6 +4831,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
   entries.push(
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ partId: p.id, which: members.length > 1 ? 'unit' : 'part' }), title: 'Größe in % oder mm, Zoll → mm, an X/Y/Z spiegeln (Taste S)' },
     { label: section && !cutTarget ? 'Hier zerschneiden …' : 'Zerschneiden …', run: () => openCut(p), title: 'In zwei Teile schneiden, auf Wunsch mit Zapfen oder Dübeln zum Zusammenstecken' },
+    ...(fitsBed(partBox(p).getSize(new THREE.Vector3())) ? [] : [{ label: 'Auf Druckplattengröße zerteilen …', run: () => openSplit(p), title: `Zu groß für den ${currentPrinter().label}: in Stücke teilen, die auf die Platte passen` }]),
     { label: p.health && !p.health.closed ? 'Netz reparieren ⚠' : 'Netz prüfen und reparieren', run: () => void repairParts([p]), title: p.health ? `Netz: ${healthText(p.health)}` : 'Löcher schließen, verdrehte Flächen umdrehen, Duplikate entfernen' },
     { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
   );
@@ -4724,11 +4950,19 @@ function bedWarning(): string {
   const printer = currentPrinter();
   if (tooBig.length) {
     const n = tooBig[0].name;
-    return ` · <span class="warn">⚠ ${tooBig.length > 1 ? `${tooBig.length} Baugruppen sind` : `„${esc(n)}“ ist`} zu groß für den ${esc(printer.label)} (${printer.bed[0]} × ${printer.bed[1]}${printer.height ? ` × ${printer.height}` : ''} mm)</span>`;
+    const single = tooBig.find((u) => (u as { members?: Part[] }).members?.length === 1) as { members: Part[] } | undefined;
+    return ` · <span class="warn">⚠ ${tooBig.length > 1 ? `${tooBig.length} Baugruppen sind` : `„${esc(n)}“ ist`} zu groß für den ${esc(printer.label)} (${printer.bed[0]} × ${printer.bed[1]}${printer.height ? ` × ${printer.height}` : ''} mm)</span>`
+      + (single ? ` <button class="linkish" data-split-part="${single.members[0].id}">Zerteilen …</button>` : '');
   }
   if (outside.length) return ` · <span class="warn">⚠ ${outside.length > 1 ? `${outside.length} Baugruppen liegen` : `„${esc(outside[0].name)}“ liegt`} nicht ganz auf der Platte – „Auf der Platte anordnen“ (A)</span>`;
   return '';
 }
+
+statusEl.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-split-part]');
+  const p = b && getPart(Number(b.dataset.splitPart));
+  if (p) openSplit(p);
+});
 
 // ---------------------------------------------------------------- Druckplatte
 
