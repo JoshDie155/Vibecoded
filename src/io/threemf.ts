@@ -832,30 +832,37 @@ export interface BambuPrinter {
   filament: string;
   /** Druckbereich in mm */
   bed: [number, number];
+  /** Größte Druckhöhe in mm, falls bekannt. */
+  height?: number;
   /** Drucker mit zwei Düsen: Art jedes Extruders (wie im Druckerprofil von Bambu Studio). */
   extruders?: string[];
 }
 
 export const BAMBU_PRINTERS: BambuPrinter[] = [
-  { id: 'X1C', label: 'X1 Carbon', model: 'Bambu Lab X1 Carbon', printer: 'Bambu Lab X1 Carbon 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1C', bed: [256, 256] },
-  { id: 'X1', label: 'X1', model: 'Bambu Lab X1', printer: 'Bambu Lab X1 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1', bed: [256, 256] },
-  { id: 'X1E', label: 'X1E', model: 'Bambu Lab X1E', printer: 'Bambu Lab X1E 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1C', bed: [256, 256] },
-  { id: 'P1S', label: 'P1S', model: 'Bambu Lab P1S', printer: 'Bambu Lab P1S 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL P1S 0.4 nozzle', bed: [256, 256] },
-  { id: 'P1P', label: 'P1P', model: 'Bambu Lab P1P', printer: 'Bambu Lab P1P 0.4 nozzle', process: '0.20mm Standard @BBL P1P', filament: 'Bambu PLA Basic @BBL P1P', bed: [256, 256] },
-  { id: 'P2S', label: 'P2S', model: 'Bambu Lab P2S', printer: 'Bambu Lab P2S 0.4 nozzle', process: '0.20mm Standard @BBL P2S', filament: 'Bambu PLA Basic @BBL P2S', bed: [256, 256] },
-  { id: 'A1', label: 'A1', model: 'Bambu Lab A1', printer: 'Bambu Lab A1 0.4 nozzle', process: '0.20mm Standard @BBL A1', filament: 'Bambu PLA Basic @BBL A1', bed: [256, 256] },
-  { id: 'A1M', label: 'A1 mini', model: 'Bambu Lab A1 mini', printer: 'Bambu Lab A1 mini 0.4 nozzle', process: '0.20mm Standard @BBL A1M', filament: 'Bambu PLA Basic @BBL A1M', bed: [180, 180] },
+  { id: 'X1C', label: 'X1 Carbon', model: 'Bambu Lab X1 Carbon', printer: 'Bambu Lab X1 Carbon 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1C', bed: [256, 256], height: 256 },
+  { id: 'X1', label: 'X1', model: 'Bambu Lab X1', printer: 'Bambu Lab X1 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1', bed: [256, 256], height: 256 },
+  { id: 'X1E', label: 'X1E', model: 'Bambu Lab X1E', printer: 'Bambu Lab X1E 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL X1C', bed: [256, 256], height: 256 },
+  { id: 'P1S', label: 'P1S', model: 'Bambu Lab P1S', printer: 'Bambu Lab P1S 0.4 nozzle', process: '0.20mm Standard @BBL X1C', filament: 'Bambu PLA Basic @BBL P1S 0.4 nozzle', bed: [256, 256], height: 256 },
+  { id: 'P1P', label: 'P1P', model: 'Bambu Lab P1P', printer: 'Bambu Lab P1P 0.4 nozzle', process: '0.20mm Standard @BBL P1P', filament: 'Bambu PLA Basic @BBL P1P', bed: [256, 256], height: 256 },
+  { id: 'P2S', label: 'P2S', model: 'Bambu Lab P2S', printer: 'Bambu Lab P2S 0.4 nozzle', process: '0.20mm Standard @BBL P2S', filament: 'Bambu PLA Basic @BBL P2S', bed: [256, 256], height: 256 },
+  { id: 'A1', label: 'A1', model: 'Bambu Lab A1', printer: 'Bambu Lab A1 0.4 nozzle', process: '0.20mm Standard @BBL A1', filament: 'Bambu PLA Basic @BBL A1', bed: [256, 256], height: 256 },
+  { id: 'A1M', label: 'A1 mini', model: 'Bambu Lab A1 mini', printer: 'Bambu Lab A1 mini 0.4 nozzle', process: '0.20mm Standard @BBL A1M', filament: 'Bambu PLA Basic @BBL A1M', bed: [180, 180], height: 180 },
   { id: 'A2L', label: 'A2L', model: 'Bambu Lab A2L', printer: 'Bambu Lab A2L 0.4 nozzle', process: '0.20mm Standard @BBL A2L', filament: 'Bambu PLA Basic @BBL A2L 0.4 nozzle', bed: [330, 320] },
-  { id: 'H2S', label: 'H2S', model: 'Bambu Lab H2S', printer: 'Bambu Lab H2S 0.4 nozzle', process: '0.20mm Standard @BBL H2S', filament: 'Bambu PLA Basic @BBL H2S', bed: [340, 320] },
+  { id: 'H2S', label: 'H2S', model: 'Bambu Lab H2S', printer: 'Bambu Lab H2S 0.4 nozzle', process: '0.20mm Standard @BBL H2S', filament: 'Bambu PLA Basic @BBL H2S', bed: [340, 320], height: 340 },
   { id: 'H2C', label: 'H2C', model: 'Bambu Lab H2C', printer: 'Bambu Lab H2C 0.4 nozzle', process: '0.20mm Standard @BBL H2C', filament: 'Bambu PLA Basic @BBL H2C', bed: [330, 320], extruders: ['Direct Drive', 'Direct Drive'] },
-  { id: 'H2D', label: 'H2D', model: 'Bambu Lab H2D', printer: 'Bambu Lab H2D 0.4 nozzle', process: '0.20mm Standard @BBL H2D', filament: 'Bambu PLA Basic @BBL H2D', bed: [350, 320], extruders: ['Direct Drive', 'Direct Drive'] },
-  { id: 'H2DP', label: 'H2D Pro', model: 'Bambu Lab H2D Pro', printer: 'Bambu Lab H2D Pro 0.4 nozzle', process: '0.20mm Standard @BBL H2DP', filament: 'Bambu PLA Basic @BBL H2DP', bed: [350, 320], extruders: ['Direct Drive', 'Direct Drive'] },
+  { id: 'H2D', label: 'H2D', model: 'Bambu Lab H2D', printer: 'Bambu Lab H2D 0.4 nozzle', process: '0.20mm Standard @BBL H2D', filament: 'Bambu PLA Basic @BBL H2D', bed: [350, 320], height: 325, extruders: ['Direct Drive', 'Direct Drive'] },
+  { id: 'H2DP', label: 'H2D Pro', model: 'Bambu Lab H2D Pro', printer: 'Bambu Lab H2D Pro 0.4 nozzle', process: '0.20mm Standard @BBL H2DP', filament: 'Bambu PLA Basic @BBL H2DP', bed: [350, 320], height: 325, extruders: ['Direct Drive', 'Direct Drive'] },
   { id: 'X2D', label: 'X2D', model: 'Bambu Lab X2D', printer: 'Bambu Lab X2D 0.4 nozzle', process: '0.20mm Standard @BBL X2D', filament: 'Bambu PLA Basic @BBL X2D 0.4 nozzle', bed: [256, 256], extruders: ['Direct Drive', 'Bowden'] },
 ];
 
 export interface BambuOptions {
   /** Kennung aus BAMBU_PRINTERS, Standard X1C. */
   printer?: string;
+  /**
+   * Mitte der Druckplatte in den Koordinaten der Teile: Dann liegt alles im Slicer genau so auf der Platte
+   * wie in PartJoin. Ohne Angabe wird das Ganze mittig auf die Platte gesetzt.
+   */
+  plateCenter?: [number, number];
   /** Versionsangabe für Bambu Studio (Format „BambuStudio-xx.xx.xx.xx"). */
   version?: string;
 }
@@ -932,7 +939,9 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
   };
   // Alles zusammen mittig auf die Platte, Unterseite auf z = 0; die Objekte liegen zueinander wie in PartJoin
   const all = box(parts);
-  const c = [(all.min[0] + all.max[0]) / 2, (all.min[1] + all.max[1]) / 2, all.min[2]];
+  const c = opts.plateCenter
+    ? [opts.plateCenter[0], opts.plateCenter[1], all.min[2]]
+    : [(all.min[0] + all.max[0]) / 2, (all.min[1] + all.max[1]) / 2, all.min[2]];
   const printer = BAMBU_PRINTERS.find((p) => p.id === opts.printer) ?? BAMBU_PRINTERS[0];
   const [bx, by] = [printer.bed[0] / 2, printer.bed[1] / 2];
   const groups = new Map<string, ColoredPart[]>();

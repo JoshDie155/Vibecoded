@@ -160,7 +160,7 @@ let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
 /** Werkzeug im 3D-Fenster (siehe setTool) und die im Passungs-Werkzeug gewählte Fläche. */
-let tool: 'lay' | 'fit' | null = null;
+let tool: 'lay' | 'fit' | 'measure' | null = null;
 let fitTarget: { part: Part; f: CylinderFeature | PlaneFeature } | null = null;
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
 let hiddenFolded = false;
@@ -1993,7 +1993,7 @@ function pick(e: PointerEvent | MouseEvent): Hit | null {
   // Fangradius in Bildschirmpixeln, umgerechnet in Modellgröße am Trefferpunkt
   const rect = renderer.domElement.getBoundingClientRect();
   const worldPerPx = (2 * hit.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rect.height;
-  if (snap && pickMode === 'point') {
+  if (snap && (pickMode === 'point' || tool === 'measure')) {
     const sphere = new THREE.Sphere(local.clone(), SNAP_PX * worldPerPx);
     let best: THREE.Vector3 | null = null;
     let bd = sphere.radius;
@@ -2185,6 +2185,10 @@ function hideTip() {
 
 /** Zeigt nach kurzem Verweilen den Namen des Teils unter dem Mauszeiger. */
 function hoverName(e: PointerEvent, part: Part | null) {
+  if ((part?.id ?? null) !== statusHover) {
+    statusHover = part?.id ?? null;
+    renderStatus();
+  }
   if (!part) { hideTip(); return; }
   const rect = view.getBoundingClientRect();
   const place = () => {
@@ -2316,6 +2320,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
   if (tool === 'fit') {
     pickFit(h);
+    return;
+  }
+  if (tool === 'measure') {
+    pickMeasure(h);
     return;
   }
   if (e.shiftKey) {
@@ -2482,6 +2490,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'b') setPickMode('brush');
   else if (k === 'l') setTool(tool === 'lay' ? null : 'lay');
   else if (k === 't') setTool(tool === 'fit' ? null : 'fit');
+  else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
+  else if (k === 'a') void arrangeOnBed();
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
@@ -2663,6 +2673,9 @@ function renderHint() {
   const j = activeJoint();
   const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
   if (tool === 'lay') el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
+  else if (tool === 'measure') el.textContent = measure.length === 1
+    ? 'Zweite Stelle anklicken – oder Esc zum Beenden.'
+    : 'Klicke eine Stelle an (Ecken rasten ein). Rundung: Durchmesser, zwei Stellen: Abstand, zwei parallele Flächen: ihr Abstand. Esc beendet.';
   else if (tool === 'fit') el.textContent = fitTarget ? 'Wert oben eingeben und „Übernehmen" – oder eine andere Fläche anklicken. Esc bricht ab.' : 'Klicke einen Zapfen, eine Bohrung oder eine ebene Fläche an, deren Passung du ändern willst. Esc bricht ab.';
   else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel. Taste ? zeigt Anleitung und Tastenkürzel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
@@ -2715,6 +2728,8 @@ function renderAll() {
     rendering = false;
   }
   renderHint();
+  drawBed();
+  renderStatus();
   rebuildMarkers();
   void runCheck();
   if (gizmoTarget && !tc.dragging) {
@@ -3137,7 +3152,11 @@ function setBambuPrinter(id: string) {
   bambuPrinter.value = id;
   try { localStorage.setItem('partjoin.bambuPrinter', id); } catch { /* ohne Speicher */ }
 }
-bambuPrinter.addEventListener('change', () => setBambuPrinter(bambuPrinter.value));
+bambuPrinter.addEventListener('change', () => {
+  setBambuPrinter(bambuPrinter.value);
+  drawBed();
+  renderStatus();
+});
 
 onFloor.addEventListener('change', () => {
   // Ausschalten: alles bleibt, wo es gerade steht (die Anhebung wird Teil der Ausgangslage)
@@ -3183,16 +3202,22 @@ async function exportAs(kind: string) {
     })),
   }));
   try {
+    const fit = bedFit();
+    const onBed = !fit.outside.length && !fit.tooBig.length;
     if (kind === '3mf-color' || kind === '3mf-bambu') {
       toast('Speichere …', 20000);
       const data = kind === '3mf-bambu'
-        ? await compute('write3mfBambu', { parts: world, opts: { printer: bambuPrinter.value } })
+        ? await compute('write3mfBambu', {
+          parts: world,
+          // Liegt alles auf der Platte, kommt es im Slicer genau so an
+          opts: { printer: bambuPrinter.value, plateCenter: onBed ? [0, 0] : undefined },
+        })
         : await compute('write3mf', { parts: world, mode: 'multicolor' });
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
       const slots = colorSlots(world);
       const objects = new Set(world.map((w) => w.object)).size;
       toast(kind === '3mf-bambu'
-        ? `Gespeichert – ${objects} Objekt${objects > 1 ? 'e (je Baugruppe eins)' : ''}, ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben, Drucker ${bambuPrinter.selectedOptions[0]?.text ?? ''}.`
+        ? `Gespeichert – ${objects} Objekt${objects > 1 ? 'e (je Baugruppe eins)' : ''}, ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben, Drucker ${bambuPrinter.selectedOptions[0]?.text ?? ''}.${onBed ? ' Alles liegt wie hier auf der Platte.' : ' Nicht alles lag auf der Platte – in Bambu Studio „Anordnen“ (A).'}`
         : `Gespeichert. Im Slicer zuordnen: ${slots.map((c, i) => `Extruder ${i + 1} = ${c.toUpperCase()}`).join(' · ')}`, 9000);
       return;
     }
@@ -3235,16 +3260,20 @@ async function exportAs(kind: string) {
  */
 const layBtn = document.getElementById('layFlat')!;
 const fitBtn = document.getElementById('fitTool')!;
+const measureBtn = document.getElementById('measureTool')!;
 function setTool(t: typeof tool) {
   tool = t && parts.length > 0 ? t : null;
   layBtn.classList.toggle('on', tool === 'lay');
   fitBtn.classList.toggle('on', tool === 'fit');
+  measureBtn.classList.toggle('on', tool === 'measure');
   if (tool !== 'fit') closeFit();
+  if (tool !== 'measure') clearMeasure();
   if (!tool) updateHover(null);
   renderHint();
 }
 layBtn.addEventListener('click', () => setTool(tool === 'lay' ? null : 'lay'));
 fitBtn.addEventListener('click', () => setTool(tool === 'fit' ? null : 'fit'));
+measureBtn.addEventListener('click', () => setTool(tool === 'measure' ? null : 'measure'));
 
 /** Teile der Baugruppe (siehe unitOf), zu der p gehört. */
 function unitMembers(p: Part): Part[] {
@@ -3347,6 +3376,243 @@ function worldPositions(members: Part[]): Float32Array {
     for (let i = 0; i < pos.length; i += 3, o += 3) v.fromArray(pos, i).applyMatrix4(q.mesh.matrixWorld).toArray(out, o);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- Statuszeile
+
+/** Teil unter dem Mauszeiger (für die Abmessungen in der Statuszeile). */
+let statusHover: number | null = null;
+const statusEl = document.getElementById('status')!;
+const mmText1 = (x: number) => x.toFixed(1).replace('.', ',');
+
+/** Abmessungen (Breite × Tiefe × Höhe) mehrerer Teile in Weltkoordinaten. */
+function sizeOf(members: Part[]): THREE.Vector3 {
+  return unitBox(members).getSize(new THREE.Vector3());
+}
+
+function renderStatus() {
+  if (!parts.length) { statusEl.innerHTML = ''; return; }
+  const shown = parts.filter((p) => p.visible);
+  const tris = shown.reduce((n, p) => n + positionsOf(p).length / 9, 0);
+  const connected = joints.filter((j) => j.applied && j.status?.kind !== 'err').length;
+  const bits = [
+    `<b>${shown.length}</b>${shown.length === parts.length ? '' : ` von ${parts.length}`} Teil${parts.length === 1 ? '' : 'e'}`,
+    `${tris.toLocaleString('de-DE')} Dreiecke`,
+    `${connected} Verbindung${connected === 1 ? '' : 'en'}`,
+  ];
+  const p = getPart(statusHover);
+  if (p) {
+    const members = unitMembers(p);
+    const s = sizeOf(members);
+    bits.push(`${members.length > 1 ? `Baugruppe „${esc(p.name)}“ (${members.length} Teile)` : `„${esc(p.name)}“`}: <b>${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm</b>`);
+  }
+  statusEl.innerHTML = bits.join(' · ') + bedWarning();
+}
+
+/** Hinweis, wenn Baugruppen nicht auf die Druckplatte passen. */
+function bedWarning(): string {
+  const { outside, tooBig } = bedFit();
+  const printer = currentPrinter();
+  if (tooBig.length) {
+    const n = tooBig[0].name;
+    return ` · <span class="warn">⚠ ${tooBig.length > 1 ? `${tooBig.length} Baugruppen sind` : `„${esc(n)}“ ist`} zu groß für den ${esc(printer.label)} (${printer.bed[0]} × ${printer.bed[1]}${printer.height ? ` × ${printer.height}` : ''} mm)</span>`;
+  }
+  if (outside.length) return ` · <span class="warn">⚠ ${outside.length > 1 ? `${outside.length} Baugruppen liegen` : `„${esc(outside[0].name)}“ liegt`} nicht ganz auf der Platte – „Auf der Platte anordnen“ (A)</span>`;
+  return '';
+}
+
+// ---------------------------------------------------------------- Druckplatte
+
+const currentPrinter = () => BAMBU_PRINTERS.find((p) => p.id === bambuPrinter.value) ?? BAMBU_PRINTERS[0];
+
+/** Umriss der Druckplatte des gewählten Druckers, Mitte im Ursprung (dorthin legt der Export die Platte). */
+const bedGroup = new THREE.Group();
+scene.add(bedGroup);
+let bedDrawn = '';
+
+function drawBed() {
+  const printer = currentPrinter();
+  const { outside, tooBig } = bedFit();
+  const bad = outside.length + tooBig.length > 0;
+  const key = `${printer.id}|${bad}`;
+  if (key === bedDrawn) return;
+  bedDrawn = key;
+  disposeGroup(bedGroup);
+  const [w, d] = printer.bed;
+  const color = bad ? 0xe5484d : 0x2f6fde;
+  const plate = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, d),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.06, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  plate.position.z = -0.02;
+  plate.raycast = () => {};
+  const outline = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints([[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(([x, y]) => new THREE.Vector3(x, y, 0.02))),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 }),
+  );
+  outline.raycast = () => {};
+  // Beschriftung vorne links, flach auf der Platte
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 64;
+  const g = c.getContext('2d')!;
+  g.font = '600 34px system-ui, sans-serif';
+  g.fillStyle = bad ? '#e5484d' : '#2f6fde';
+  g.fillText(`${printer.label} · ${w} × ${d} mm`, 4, 44);
+  const tex = new THREE.CanvasTexture(c);
+  const lw = Math.min(w * 0.6, 160);
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(lw, lw / 8), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  label.position.set(-w / 2 + lw / 2 + 2, -d / 2 - lw / 16 - 2, 0.03);
+  label.raycast = () => {};
+  bedGroup.add(plate, outline, label);
+}
+
+/** Sichtbare Baugruppen mit ihrem Umriss (Weltkoordinaten). */
+function visibleUnits(): { members: Part[]; box: THREE.Box3; name: string }[] {
+  const seen = new Set<number>();
+  const out: { members: Part[]; box: THREE.Box3; name: string }[] = [];
+  for (const p of parts) {
+    if (!p.visible) continue;
+    const key = unitOf.get(p.id) ?? p.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const members = unitMembers(p).filter((q) => q.visible);
+    out.push({ members, box: unitBox(members), name: getPart(key)?.name ?? p.name });
+  }
+  return out;
+}
+
+/** Welche Baugruppen liegen neben der Platte, welche sind größer als sie (auch gedreht)? */
+function bedFit() {
+  const printer = currentPrinter();
+  const [w, d] = printer.bed;
+  const eps = 0.01;
+  const outside: { name: string }[] = [];
+  const tooBig: { name: string }[] = [];
+  for (const u of visibleUnits()) {
+    const s = u.box.getSize(new THREE.Vector3());
+    const fits = ((s.x <= w + eps && s.y <= d + eps) || (s.x <= d + eps && s.y <= w + eps)) && (!printer.height || s.z <= printer.height + eps);
+    if (!fits) tooBig.push(u);
+    else if (u.box.min.x < -w / 2 - eps || u.box.max.x > w / 2 + eps || u.box.min.y < -d / 2 - eps || u.box.max.y > d / 2 + eps) outside.push(u);
+  }
+  return { outside, tooBig };
+}
+
+/**
+ * Alle sichtbaren Baugruppen auf der Platte anordnen: Reihen von vorn nach hinten, größte zuerst, mit
+ * Abstand. Was nicht mehr passt, kommt rechts neben die Platte.
+ */
+async function arrangeOnBed() {
+  const units = visibleUnits();
+  if (!units.length) { toast('Keine sichtbaren Teile.'); return; }
+  beginAction();
+  const [w, d] = currentPrinter().bed;
+  const gap = 6;
+  const items = units
+    .map((u) => ({ ...u, size: u.box.getSize(new THREE.Vector3()) }))
+    .sort((a, b) => b.size.y - a.size.y || b.size.x - a.size.x);
+  let x = -w / 2;
+  let y = -d / 2;
+  let rowDepth = 0;
+  // Überlauf: neben der Platte, in gleicher Weise
+  let ox = w / 2 + 20;
+  let oy = -d / 2;
+  let oRow = 0;
+  let overflow = 0;
+  for (const it of items) {
+    let cx: number;
+    let cy: number;
+    if (x + it.size.x > w / 2 && x > -w / 2) {
+      // neue Reihe
+      x = -w / 2;
+      y += rowDepth + gap;
+      rowDepth = 0;
+    }
+    if (it.size.x <= w && y + it.size.y <= d / 2) {
+      cx = x + it.size.x / 2;
+      cy = y + it.size.y / 2;
+      x += it.size.x + gap;
+      rowDepth = Math.max(rowDepth, it.size.y);
+    } else {
+      overflow++;
+      if (oy + it.size.y > d / 2 && oy > -d / 2) {
+        oy = -d / 2;
+        ox += oRow + gap;
+        oRow = 0;
+      }
+      cx = ox + it.size.x / 2;
+      cy = oy + it.size.y / 2;
+      oy += it.size.y + gap;
+      oRow = Math.max(oRow, it.size.x);
+    }
+    const c = it.box.getCenter(new THREE.Vector3());
+    const T = new THREE.Matrix4().makeTranslation(cx - c.x, cy - c.y, 0);
+    // Ganze Baugruppe verschieben (auch ausgeblendete Teile)
+    for (const q of unitMembers(it.members[0])) q.layout.premultiply(T);
+  }
+  solveAll();
+  if (gizmoTarget) placeGizmo();
+  renderAll();
+  fitView();
+  toast(overflow
+    ? `${items.length - overflow} von ${items.length} Baugruppen auf der Platte angeordnet, ${overflow} passen nicht mehr darauf und liegen rechts daneben.`
+    : `${items.length} Baugruppe${items.length === 1 ? '' : 'n'} auf der Platte angeordnet.`, 6000);
+}
+document.getElementById('arrange')!.addEventListener('click', () => void arrangeOnBed());
+
+// ---------------------------------------------------------------- Messen
+
+/** Bisher angeklickte Stellen (Weltkoordinaten) mit der Fläche darunter. */
+let measure: { p: THREE.Vector3; f: Feature; part: Part }[] = [];
+const measureGroup = new THREE.Group();
+scene.add(measureGroup);
+const measureBar = document.getElementById('measureBar')!;
+const measureText = document.getElementById('measureText')!;
+
+function clearMeasure() {
+  measure = [];
+  disposeGroup(measureGroup);
+  measureBar.hidden = true;
+}
+
+const mmText2 = (x: number) => x.toFixed(2).replace('.', ',');
+
+function pickMeasure(h: Hit) {
+  if (measure.length >= 2) clearMeasure();
+  const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
+  measure.push({ p: h.world.clone(), f, part: h.part });
+  // Markierung
+  const r = Math.max(0.4, sceneScale() * 0.006);
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff8a00, depthTest: false }));
+  dot.position.copy(h.world);
+  dot.renderOrder = 10;
+  measureGroup.add(dot);
+  const out: string[] = [];
+  const round = (x: { f: Feature }) => (x.f.kind === 'cylinder' ? `${x.f.hole ? 'Bohrung' : 'Zapfen'} <b>⌀ ${mmText2(2 * x.f.radius)} mm</b>` : '');
+  if (measure.length === 1) {
+    out.push(round(measure[0]) || 'Erste Stelle gewählt – jetzt die zweite anklicken.');
+  } else {
+    const [a, b] = measure;
+    const d = b.p.clone().sub(a.p);
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a.p, b.p]), new THREE.LineBasicMaterial({ color: 0xff8a00, depthTest: false }));
+    line.renderOrder = 10;
+    measureGroup.add(line);
+    out.push(`Abstand <b>${mmText2(d.length())} mm</b>`, `ΔX ${mmText2(Math.abs(d.x))}`, `ΔY ${mmText2(Math.abs(d.y))}`, `ΔZ ${mmText2(Math.abs(d.z))}`);
+    // Zwei parallele ebene Flächen: ihr Abstand (Wandstärke, Spalt)
+    if (a.f.kind === 'plane' && b.f.kind === 'plane') {
+      const na = new THREE.Vector3(...a.f.normal).transformDirection(a.part.mesh.matrixWorld);
+      const nb = new THREE.Vector3(...b.f.normal).transformDirection(b.part.mesh.matrixWorld);
+      if (Math.abs(na.dot(nb)) > Math.cos(THREE.MathUtils.degToRad(1))) {
+        const ca = new THREE.Vector3(...a.f.centroid).applyMatrix4(a.part.mesh.matrixWorld);
+        const cb = new THREE.Vector3(...b.f.centroid).applyMatrix4(b.part.mesh.matrixWorld);
+        out.push(`Flächenabstand <b>${mmText2(Math.abs(cb.sub(ca).dot(na)))} mm</b>`);
+      }
+    }
+    for (const x of [a, b]) if (round(x)) out.push(round(x));
+  }
+  measureText.innerHTML = out.join(' · ');
+  measureBar.hidden = false;
+  renderHint();
 }
 
 // ---------------------------------------------------------------- Passung

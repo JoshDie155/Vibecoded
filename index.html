@@ -76,6 +76,7 @@
           <div class="row wrap">
             <button id="checkBtn" class="ghost" title="Zeigt, wo sich die Teile berühren, wo ein Spalt bleibt und wo sie ineinander eindringen.">Passung prüfen</button>
             <button id="autoOrient" class="ghost" title="Legt jede Baugruppe mit ihrer größten ebenen Auflage auf die Druckplatte – steht stabil und braucht meist weniger Stützen. Von Hand: oben „Auf Fläche legen“.">Für den Druck ausrichten</button>
+            <button id="arrange" class="ghost" title="Legt alle sichtbaren Baugruppen platzsparend nebeneinander auf die Druckplatte des gewählten Druckers (Taste A). Was nicht mehr passt, liegt rechts daneben.">Auf der Platte anordnen</button>
           </div>
           <div id="checkResult"></div>
           <div class="row wrap">
@@ -106,12 +107,18 @@
           </span>
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
+          <button id="measureTool" class="ghost small" title="Messen: zwei Stellen anklicken für den Abstand, ein Klick auf eine Rundung zeigt ihren Durchmesser, zwei parallele Flächen ihren Abstand (Taste M, Esc beendet)">Messen</button>
           <button id="fitTool" class="ghost small" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)">Passung</button>
           <button id="layFlat" class="ghost small" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)">Auf Fläche legen</button>
           <button id="helpBtn" class="ghost small help-btn" title="Anleitung und Tastenkürzel (Taste ?)" aria-label="Hilfe">?</button>
           <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen.">Gesamtes Modell bewegen</button>
         </div>
         <div id="tip" hidden></div>
+        <div id="status"></div>
+        <div id="measureBar" hidden>
+          <strong>Messen</strong>
+          <span id="measureText"></span>
+        </div>
         <div id="fitBar" hidden>
           <strong id="fitTitle"></strong>
           <label class="small"><span id="fitLabel"></span> <input type="number" id="fitValue" step="0.05" /> mm</label>
@@ -178,8 +185,10 @@
           <h3>Tasten</h3>
           <dl class="keys">
             <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
+            <dt><kbd>M</kbd></dt><dd>Messen: Abstand, Durchmesser, Flächenabstand</dd>
             <dt><kbd>T</kbd></dt><dd>Passung: Zapfen, Bohrung oder Fläche anpassen</dd>
             <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
+            <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
             <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>Z</kbd></dt><dd>Rückgängig – jede Aktion</dd>
@@ -203,6 +212,8 @@
           <h3>Gut zu wissen</h3>
           <ul>
             <li>„Auf die Druckplatte stellen“ (Standard): Jede Baugruppe steht mit ihrem tiefsten Punkt auf der Platte – im Slicer schwebt nichts.</li>
+            <li>Der Umriss zeigt die Druckplatte des gewählten Druckers; rot heißt: etwas liegt daneben oder ist zu groß. Liegt alles darauf, kommt es im Slicer genau so an.</li>
+            <li>Die Statuszeile unten zeigt die Maße der Baugruppe unter dem Mauszeiger.</li>
             <li>PartJoin sichert deine Arbeit laufend im Browser; nach dem Neuladen „Wiederherstellen“.</li>
             <li>Etwas ging schief? <kbd>Strg/⌘</kbd> <kbd>Z</kbd> nimmt jede Aktion zurück.</li>
           </ul>

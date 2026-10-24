@@ -185,13 +185,14 @@ button.icon:hover { color: var(--err); }
 button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
-#toolbar, #gizmoBar, #fitBar {
+#toolbar, #gizmoBar, #fitBar, #measureBar {
   position: absolute; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   max-width: calc(100% - 20px);
   background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
 }
 #toolbar { top: 10px; }
-#gizmoBar, #fitBar { top: 58px; font-size: 12.5px; }
+#gizmoBar, #fitBar, #measureBar { top: 58px; font-size: 12.5px; }
+#measureBar span b { font-variant-numeric: tabular-nums; }
 #fitBar input[type='number'] { width: 76px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #fitBar .help { margin: 0; flex-basis: 100%; }
 #fitBar .help:empty { display: none; }
@@ -235,14 +236,14 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 .chips li button, .chips li input { flex: none; }
 .chips li button { margin-left: auto; }
 #hint {
-  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%);
   max-width: calc(100% - 32px); text-align: center;
   background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line);
   padding: 7px 12px; border-radius: 9px; font-size: 13px; pointer-events: none;
 }
 #hint:empty { display: none; }
 #toast {
-  position: absolute; bottom: 64px; right: 12px; max-width: 340px;
+  position: absolute; bottom: 84px; right: 12px; max-width: 340px;
   background: var(--text); color: var(--panel); padding: 8px 12px; border-radius: 8px; font-size: 13px;
   opacity: 0; transform: translateY(-6px); transition: opacity 0.2s, transform 0.2s; pointer-events: none;
 }
@@ -275,3 +276,14 @@ kbd {
   border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px;
 }
 #help section { border: 0; padding: 0; margin: 0; }
+
+/* Statuszeile unten im 3D-Fenster */
+#status {
+  position: absolute; left: 0; right: 0; bottom: 0; min-height: 22px; padding: 3px 10px;
+  font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--panel) 82%, transparent); border-top: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+#status:empty { display: none; }
+#status b { color: var(--text); font-weight: 600; }
+#status .warn { color: var(--warn); }

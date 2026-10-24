@@ -77,6 +77,13 @@ und Mausaktionen.
    ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
+   **Messen** (oben „Messen", Taste M): zwei Stellen anklicken ergibt Abstand und ΔX/ΔY/ΔZ, ein Klick auf eine
+   Rundung ihren Durchmesser, zwei parallele Flächen ihren Abstand (Wandstärke, Spalt). Ecken rasten ein.
+   Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger.
+   **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers liegt im Ursprung; rot, wenn eine
+   Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte anordnen"
+   (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf, was nicht passt, rechts daneben. Liegt alles
+   auf der Platte, übernimmt der Bambu-Export genau diese Lage.
    **Druckausrichtung**: „Für den Druck ausrichten" legt jede Baugruppe mit ihrer größten ebenen
    Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
    was schon gut liegt, bleibt. Von Hand: oben „Auf Fläche legen" (Taste L), dann die Fläche
