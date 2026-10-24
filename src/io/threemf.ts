@@ -69,6 +69,8 @@ export interface ImportedPart extends SlicerExtras {
 
 export interface ColoredPart extends SlicerExtras {
   name: string;
+  /** Druckplatte (ab 0) beim Bambu-Export mit mehreren Platten. */
+  plate?: number;
   /** Teile mit gleichem Wert werden ein Objekt im Slicer (Bambu-Export); ohne Angabe ein gemeinsames. */
   object?: string;
   /** Name dieses Objekts im Slicer. */
@@ -863,6 +865,11 @@ export interface BambuOptions {
    * wie in PartJoin. Ohne Angabe wird das Ganze mittig auf die Platte gesetzt.
    */
   plateCenter?: [number, number];
+  /**
+   * Mehrere Platten: Mitte jeder Platte in den Koordinaten der Teile (ColoredPart.plate wählt die Platte).
+   * Jedes Objekt kommt so auf seine Platte, wie es dort in PartJoin liegt.
+   */
+  plateCenters?: [number, number][];
   /** Versionsangabe für Bambu Studio (Format „BambuStudio-xx.xx.xx.xx"). */
   version?: string;
 }
@@ -918,6 +925,18 @@ export function bambuPrinterOf(files: Record<string, Uint8Array>): string | unde
 }
 
 /**
+ * Lage der Platten in Bambu Studio: ein Raster mit etwa √n Spalten, Abstand ein Fünftel der Platte,
+ * weitere Reihen nach vorne (−Y). Gibt den Ursprung (vordere linke Ecke) von Platte i an.
+ */
+export function bambuPlateOrigin(i: number, count: number, bed: [number, number]): [number, number] {
+  const v = Math.sqrt(Math.max(1, count));
+  const r = Math.round(v);
+  const cols = v > r ? r + 1 : r;
+  const row = Math.floor(i / cols);
+  return [(i % cols) * bed[0] * 1.2, row ? -row * bed[1] * 1.2 : 0];
+}
+
+/**
  * Projektformat von Bambu Studio / OrcaSlicer: ein Objekt aus mehreren Teilen (je Teil ein Netz in
  * 3D/Objects/object_1.model), Filament je Teil in Metadata/model_settings.config, Drucker,
  * Profile und Filamentfarben in Metadata/project_settings.config. Teile gleicher Farbe bekommen
@@ -944,6 +963,14 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
     : [(all.min[0] + all.max[0]) / 2, (all.min[1] + all.max[1]) / 2, all.min[2]];
   const printer = BAMBU_PRINTERS.find((p) => p.id === opts.printer) ?? BAMBU_PRINTERS[0];
   const [bx, by] = [printer.bed[0] / 2, printer.bed[1] / 2];
+  const plateCount = Math.max(1, opts.plateCenters?.length ?? 1);
+  /** Mitte (Koordinaten der Teile) und Ursprung in Bambu Studio für die Platte eines Objekts. */
+  const plateOf = (list: ColoredPart[]) => {
+    const i = Math.min(plateCount - 1, Math.max(0, list[0].plate ?? 0));
+    const pc = opts.plateCenters?.[i];
+    return { i, center: pc ? [pc[0], pc[1], all.min[2]] : c, origin: bambuPlateOrigin(i, plateCount, printer.bed) };
+  };
+  const plateInstances: string[][] = Array.from({ length: plateCount }, () => []);
   const groups = new Map<string, ColoredPart[]>();
   for (const p of parts) {
     const k = p.object ?? '';
@@ -957,7 +984,6 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
   const mainObjects: string[] = [];
   const items: string[] = [];
   const configObjects: string[] = [];
-  const instances: string[] = [];
   const assemble: string[] = [];
   const subRels: string[] = [];
   const ns = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
@@ -1028,7 +1054,8 @@ ${sub.join('\n')}
     subRels.push(` <Relationship Target="/${path}" Id="rel-${fileNo}" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>`);
 
     const objId = nextId++;
-    const place = `1 0 0 0 1 0 0 0 1 ${f5(o[0] - c[0] + bx)} ${f5(o[1] - c[1] + by)} ${f5(o[2] - c[2])}`;
+    const pl = plateOf(list);
+    const place = `1 0 0 0 1 0 0 0 1 ${f5(o[0] - pl.center[0] + bx + pl.origin[0])} ${f5(o[1] - pl.center[1] + by + pl.origin[1])} ${f5(o[2] - pl.center[2])}`;
     mainObjects.push(`  <object id="${objId}" p:UUID="${uuid(3, objId)}" type="model">
    <components>
 ${components.join('\n')}
@@ -1042,7 +1069,7 @@ ${components.join('\n')}
     <metadata key="extruder" value="${firstSlot}"/>${settingLines(commonSettings(list), '    ')}
 ${settings.join('\n')}
   </object>`);
-    instances.push(`    <model_instance>
+    plateInstances[pl.i].push(`    <model_instance>
       <metadata key="object_id" value="${objId}"/>
       <metadata key="instance_id" value="0"/>
       <metadata key="identify_id" value="${100 + objId}"/>
@@ -1068,12 +1095,12 @@ ${items.join('\n')}
   const config = `<?xml version="1.0" encoding="UTF-8"?>
 <config>
 ${configObjects.join('\n')}
-  <plate>
-    <metadata key="plater_id" value="1"/>
+${plateInstances.map((list, i) => `  <plate>
+    <metadata key="plater_id" value="${i + 1}"/>
     <metadata key="plater_name" value=""/>
     <metadata key="locked" value="false"/>
-${instances.join('\n')}
-  </plate>
+${list.join('\n')}
+  </plate>`).join('\n')}
   <assemble>
 ${assemble.join('\n')}
   </assemble>

@@ -568,3 +568,31 @@ ${textInfo}
     for (let i = 0; i < mb.positions.length; i++) expect(mb.positions[i] - p.modifiers![0].positions[i] - shift[i % 3]).toBeCloseTo(0, 4);
   });
 });
+
+describe('Bambu-Export: mehrere Druckplatten', () => {
+  it('jedes Objekt auf seiner Platte, Lage wie auf der PartJoin-Platte', async () => {
+    const { bambuPlateOrigin } = await import('../src/io/threemf');
+    const W = 256 * 1.2;
+    const parts = [
+      { name: 'A', color: '#ff0000', object: 'a', plate: 0, positions: transformPositions(box(20, 20, 10), new THREE.Matrix4().makeTranslation(-50, 10, 0)) },
+      { name: 'B', color: '#00ff00', object: 'b', plate: 1, positions: transformPositions(box(20, 20, 10), new THREE.Matrix4().makeTranslation(W - 50, 10, 0)) },
+      { name: 'C', color: '#0000ff', object: 'c', plate: 2, positions: transformPositions(box(20, 20, 10), new THREE.Matrix4().makeTranslation(2 * W + 30, -40, 0)) },
+    ];
+    const files = unzipSync(write3MFBambu(parts, { printer: 'P2S', plateCenters: [[0, 0], [W, 0], [2 * W, 0]] }));
+    const cfg = strFromU8(files['Metadata/model_settings.config']);
+    const plates = [...cfg.matchAll(/<plate>([\s\S]*?)<\/plate>/g)].map((m) => [...m[1].matchAll(/key="object_id" value="(\d+)"/g)].map((x) => Number(x[1])));
+    expect(plates).toHaveLength(3);
+    expect(plates.every((p) => p.length === 1)).toBe(true);
+    expect([...cfg.matchAll(/key="plater_id" value="(\d+)"/g)].map((m) => m[1])).toEqual(['1', '2', '3']);
+    const main = strFromU8(files['3D/3dmodel.model']);
+    const pos = [...main.matchAll(/<item objectid="(\d+)"[^>]*transform="([^"]+)"/g)].map((m) => ({ id: Number(m[1]), t: m[2].split(' ').map(Number) }));
+    const at = (id: number) => pos.find((p) => p.id === id)!.t;
+    // Bambu: drei Platten in zwei Spalten; Platte 3 in der zweiten Reihe (nach vorne)
+    expect(bambuPlateOrigin(1, 3, [256, 256])).toEqual([W, 0]);
+    expect(bambuPlateOrigin(2, 3, [256, 256])).toEqual([0, -W]);
+    expect(at(plates[0][0])[9]).toBeCloseTo(-50 + 128, 3);
+    expect(at(plates[1][0])[9]).toBeCloseTo(-50 + 128 + W, 3);
+    expect(at(plates[2][0])[9]).toBeCloseTo(30 + 128, 3);
+    expect(at(plates[2][0])[10]).toBeCloseTo(-40 + 128 - W, 3);
+  });
+});

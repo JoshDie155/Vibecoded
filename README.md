@@ -84,8 +84,9 @@ und Mausaktionen.
    Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger.
    **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers liegt im Ursprung; rot, wenn eine
    Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte anordnen"
-   (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf, was nicht passt, rechts daneben. Liegt alles
-   auf der Platte, übernimmt der Bambu-Export genau diese Lage.
+   (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf; passt nicht alles auf eine Platte, füllt es
+   weitere Platten (rechts daneben gezeichnet, „Platte 2", …). Liegt alles auf den Platten, übernimmt der
+   Bambu-Export genau diese Lage – mit derselben Aufteilung auf Platten in Bambu Studio.
    **Druckausrichtung**: „Für den Druck ausrichten" legt jede Baugruppe mit ihrer größten ebenen
    Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
    was schon gut liegt, bleibt. Von Hand: oben „Auf Fläche legen" (Taste L), dann die Fläche
