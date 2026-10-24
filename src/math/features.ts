@@ -1851,6 +1851,77 @@ export function transformFeature<F extends Feature>(f: F, T: Rigid): F {
   };
 }
 
+/** Ähnlichkeitsabbildung: 4×4-Matrix (spaltenweise wie THREE.Matrix4) aus Drehung, Verschiebung, Spiegelung und einheitlicher Skalierung. */
+export interface Similarity {
+  point: (v: Vec3) => Vec3;
+  /** Richtung (Einheitsvektor) – auch für Normalen richtig, da die Abbildung winkeltreu ist. */
+  dir: (v: Vec3) => Vec3;
+  /** Längenfaktor. */
+  s: number;
+  mirror: boolean;
+}
+
+export function similarity(m: ArrayLike<number>): Similarity {
+  const e = m;
+  const lin = (v: Vec3): Vec3 => [
+    e[0] * v[0] + e[4] * v[1] + e[8] * v[2],
+    e[1] * v[0] + e[5] * v[1] + e[9] * v[2],
+    e[2] * v[0] + e[6] * v[1] + e[10] * v[2],
+  ];
+  const det = e[0] * (e[5] * e[10] - e[9] * e[6]) - e[4] * (e[1] * e[10] - e[9] * e[2]) + e[8] * (e[1] * e[6] - e[5] * e[2]);
+  return {
+    point: (v) => add(lin(v), [e[12], e[13], e[14]]),
+    dir: (v) => normalize(lin(v)),
+    s: Math.cbrt(Math.abs(det)),
+    mirror: det < 0,
+  };
+}
+
+/**
+ * Netz (nicht indizierte Dreiecke) mit einer Matrix umrechnen. Spiegelt sie, werden je Dreieck die
+ * Ecken 2 und 3 getauscht – sonst zeigten die Normalen nach innen. Die Dreiecke behalten ihre Nummern.
+ */
+export function transformMesh(positions: Float32Array, m: ArrayLike<number>): Float32Array {
+  const S = similarity(m);
+  const out = new Float32Array(positions.length);
+  for (let t = 0; t < positions.length; t += 9) {
+    for (let k = 0; k < 3; k++) {
+      const q = S.point([positions[t + 3 * k], positions[t + 3 * k + 1], positions[t + 3 * k + 2]]);
+      const at = t + 3 * (S.mirror && k ? 3 - k : k);
+      out[at] = q[0];
+      out[at + 1] = q[1];
+      out[at + 2] = q[2];
+    }
+  }
+  return out;
+}
+
+/**
+ * Fläche mit einer Ähnlichkeitsabbildung umrechnen (Skalieren oder Spiegeln eines Teils): Längen wachsen
+ * mit dem Faktor, Flächeninhalte mit dessen Quadrat. Beim Spiegeln bleiben Hauptachsen ein Rechtssystem
+ * und der Umriss läuft weiter im selben Sinn um die Normale.
+ */
+export function similarityFeature<F extends Feature>(f: F, S: Similarity): F {
+  const { point: p, dir: d, s } = S;
+  if (f.kind === 'cylinder') {
+    return { ...f, center: p(f.center), axis: canonical(d(f.axis)), radius: f.radius * s, length: f.length * s, rms: f.rms * s, area: f.area * s * s };
+  }
+  if (f.kind === 'edge') return { ...f, a: p(f.a), b: p(f.b), center: p(f.center), dir: d(f.dir), normal: d(f.normal), length: f.length * s };
+  if (f.kind === 'surface') return { ...f, centroid: p(f.centroid), normal: d(f.normal), area: f.area * s * s };
+  const outline = f.outline.map(p);
+  if (S.mirror) outline.reverse();
+  const v = d(f.axes.v);
+  return {
+    ...f,
+    centroid: p(f.centroid),
+    normal: d(f.normal),
+    area: f.area * s * s,
+    outline,
+    circle: f.circle ? { center: p(f.circle.center), radius: f.circle.radius * s, rms: f.circle.rms * s } : undefined,
+    axes: { u: d(f.axes.u), v: S.mirror ? scale(v, -1) : v, size: [f.axes.size[0] * s, f.axes.size[1] * s] },
+  };
+}
+
 /**
  * Fläche aus frei gewählten Dreiecken (z. B. mit dem Pinsel bemalt): eben, wenn alle Dreiecke in einer
  * Ebene liegen (dann mit Umriss und Hauptachsen wie eine erkannte Fläche), sonst Freiformfläche mit

@@ -124,6 +124,13 @@ Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder he
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie, Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Skalieren und Spiegeln** (Rechtsklick › „Skalieren / Spiegeln …" oder Taste S über einem Teil bzw. für die
+Auswahl): Größe in % oder als Breite/Tiefe/Höhe in mm (gleichmäßig), Schnellwahl 50 %, 200 %, Zoll → mm
+(× 25,4) und cm → mm; Spiegeln an X, Y oder Z. Wahlweise die ganze Baugruppe oder nur ein Teil – um die
+Mitte, danach wieder auf der Platte. Verbindungen bleiben erhalten: Wird alles gemeinsam umgeformt, gilt ihr
+Ergebnis unverändert weiter; bei einem einzelnen Teil setzen sich die verbundenen Teile neu daran. Bemalung
+und Bambu-Text skalieren mit (der Text bleibt in Bambu Studio bearbeitbar); beim Spiegeln gehen Bemalung
+und Bearbeitbarkeit des Textes verloren (die Textform bleibt), PartJoin sagt das vorher.
 **Mehrfachauswahl**: In der Teileliste wählt Strg/⌘+Klick einzelne Teile, Umschalt+Klick einen Bereich; im
 3D-Fenster Umschalt+Klick, Strg/⌘+A alle sichtbaren, Esc hebt auf. Ausgewählte Teile haben einen Rahmen;
 über der Liste (und per Rechtsklick) lassen sie sich **gruppieren** – sie bleiben, wo sie sind, und bewegen

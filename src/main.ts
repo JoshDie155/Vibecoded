@@ -7,7 +7,7 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } fro
 import { type Rigid, type Vec3, IDENTITY, compose, rotate, rotationAbout } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
-import { type CylinderFeature, type EdgeFeature, type Feature, type PlaneFeature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, transformFeature } from './math/features';
+import { type CylinderFeature, type EdgeFeature, type Feature, type PlaneFeature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, similarity, similarityFeature, transformFeature, transformMesh } from './math/features';
 import { detectEdge } from './math/edges';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
@@ -92,6 +92,8 @@ interface FeatureCache {
   summary: string;
   perm?: number[];
   turn?: { point: Vec3; axis: Vec3; angles: number[] };
+  /** Nach Skalieren/Spiegeln aller beteiligten Teile: Ergebnis gilt weiter, nur der Schlüssel ist neu. */
+  rekey?: boolean;
 }
 
 /**
@@ -564,10 +566,34 @@ function toast(msg: string, ms = 3200) {
   toastTimer = window.setTimeout(() => el.classList.remove('show'), ms);
 }
 
-/** Umriss eines Teils in Weltkoordinaten (ohne angehängte Darstellung wie Modifier). */
+/**
+ * Umriss eines Teils in Weltkoordinaten (ohne angehängte Darstellung wie Modifier) – aus den Eckpunkten,
+ * nicht aus dem gedrehten Umrissquader, der bei schräg liegenden Teilen zu groß wäre. Je Drehung
+ * zwischengespeichert, Verschieben kostet nichts.
+ */
+const boxCache = new WeakMap<Part, { key: string; min: THREE.Vector3; max: THREE.Vector3 }>();
 function partBox(p: Part): THREE.Box3 {
   p.mesh.updateWorldMatrix(false, false);
-  return p.geom.boundingBox!.clone().applyMatrix4(p.mesh.matrixWorld);
+  const e = p.mesh.matrixWorld.elements;
+  const key = `${e[0]},${e[1]},${e[2]},${e[4]},${e[5]},${e[6]},${e[8]},${e[9]},${e[10]}`;
+  let c = boxCache.get(p);
+  if (c?.key !== key) {
+    const pos = positionsOf(p);
+    const mn = [Infinity, Infinity, Infinity];
+    const mx = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < pos.length; i += 3) {
+      const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+      for (let k = 0; k < 3; k++) {
+        const w = e[k] * x + e[4 + k] * y + e[8 + k] * z;
+        if (w < mn[k]) mn[k] = w;
+        if (w > mx[k]) mx[k] = w;
+      }
+    }
+    c = { key, min: new THREE.Vector3(...mn), max: new THREE.Vector3(...mx) };
+    boxCache.set(p, c);
+  }
+  const t = new THREE.Vector3(e[12], e[13], e[14]);
+  return new THREE.Box3(c.min.clone().add(t), c.max.clone().add(t));
 }
 
 function fitView() {
@@ -1254,6 +1280,7 @@ function solveFeatureJoint(j: Joint, fixed: Part, moving: Part, Mf: Rigid, place
     srcM, dstM, j.alt, j.seat, j.ordered, j.normals, j.overlap,
   ]);
 
+  if (j.cache?.key !== key && j.cache?.rekey) j.cache = { ...j.cache, key, rekey: false };
   if (j.cache?.key !== key) {
     j.cache = undefined;
     const fit = fitFeatures({
@@ -2650,6 +2677,16 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
+  else if (k === 's') {
+    // Auswahl oder das Teil unter dem Mauszeiger (das „s“ soll nicht im Eingabefeld landen)
+    e.preventDefault();
+    const hovered = getPart(statusHover);
+    if (selected.size > 1) openScale({ sel: [...selected] });
+    else if (hovered || selected.size === 1) {
+      const p = hovered ?? getPart([...selected][0])!;
+      openScale({ partId: p.id, which: unitMembers(p).length > 1 ? 'unit' : 'part' });
+    } else toast('Zum Skalieren mit der Maus auf ein Teil zeigen (oder Teile auswählen) und S drücken.');
+  } else if (scaleTarget && k === 'escape') closeScale();
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
@@ -2892,6 +2929,7 @@ function renderAll() {
   renderHint();
   drawBed();
   renderStatus();
+  if (scaleTarget) renderScaleBar(true);
   rebuildMarkers();
   void runCheck();
   if (gizmoTarget && !tc.dragging) {
@@ -3553,6 +3591,203 @@ function worldPositions(members: Part[]): Float32Array {
   return out;
 }
 
+// ---------------------------------------------------------------- Skalieren und Spiegeln
+
+/**
+ * Teile mit einer Ähnlichkeitsabbildung A (Weltkoordinaten) umformen: skalieren oder spiegeln. Die Lage
+ * der Teile bleibt, ihre Netze werden in eigenen Koordinaten mit L = W⁻¹·A·W umgerechnet, ebenso die
+ * Flächen und Punkte der Verbindungen und die Modifier. Gehören alle Teile einer Verbindung dazu, bleibt
+ * ihr Ergebnis gültig (beide Seiten gleich umgeformt); sonst wird sie neu berechnet.
+ * Beim Spiegeln gehen Bemalung und bearbeitbarer Text verloren (der Text bleibt als Form erhalten).
+ */
+function transformParts(list: Part[], A: THREE.Matrix4): { paint: number; text: number } {
+  const maps = new Map<number, ReturnType<typeof similarity> & { m: THREE.Matrix4 }>();
+  for (const p of list) {
+    p.mesh.updateMatrixWorld();
+    const m = p.mesh.matrixWorld.clone().invert().multiply(A).multiply(p.mesh.matrixWorld);
+    maps.set(p.id, { ...similarity(m.elements), m });
+  }
+  const S = similarity(A.elements);
+  for (const j of joints) {
+    const sidePart = (side: Side) => (side === 'a' ? j.a : j.b);
+    const involved = new Set([j.a, j.b].filter((x): x is number => x !== null));
+    const conv = (f: PickedFeature, side: Side): PickedFeature => {
+      if (f.on !== undefined) involved.add(f.on);
+      const owner = f.on ?? sidePart(side);
+      const T = owner !== null ? maps.get(owner) : undefined;
+      const g = T ? similarityFeature(f, T) : f;
+      return f.pieces ? { ...g, pieces: f.pieces.map((q) => conv(q, side)) } : g;
+    };
+    const fa = j.fa.map((f) => conv(f, 'a'));
+    const fb = j.fb.map((f) => conv(f, 'b'));
+    if (![...involved].some((id) => maps.has(id))) continue;
+    const convM = (list: Marker[], side: Side) => {
+      const T = maps.get(sidePart(side) ?? -1);
+      return T ? list.map((m) => ({ p: T.point(m.p), n: T.dir(m.n) })) : list;
+    };
+    j.fa = fa;
+    j.fb = fb;
+    j.ma = convM(j.ma, 'a');
+    j.mb = convM(j.mb, 'b');
+    j.proposals = undefined;
+    const Tf = j.fixedSide ? maps.get(sidePart(j.fixedSide) ?? -1) : undefined;
+    if ([...involved].every((id) => maps.has(id)) && j.cache && Tf) {
+      // Ergebnis im Koordinatensystem des festen Teils: Lage bleibt, Bewegungsachsen und Fehler mitrechnen
+      const c = j.cache;
+      j.cache = {
+        ...c,
+        rekey: true,
+        distError: c.distError * S.s,
+        free: c.free.map((m) => (m.kind === 'rotate' ? { kind: 'rotate', point: Tf.point(m.point), axis: Tf.dir(m.axis) } : { kind: 'translate', axis: Tf.dir(m.axis) })),
+        turn: c.turn && { point: Tf.point(c.turn.point), axis: Tf.dir(c.turn.axis), angles: Tf.mirror ? c.turn.angles.map((a) => -a) : c.turn.angles },
+      };
+    } else if (![...involved].every((id) => maps.has(id))) markersChanged(j);
+  }
+  const lost = { paint: 0, text: 0 };
+  for (const p of list) {
+    const T = maps.get(p.id)!;
+    const e = T.m.elements;
+    const modifiers = p.modifiers?.map((m) => {
+      const positions = transformMesh(m.positions, e);
+      if (!m.textInfo || !m.transform) return { ...m, positions };
+      if (T.mirror) {
+        lost.text++;
+        const { textInfo: _t, local: _l, transform: _m, ...rest } = m;
+        return { ...rest, positions };
+      }
+      // Text: das eigene Netz bleibt, seine Lage wird mit umgerechnet (Bambu Studio skaliert ihn so)
+      return { ...m, positions, transform: T.m.clone().multiply(new THREE.Matrix4().fromArray(m.transform)).toArray() };
+    });
+    if (T.mirror && p.paint) lost.paint++;
+    replaceGeometry(p, transformMesh(positionsOf(p), e), { paint: T.mirror ? undefined : p.paint, modifiers });
+  }
+  solveAll();
+  renderAll();
+  return lost;
+}
+
+const scaleBar = document.getElementById('scaleBar')!;
+const scalePct = document.getElementById('scalePct') as HTMLInputElement;
+const scaleDims = ['scaleX', 'scaleY', 'scaleZ'].map((id) => document.getElementById(id) as HTMLInputElement);
+/** Was skaliert wird: ein Teil (allein oder mit seiner Baugruppe) oder die Auswahl. */
+let scaleTarget: { partId: number; which: 'unit' | 'part' } | { sel: number[] } | null = null;
+
+function scaleMembers(): Part[] {
+  if (!scaleTarget) return [];
+  if ('sel' in scaleTarget) return scaleTarget.sel.map((id) => getPart(id)).filter((p): p is Part => !!p);
+  const p = getPart(scaleTarget.partId);
+  if (!p) return [];
+  return scaleTarget.which === 'unit' ? unitMembers(p) : [p];
+}
+
+function openScale(target: NonNullable<typeof scaleTarget>) {
+  if (!('sel' in target) && !getPart(target.partId)) return;
+  setTool(null);
+  scaleTarget = target;
+  scaleBar.hidden = false;
+  renderScaleBar();
+  scalePct.focus();
+  scalePct.select();
+}
+
+function closeScale() {
+  scaleTarget = null;
+  scaleBar.hidden = true;
+}
+
+const fmtNum = (x: number) => String(+x.toFixed(2));
+
+function renderScaleBar(keepPct = false) {
+  const list = scaleMembers();
+  if (!scaleTarget || !list.length) { closeScale(); return; }
+  const first = list[0];
+  const unit = 'sel' in scaleTarget ? [] : unitMembers(first);
+  document.getElementById('scaleTitle')!.textContent = 'sel' in scaleTarget
+    ? `${list.length} Teile skalieren / spiegeln`
+    : list.length > 1 ? `${unitName(list)} skalieren / spiegeln` : `„${first.name}“ skalieren / spiegeln`;
+  const seg = document.getElementById('scaleWhich')!;
+  seg.hidden = 'sel' in scaleTarget || unit.length < 2;
+  seg.querySelectorAll<HTMLButtonElement>('[data-which]').forEach((b) => b.classList.toggle('on', !('sel' in scaleTarget!) && b.dataset.which === scaleTarget!.which));
+  if (!keepPct) scalePct.value = '100';
+  updateScaleDims();
+  const paint = list.some((p) => p.paint);
+  const text = list.some((p) => p.modifiers?.some((m) => m.textInfo));
+  document.getElementById('scaleHelp')!.textContent = [
+    'Skaliert gleichmäßig um die Mitte; Verbindungen und Bemalung bleiben.',
+    paint || text ? `Spiegeln entfernt ${[paint ? 'die Bemalung' : '', text ? 'die Bearbeitbarkeit des Textes (die Form bleibt)' : ''].filter(Boolean).join(' und ')}.` : '',
+  ].filter(Boolean).join(' ');
+}
+
+/** Maße nach dem eingegebenen Faktor. */
+function updateScaleDims(except?: HTMLInputElement) {
+  const k = (Number(scalePct.value) || 100) / 100;
+  const size = sizeOf(scaleMembers());
+  [size.x, size.y, size.z].forEach((v, i) => { if (scaleDims[i] !== except) scaleDims[i].value = fmtNum(v * k); });
+}
+
+scalePct.addEventListener('input', () => updateScaleDims());
+scaleDims.forEach((input, i) => input.addEventListener('input', () => {
+  const size = sizeOf(scaleMembers());
+  const cur = [size.x, size.y, size.z][i];
+  const want = Number(input.value);
+  if (!(want > 0) || !(cur > 0)) return;
+  scalePct.value = fmtNum((want / cur) * 100);
+  updateScaleDims(input);
+}));
+for (const el of [scalePct, ...scaleDims]) {
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyScale(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeScale(); }
+  });
+}
+document.getElementById('scaleQuick')!.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-k]');
+  if (!b) return;
+  scalePct.value = fmtNum(Number(b.dataset.k) * 100);
+  updateScaleDims();
+});
+document.getElementById('scaleWhich')!.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-which]');
+  if (!b || !scaleTarget || 'sel' in scaleTarget) return;
+  scaleTarget.which = b.dataset.which as 'unit' | 'part';
+  renderScaleBar(true);
+});
+
+/** Abbildung um die Mitte der Teile: gleichmäßig skalieren (k) bzw. an einer Achse spiegeln. */
+function aroundCenter(list: Part[], S: THREE.Matrix4): THREE.Matrix4 {
+  const c = unitBox(list).getCenter(new THREE.Vector3());
+  return new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(S).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+}
+
+function applyScale() {
+  const list = scaleMembers();
+  const k = Number(scalePct.value) / 100;
+  if (!list.length) return;
+  if (!(k > 0) || !Number.isFinite(k)) { toast('Bitte eine Größe über 0 % eingeben.'); return; }
+  if (Math.abs(k - 1) < 1e-9) return;
+  beginAction();
+  transformParts(list, aroundCenter(list, new THREE.Matrix4().makeScale(k, k, k)));
+  const s = sizeOf(scaleMembers());
+  toast(`Auf ${fmtNum(k * 100).replace('.', ',')} % skaliert: ${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm.`);
+  renderScaleBar();
+}
+
+function mirrorAxis(axis: number) {
+  const list = scaleMembers();
+  if (!list.length) return;
+  beginAction();
+  const d = [1, 1, 1];
+  d[axis] = -1;
+  const lost = transformParts(list, aroundCenter(list, new THREE.Matrix4().makeScale(d[0], d[1], d[2])));
+  const notes = [lost.paint ? 'Bemalung entfernt' : '', lost.text ? 'Text ist jetzt eine feste Form' : ''].filter(Boolean);
+  toast(`An ${'XYZ'[axis]} gespiegelt${notes.length ? ` – ${notes.join(', ')}` : ''}.`);
+  renderScaleBar(true);
+}
+
+document.getElementById('scaleApply')!.addEventListener('click', applyScale);
+document.getElementById('scaleClose')!.addEventListener('click', closeScale);
+scaleBar.querySelectorAll<HTMLButtonElement>('[data-mirror]').forEach((b) => b.addEventListener('click', () => mirrorAxis(Number(b.dataset.mirror))));
+
 // ---------------------------------------------------------------- Mehrfachauswahl und Gruppen
 
 /**
@@ -3811,7 +4046,10 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
       { label: 'Passung an dieser Stelle …', run: () => { setTool('fit'); pickFit(h); }, title: 'Zapfen dünner, Bohrung weiter oder Fläche versetzen.' },
     );
   }
-  entries.push({ label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) });
+  entries.push(
+    { label: 'Skalieren / Spiegeln …', run: () => openScale({ partId: p.id, which: members.length > 1 ? 'unit' : 'part' }), title: 'Größe in % oder mm, Zoll → mm, an X/Y/Z spiegeln (Taste S)' },
+    { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
+  );
   if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });
   if (p.group && groupOf(p).length > 1) {
     entries.push(
@@ -3836,6 +4074,7 @@ function selectionMenu(x: number, y: number) {
     { label: 'Ausblenden', run: () => setVisible(list, false) },
     { label: 'Nur diese zeigen', run: () => setVisible(others, false), disabled: !others.length },
     { label: 'Farbe für alle …', run: () => pickColor(list, x, y) },
+    { label: 'Skalieren / Spiegeln …', run: () => openScale({ sel: list.map((q) => q.id) }) },
     'sep',
     { label: 'Gruppieren', run: () => groupParts(list), disabled: sameGroup(list), title: 'Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam.' },
     ...(grouped ? [{ label: 'Gruppe auflösen', run: () => ungroupAll(list) }] : []),
@@ -4221,7 +4460,7 @@ function applyFit() {
  * Teil mit neuer Form (gleiche Dreiecke, andere Eckpunkte): ein neues Teil-Objekt mit derselben Id an
  * seiner Stelle. Das alte bleibt für „Rückgängig" erhalten; Verbindungen bleiben, wo sie sind.
  */
-function replaceGeometry(old: Part, positions: Float32Array): Part {
+function replaceGeometry(old: Part, positions: Float32Array, extras?: Pick<Part, 'paint' | 'modifiers'>): Part {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   g.computeVertexNormals();
@@ -4229,7 +4468,7 @@ function replaceGeometry(old: Part, positions: Float32Array): Part {
   g.computeBoundingSphere();
   const fresh = addPart(old.name, g, {
     id: old.id, color: `#${old.color.getHexString()}`, group: old.group, layout: old.layout,
-    extras: { paint: old.paint, palette: old.palette, modifiers: old.modifiers, settings: old.settings, objectSettings: old.objectSettings },
+    extras: { paint: old.paint, palette: old.palette, modifiers: old.modifiers, settings: old.settings, objectSettings: old.objectSettings, ...extras },
   });
   fresh.visible = old.visible;
   fresh.mesh.visible = old.visible;

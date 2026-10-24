@@ -140,6 +140,29 @@
           <button id="fitCancel" class="ghost small">Abbrechen</button>
           <p class="help" id="fitHelp"></p>
         </div>
+        <div id="scaleBar" hidden>
+          <strong id="scaleTitle"></strong>
+          <span class="seg" id="scaleWhich" role="group" aria-label="Was skaliert wird">
+            <button data-which="unit" title="Alle Teile, die zusammen auf der Platte stehen">Baugruppe</button>
+            <button data-which="part" title="Nur dieses Teil – verbundene Teile passen sich an">Nur dieses Teil</button>
+          </span>
+          <label class="small">Größe <input type="number" id="scalePct" step="1" min="0.1" /> %</label>
+          <span class="small dims"><input type="number" id="scaleX" step="0.1" min="0.01" title="Breite (X) in mm" /> × <input type="number" id="scaleY" step="0.1" min="0.01" title="Tiefe (Y) in mm" /> × <input type="number" id="scaleZ" step="0.1" min="0.01" title="Höhe (Z) in mm" /> mm</span>
+          <span class="row" id="scaleQuick">
+            <button class="ghost small" data-k="0.5">50 %</button>
+            <button class="ghost small" data-k="2">200 %</button>
+            <button class="ghost small" data-k="25.4" title="Das Modell wurde in Zoll angelegt und ist deshalb 25,4-mal zu klein">Zoll → mm</button>
+            <button class="ghost small" data-k="10" title="Das Modell wurde in Zentimetern angelegt">cm → mm</button>
+          </span>
+          <button id="scaleApply" class="small">Skalieren</button>
+          <span class="row mirror">Spiegeln:
+            <button class="ghost small" data-mirror="0" title="An der Mitte spiegeln: links ↔ rechts">X</button>
+            <button class="ghost small" data-mirror="1" title="An der Mitte spiegeln: vorne ↔ hinten">Y</button>
+            <button class="ghost small" data-mirror="2" title="An der Mitte spiegeln: oben ↔ unten">Z</button>
+          </span>
+          <button id="scaleClose" class="ghost small">Schließen</button>
+          <p class="help" id="scaleHelp"></p>
+        </div>
         <div id="gizmoBar" hidden>
           <strong data-g="title"></strong>
           <span class="seg" role="group" aria-label="Gizmo-Modus">
@@ -205,6 +228,7 @@
             <dt><kbd>T</kbd></dt><dd>Passung: Zapfen, Bohrung oder Fläche anpassen</dd>
             <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
+            <dt><kbd>S</kbd></dt><dd>Skalieren/Spiegeln: Teil unter dem Zeiger oder Auswahl</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
             <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie in Bambu Studio</dd>
             <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden, sonst Auswahl aufheben</dd>
