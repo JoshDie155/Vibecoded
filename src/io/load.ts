@@ -17,7 +17,8 @@ import { VRMLLoader } from 'three/addons/loaders/VRMLLoader.js';
 import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
 import { VTKLoader } from 'three/addons/loaders/VTKLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { type ImportedPart, type SlicerExtras, read3MF } from './threemf';
+import type { ImportedPart, SlicerExtras } from './threemf';
+import { compute } from '../compute/client';
 
 export const SUPPORTED = ['stl', 'obj', 'mtl', 'ply', '3mf', 'amf', 'glb', 'gltf', 'fbx', 'dae', 'wrl', '3ds', 'vtk'] as const;
 
@@ -120,7 +121,9 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
   const buf = await file.arrayBuffer();
 
   if (ext === '3mf') {
-    const parts = read3MF(new Uint8Array(buf), opts.info);
+    // Lesen im Hintergrund-Thread: große Projekte blockieren die Oberfläche nicht
+    const { parts, printer } = await compute('read3mf', { data: new Uint8Array(buf) });
+    if (opts.info) opts.info.printer = printer;
     const list = opts.split && parts.length <= MAX_SPLIT ? parts : [joinParts(parts)];
     return list.map((p) => {
       const g = new THREE.BufferGeometry();

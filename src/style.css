@@ -182,6 +182,7 @@ button.icon:hover { color: var(--err); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 3px 9px; font-size: 12px; }
 .seg button.on { background: var(--accent); color: var(--accent-ink); }
+button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
 #toolbar, #gizmoBar {

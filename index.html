@@ -75,6 +75,7 @@
           <h2><span class="step">3</span> Prüfen &amp; exportieren</h2>
           <div class="row wrap">
             <button id="checkBtn" class="ghost" title="Zeigt, wo sich die Teile berühren, wo ein Spalt bleibt und wo sie ineinander eindringen.">Passung prüfen</button>
+            <button id="autoOrient" class="ghost" title="Legt jede Baugruppe mit ihrer größten ebenen Auflage auf die Druckplatte – steht stabil und braucht meist weniger Stützen. Von Hand: oben „Auf Fläche legen“.">Für den Druck ausrichten</button>
           </div>
           <div id="checkResult"></div>
           <div class="row wrap">
@@ -105,6 +106,7 @@
           </span>
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
+          <button id="layFlat" class="ghost small" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)">Auf Fläche legen</button>
           <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen.">Gesamtes Modell bewegen</button>
         </div>
         <div id="tip" hidden></div>

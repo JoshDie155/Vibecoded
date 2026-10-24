@@ -29,12 +29,28 @@ const toV = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
  * Gleichmäßig über die Oberfläche verteilte Punkte (flächengewichtet) – funktioniert auch bei
  * groben CAD-Netzen, die nur aus wenigen großen Dreiecken bestehen.
  */
+/** Zufallszahlen mit festem Startwert (mulberry32). */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export function sampleSurface(geom: THREE.BufferGeometry, count: number): Sample[] {
   // Flächennormalen statt geglätteter Normalen, damit Kanten sauber getrennt bleiben
   const flat = new THREE.BufferGeometry();
   flat.setAttribute('position', geom.getAttribute('position'));
   flat.computeVertexNormals();
-  const sampler = new MeshSurfaceSampler(new THREE.Mesh(flat)).build();
+  const sampler = new MeshSurfaceSampler(new THREE.Mesh(flat));
+  // Fester Startwert: dasselbe Teil ergibt immer dieselben Punkte – und damit dasselbe Ergebnis
+  // (setRandomGenerator gibt es seit three r148, die Typen kennen es noch nicht)
+  (sampler as unknown as { setRandomGenerator(f: () => number): void }).setRandomGenerator(seeded(0x9e3779b9 ^ count ^ geom.getAttribute('position').count));
+  sampler.build();
   const v = new THREE.Vector3();
   const n = new THREE.Vector3();
   const out: Sample[] = [];

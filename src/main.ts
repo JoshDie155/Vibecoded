@@ -17,13 +17,14 @@ import { contactScore } from './math/scan';
 import type { FreeMotion } from './math/motion';
 import { describeFeature, featureTag } from './math/mate';
 import { fitFeatures } from './math/fit';
+import { layFlat } from './math/orient';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
-import { BAMBU_PRINTERS, type ColoredPart, type SlicerExtras, colorSlots, write3MF, write3MFBambu } from './io/threemf';
+import { BAMBU_PRINTERS, type ColoredPart, type SlicerExtras, colorSlots } from './io/threemf';
+import { compute, hasWorker } from './compute/client';
 import { decorate, disposeDecor } from './decor';
 import {
-  type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, packProject, saveSession, sessionInfo,
-  unpackProject,
+  type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, saveSession, sessionInfo, unpackProject,
 } from './io/project';
 import { unionParts } from './io/union';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
@@ -581,9 +582,10 @@ function nextLayout(bb: THREE.Box3): THREE.Matrix4 {
 }
 
 function addPart(
-  name: string, geom: THREE.BufferGeometry, opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras } = {},
+  name: string, geom: THREE.BufferGeometry,
+  opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras; samples?: Sample[] } = {},
 ) {
-  geom.computeBoundsTree();
+  if (!geom.boundsTree) geom.computeBoundsTree();
   const color = new THREE.Color(opts.color ?? PART_COLORS[(nextPartId - 1) % PART_COLORS.length]);
   const mesh = new THREE.Mesh(
     geom,
@@ -597,7 +599,7 @@ function addPart(
   mesh.matrixWorldNeedsUpdate = true;
 
   const part: Part = {
-    id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: sampleSurface(geom, 6000), group: opts.group, ...opts.extras,
+    id: nextPartId++, name, geom, mesh, color, layout, visible: true, samples: opts.samples ?? sampleSurface(geom, 6000), group: opts.group, ...opts.extras,
   };
   decorate(mesh, part);
   mesh.userData.partId = part.id;
@@ -685,9 +687,22 @@ async function loadFiles(files: FileList | File[]) {
       const bb = new THREE.Box3();
       for (const l of loaded) bb.union(l.geom.boundingBox!);
       const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
+      // Suchbaum und Oberflächenpunkte vorab, mit kurzen Pausen: große Dateien blockieren die Oberfläche nicht
+      const samples: Sample[][] = [];
+      let lastYield = performance.now();
       for (const l of loaded) {
+        l.geom.computeBoundsTree();
+        samples.push(sampleSurface(l.geom, 6000));
+        if (performance.now() - lastYield > 60) {
+          await new Promise((r) => setTimeout(r, 0));
+          lastYield = performance.now();
+        }
+      }
+      for (const [i, l] of loaded.entries()) {
         const { paint, palette, modifiers, settings, objectSettings } = l;
-        const part = addPart(l.name, l.geom, { color: l.color, group: l.group, layout, extras: { paint, palette, modifiers, settings, objectSettings } });
+        const part = addPart(l.name, l.geom, {
+          color: l.color, group: l.group, layout, samples: samples[i], extras: { paint, palette, modifiers, settings, objectSettings },
+        });
         if (keep) part.fromFile = true;
       }
       if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
@@ -699,6 +714,8 @@ async function loadFiles(files: FileList | File[]) {
   solveAll();
   fitView();
   renderAll();
+  // Markante Flächen schon jetzt im Hintergrund suchen: „Vorschlagen" ist dann sofort da
+  if (hasWorker()) void ensureCandidates(parts.filter((p) => p.visible)).catch(() => {});
 }
 
 function removePart(id: number) {
@@ -1242,6 +1259,25 @@ function candidatesOf(p: Part): Feature[] {
   return p.candidates;
 }
 
+/** Laufende Flächensuche je Teil (im Hintergrund-Thread). */
+const candidateJobs = new WeakMap<Part, Promise<Feature[]>>();
+function candidatesAsync(p: Part): Promise<Feature[]> {
+  if (p.candidates) return Promise.resolve(p.candidates);
+  let job = candidateJobs.get(p);
+  if (!job) {
+    job = compute('candidates', { positions: positionsOf(p) }).then((c) => (p.candidates ??= c));
+    candidateJobs.set(p, job);
+  }
+  return job;
+}
+
+/** Markante Flächen der Teile im Hintergrund suchen (je Teil nur einmal); progress meldet den Fortschritt. */
+async function ensureCandidates(list: Part[], progress?: (done: number, total: number) => void) {
+  const todo = list.filter((p) => !p.candidates);
+  let n = 0;
+  await Promise.all(todo.map((p) => candidatesAsync(p).then(() => progress?.(++n, todo.length))));
+}
+
 /**
  * Bewertet, welche Flächen von a und b zusammenpassen. Ebene Flächenpaare werden wirklich
  * aufeinandergelegt (Umriss-Abgleich) und auf Durchdringung geprüft.
@@ -1288,7 +1324,10 @@ function proposeJoint(j: Joint) {
   const b = getPart(j.b);
   if (!a || !b) { toast('Wähle zuerst zwei Teile aus.'); return; }
   toast('Suche passende Flächen …', 20000);
-  setTimeout(() => {
+  void ensureCandidates([a, b]).then(() => {
+    // Inzwischen gelöscht oder umgestellt: nichts mehr tun
+    if (!joints.includes(j) || getPart(j.a) !== a || getPart(j.b) !== b) return;
+    beginAction();
     const list = proposePair(a, b);
     if (!list.length) {
       toast('Keine passenden Flächen gefunden – bitte von Hand auswählen.', 5000);
@@ -1300,7 +1339,7 @@ function proposeJoint(j: Joint) {
     solveAll();
     renderAll();
     toast(list.length > 1 ? `${list.length} Vorschläge gefunden – der beste ist angewendet.` : 'Passende Flächen gefunden und verbunden.', 4000);
-  }, 30);
+  }, (e) => toast(`Suche nicht möglich: ${(e as Error).message ?? e}`));
 }
 
 /**
@@ -1322,7 +1361,15 @@ async function connectAll() {
 
   const btn = document.getElementById('connectAll') as HTMLButtonElement;
   btn.disabled = true;
+  try {
+    await ensureCandidates(units.flatMap(members), (d, n) => toast(`Untersuche die Teile … ${d} von ${n}`, 20000));
+  } catch (e) {
+    btn.disabled = false;
+    toast(`Suche nicht möglich: ${(e as Error).message ?? e}`);
+    return;
+  }
   const edges: { u: number; v: number; sg: Proposal }[] = [];
+  let lastYield = performance.now();
   // Je Paar von Einheiten mehrere Kandidaten, falls die beste Fläche schon anderweitig vergeben wird
   const pairCount = (units.length * (units.length - 1)) / 2;
   let done = 0;
@@ -1332,8 +1379,12 @@ async function connectAll() {
         for (const pa of members(units[i])) for (const pb of members(units[k]))
           for (const sg of proposePair(pa, pb, 4).slice(0, 3)) if (sg.score >= 0.6) edges.push({ u: units[i], v: units[k], sg });
         done++;
-        toast(`Suche passende Flächen … ${Math.round((100 * done) / pairCount)} %`, 20000);
-        await new Promise((r) => setTimeout(r, 0));
+        // Nur ab und zu kurz abgeben: jede Pause kostet ein Bild
+        if (performance.now() - lastYield > 80) {
+          toast(`Suche passende Flächen … ${Math.round((100 * done) / pairCount)} %`, 20000);
+          await new Promise((r) => setTimeout(r, 0));
+          lastYield = performance.now();
+        }
       }
     }
   } finally {
@@ -1941,16 +1992,16 @@ function usableFor(j: Joint | undefined, part: Part) {
   return !!j && (j.a === part.id || j.b === part.id || j.a === null || j.b === null);
 }
 
-function updateHover(h: Hit | null) {
+function updateHover(h: Hit | null, anyFace = false) {
   hoverLine.visible = false;
-  if (pickMode === 'brush') return;
-  if (pickMode === 'point' || !h || !(usableFor(activeJoint(), h.part) || helperSide(activeJoint(), h.part))) {
+  if (pickMode === 'brush' && !anyFace) return;
+  if (!h || (!anyFace && (pickMode === 'point' || !(usableFor(activeJoint(), h.part) || helperSide(activeJoint(), h.part))))) {
     hoverMesh.visible = false;
     hoverKey = '';
     hoverTris = null;
     return;
   }
-  if (pickMode === 'edge') {
+  if (pickMode === 'edge' && !anyFace) {
     hoverMesh.visible = false;
     hoverKey = '';
     hoverTris = null;
@@ -1972,8 +2023,8 @@ function updateHover(h: Hit | null) {
   hoverMesh.geometry = subGeometry(h.part, f.tris);
   hoverMesh.matrix.copy(h.part.mesh.matrixWorld);
   hoverMesh.visible = true;
-  const j = activeJoint()!;
-  (hoverMesh.material as THREE.MeshBasicMaterial).color.copy(j.color).lerp(new THREE.Color(1, 1, 1), 0.4);
+  const j = activeJoint();
+  (hoverMesh.material as THREE.MeshBasicMaterial).color.set(anyFace || !j ? 0x2f6fde : j.color).lerp(new THREE.Color(1, 1, 1), 0.4);
 }
 
 // Strg/⌘ + Ziehen: Teil (mit allem, was daran hängt) frei über die Bauplatte schieben
@@ -2197,6 +2248,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
   const h = pick(e);
   hoverName(e, h?.part ?? null);
+  if (layMode) {
+    // Auf Fläche legen: jede Fläche jedes Teils
+    cursor.visible = false;
+    updateHover(h, true);
+    renderer.domElement.style.cursor = h ? 'pointer' : 'default';
+    return;
+  }
   const j = activeJoint();
   const usable = !!h && (usableFor(j, h.part) || (pickMode !== 'point' && !!helperSide(j, h.part))) && !(tc.object && tc.axis);
   cursor.visible = usable && (pickMode === 'point' || pickMode === 'brush');
@@ -2223,6 +2281,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const h = pick(e);
   if (!h) return;
+  if (layMode) {
+    layOnFace(h);
+    return;
+  }
   if (e.shiftKey) {
     revealPart(h.part);
     return;
@@ -2378,6 +2440,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'f') setPickMode('face');
   else if (k === 'k') setPickMode('edge');
   else if (k === 'b') setPickMode('brush');
+  else if (k === 'l') setLayMode(!layMode);
+  else if (layMode && k === 'escape') setLayMode(false);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
     updateGizmoAxes();
@@ -2557,7 +2621,8 @@ function renderHint() {
   const el = document.getElementById('hint')!;
   const j = activeJoint();
   const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
-  if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
+  if (layMode) el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
+  else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
   else if (!j) el.textContent = 'Lege links eine Verbindung an.';
   else if (j.auto && !j.ma.length && !j.mb.length && !j.fa.length && !j.fb.length) {
@@ -3072,7 +3137,10 @@ async function exportAs(kind: string) {
   }));
   try {
     if (kind === '3mf-color' || kind === '3mf-bambu') {
-      const data = kind === '3mf-bambu' ? write3MFBambu(world, { printer: bambuPrinter.value }) : write3MF(world, 'multicolor');
+      toast('Speichere …', 20000);
+      const data = kind === '3mf-bambu'
+        ? await compute('write3mfBambu', { parts: world, opts: { printer: bambuPrinter.value } })
+        : await compute('write3mf', { parts: world, mode: 'multicolor' });
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
       const slots = colorSlots(world);
       const objects = new Set(world.map((w) => w.object)).size;
@@ -3103,10 +3171,129 @@ async function exportAs(kind: string) {
     const list: ExportPart[] = body.map((p) => ({ name: p.name, geometry: geomOf(p) }));
     if (kind === 'stl') await download(toSTL(list), 'zusammengefuegt.stl');
     else if (kind === 'obj') await download(toOBJ(list), 'zusammengefuegt.obj');
-    else await download(new Blob([write3MF(body.map((p) => ({ ...p, color: '#cccccc' })), 'single') as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
+    else {
+      const data = await compute('write3mf', { parts: body.map((p) => ({ name: p.name, positions: p.positions, color: '#cccccc' })), mode: 'single' });
+      await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
+    }
   } catch (e) {
     toast(`Speichern nicht möglich: ${(e as Error).message ?? e}`);
   }
+}
+
+// ---------------------------------------------------------------- Druckausrichtung
+
+/** „Auf Fläche legen": der nächste Klick wählt die Fläche, die unten auf der Druckplatte liegen soll. */
+let layMode = false;
+const layBtn = document.getElementById('layFlat')!;
+function setLayMode(on: boolean) {
+  layMode = on && parts.length > 0;
+  layBtn.classList.toggle('on', layMode);
+  if (!layMode) updateHover(null);
+  renderHint();
+}
+layBtn.addEventListener('click', () => setLayMode(!layMode));
+
+/** Teile der Baugruppe (siehe unitOf), zu der p gehört. */
+function unitMembers(p: Part): Part[] {
+  const key = unitOf.get(p.id) ?? p.id;
+  return parts.filter((q) => (unitOf.get(q.id) ?? q.id) === key);
+}
+
+function unitBox(members: Part[]): THREE.Box3 {
+  const box = new THREE.Box3();
+  for (const q of members) box.union(partBox(q));
+  return box;
+}
+
+/** Dreht eine Baugruppe (starre Bewegung in Weltkoordinaten) und stellt sie auf die Druckplatte. */
+function turnUnit(members: Part[], T: Rigid) {
+  const M = rigidToMatrix(T);
+  for (const q of members) q.layout.premultiply(M);
+  solveAll();
+  // Ohne festen Boden trotzdem auf die Platte setzen
+  if (!onFloor.checked) {
+    const z = Math.min(...members.map((q) => lowestZ(q, q.mesh.matrixWorld)));
+    if (Number.isFinite(z) && Math.abs(z) > 1e-9) {
+      const D = new THREE.Matrix4().makeTranslation(0, 0, -z);
+      for (const q of members) q.layout.premultiply(D);
+      solveAll();
+    }
+  }
+  if (gizmoTarget) placeGizmo();
+}
+
+/** Name einer Baugruppe für Meldungen. */
+const unitName = (members: Part[]) => (members.length > 1 ? `Baugruppe „${getPart(unitOf.get(members[0].id) ?? members[0].id)?.name ?? members[0].name}"` : `„${members[0].name}"`);
+
+function layOnFace(h: Hit) {
+  const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
+  if (f.kind === 'cylinder' || f.kind === 'edge') {
+    toast('Das ist eine runde Fläche – zum Hinlegen eine ebene Fläche anklicken.');
+    return;
+  }
+  const n = new THREE.Vector3(...f.normal).transformDirection(h.part.mesh.matrixWorld);
+  if (n.lengthSq() < 0.5) { toast('Diese Stelle hat keine eindeutige Richtung – eine größere ebene Fläche wählen.'); return; }
+  const members = unitMembers(h.part);
+  const c = unitBox(members).getCenter(new THREE.Vector3());
+  turnUnit(members, layFlat([n.x, n.y, n.z], [c.x, c.y, c.z]));
+  setLayMode(false);
+  renderAll();
+  toast(`${unitName(members)} liegt jetzt mit dieser Fläche auf der Druckplatte.${f.kind === 'surface' ? ' (gekrümmte Fläche: ausgerichtet nach ihrer mittleren Richtung)' : ''}`, 5000);
+}
+
+/** Jede sichtbare Baugruppe mit ihrer größten ebenen Auflage auf die Platte legen. */
+async function autoOrient() {
+  const seen = new Set<number>();
+  const units: Part[][] = [];
+  for (const p of parts) {
+    if (!p.visible) continue;
+    const key = unitOf.get(p.id) ?? p.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    units.push(unitMembers(p));
+  }
+  if (!units.length) { toast('Keine sichtbaren Teile.'); return; }
+  const btn = document.getElementById('autoOrient') as HTMLButtonElement;
+  btn.disabled = true;
+  toast('Suche die beste Auflage …', 20000);
+  let turned = 0;
+  try {
+    // Im Hintergrund rechnen, die Teile liegen dabei unverändert
+    const choices = await Promise.all(units.map((members) =>
+      compute('bestBase', { positions: worldPositions(members) })));
+    beginAction();
+    units.forEach((members, i) => {
+      const c = choices[i];
+      // Nur drehen, wenn es spürbar besser aufliegt als jetzt
+      if (!(c.area > c.current * 1.05 + 1)) return;
+      const box = unitBox(members).getCenter(new THREE.Vector3());
+      turnUnit(members, layFlat(c.normal, [box.x, box.y, box.z]));
+      turned++;
+    });
+  } catch (e) {
+    toast(`Ausrichten nicht möglich: ${(e as Error).message ?? e}`);
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  renderAll();
+  toast(turned
+    ? `${turned} ${turned === 1 ? 'Baugruppe liegt' : 'Baugruppen liegen'} jetzt mit der größten ebenen Auflage auf der Platte${units.length > turned ? ', die übrigen lagen schon gut' : ''}. Strg+Z macht es rückgängig.`
+    : 'Alles liegt schon mit der größten ebenen Auflage auf der Platte.', 6000);
+}
+document.getElementById('autoOrient')!.addEventListener('click', () => void autoOrient());
+
+/** Dreiecke mehrerer Teile in Weltkoordinaten (ein Feld). */
+function worldPositions(members: Part[]): Float32Array {
+  const total = members.reduce((n, q) => n + positionsOf(q).length, 0);
+  const out = new Float32Array(total);
+  const v = new THREE.Vector3();
+  let o = 0;
+  for (const q of members) {
+    const pos = positionsOf(q);
+    for (let i = 0; i < pos.length; i += 3, o += 3) v.fromArray(pos, i).applyMatrix4(q.mesh.matrixWorld).toArray(out, o);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- Projekt speichern / öffnen
@@ -3227,7 +3414,8 @@ async function saveProject() {
     return;
   }
   const { data, blobs } = projectState();
-  const bytes = packProject(data, blobs);
+  toast('Speichere Projekt …', 20000);
+  const bytes = await compute('packProject', { data, blobs });
   await download(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), `${projectName()}.${PROJECT_EXT}`);
   toast('Projekt gespeichert. Zum Weiterarbeiten die Datei hier hineinziehen oder „Projekt öffnen" wählen.', 6000);
 }
@@ -3325,7 +3513,7 @@ void (async () => {
 // Für automatisierte Tests / Debugging
 Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
-    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor, autosave,
+    parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor, autosave, hasWorker,
     checkCount: () => checkGroup.children.length,
     gizmoLocked: () => [...gizmoLocked],
     hoverLineVisible: () => hoverLine.visible,

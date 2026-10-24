@@ -70,6 +70,10 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
    ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
+   **Druckausrichtung**: „Für den Druck ausrichten" legt jede Baugruppe mit ihrer größten ebenen
+   Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
+   was schon gut liegt, bleibt. Von Hand: oben „Auf Fläche legen" (Taste L), dann die Fläche
+   anklicken, die unten liegen soll – die ganze Baugruppe dreht sich mit. Strg+Z macht beides rückgängig.
 5. **Exportieren**
    - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): **jede Baugruppe ein eigenes
      Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in PartJoin und
@@ -155,6 +159,10 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
   und Durchdringungsprüfung (`src/math/suggest.ts`).
 - **Prüfansicht**: Abstand und Vorzeichen zur Oberfläche des anderen Teils je (unterteiltem) Dreieck
   (`src/math/check.ts`).
+- **Rechnen im Hintergrund**: 3MF lesen und schreiben, Projekte packen und die Suche nach markanten
+  Flächen laufen in einem Web Worker (`src/compute/`); lässt der Browser keinen zu, rechnet dieselbe
+  Aufgabe im Hauptthread. Nach dem Laden werden die Flächen schon im Hintergrund gesucht, damit
+  „Vorschlagen" sofort antwortet.
 - **Projekte**: ZIP mit `project.json` und den Netzen als Float32-Daten, Sitzungssicherung in IndexedDB
   (`src/io/project.ts`).
 - **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
@@ -174,5 +182,4 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 ## Ideen für später
 
 - CAD-Formate STEP/IGES (z. B. über `occt-import-js`)
-- Druckausrichtung (größte ebene Fläche aufs Druckbett)
 - Passungshilfe (Zapfen gezielt dünner machen)

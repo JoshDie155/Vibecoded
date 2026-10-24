@@ -64,7 +64,7 @@ export function findCandidateFaces(topo: Topology, opts: SegmentOptions = {}): F
     .slice(0, opts.maxPlanes ?? 40);
   for (const r of planes) {
     if (taken.has(r.seed)) continue;
-    const f = detectFeature(topo, r.seed, detectOpts);
+    const f = detectFeature(topo, r.seed, { ...detectOpts, planesOnly: true });
     if (f.kind !== 'plane' || f.area < minArea) continue;
     f.tris.forEach((t) => taken.add(t));
     out.push(f);

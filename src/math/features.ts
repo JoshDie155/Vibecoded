@@ -110,6 +110,12 @@ export interface FeatureOptions {
   smoothAngleDeg?: number;
   /** Obergrenze für die Größe jeder Region (Dreiecke). */
   maxTris?: number;
+  /**
+   * Nur ebene Flächen gesucht: Ist die Ebene um das Startdreieck keine eigenständige Fläche, gleich
+   * aufhören – das Ergebnis wäre ohnehin keine ebene Fläche. Spart bei organischen Teilen die teure
+   * Zylindersuche über die ganze Rundung.
+   */
+  planesOnly?: boolean;
 }
 
 export const FEATURE_DEFAULTS = { planeAngleDeg: 1.5, smoothAngleDeg: 35, maxTris: 200000 } as const;
@@ -1800,6 +1806,11 @@ export function detectFeature(topo: Topology, seedTri: number, opts: FeatureOpti
     distTol: topo.diag * PLANE_DIST_REL + FLOAT_EPS * ctx.s.coordMag + 1e-9,
   };
   const plane = growPlane(ctx, seed, pt.cosPlane, pt.distTol, limit);
+  if (opts.planesOnly) {
+    const verts = regionVertices(ctx, plane.tris);
+    const pf = planeFeature(ctx, plane.tris, verts, smoothAngle);
+    if (!isFace(ctx, pf, verts, pt)) return { kind: 'surface', tris: plane.tris, centroid: pf.centroid, normal: pf.normal, area: pf.area };
+  }
 
   // Glatte Fläche: Knickwinkel zwischen benachbarten Dreiecken klein
   const smooth = flood(ctx, seed, limit, (r, to) => isDegenerate(topo, to) || ndot(topo, r, to) >= pt.cosSmooth).tris;
