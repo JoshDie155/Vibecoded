@@ -108,6 +108,7 @@
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
           <button id="fitTool" class="ghost small" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)">Passung</button>
           <button id="layFlat" class="ghost small" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)">Auf Fläche legen</button>
+          <button id="helpBtn" class="ghost small help-btn" title="Anleitung und Tastenkürzel (Taste ?)" aria-label="Hilfe">?</button>
           <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen.">Gesamtes Modell bewegen</button>
         </div>
         <div id="tip" hidden></div>
@@ -145,5 +146,68 @@
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>
+    <dialog id="help" aria-labelledby="helpTitle">
+      <header>
+        <h2 id="helpTitle">PartJoin – Anleitung &amp; Tastenkürzel</h2>
+        <button id="helpClose" class="icon" aria-label="Schließen" title="Schließen (Esc)">✕</button>
+      </header>
+      <div class="help-cols">
+        <section>
+          <h3>So geht’s</h3>
+          <ol>
+            <li><b>Laden</b> – Dateien ins Fenster ziehen (STL, 3MF, STEP, OBJ …) oder ein Projekt (.partjoin) öffnen.</li>
+            <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder links „Alles automatisch verbinden“.</li>
+            <li><b>Nachjustieren</b> – „Von Hand anpassen“ dreht und schiebt in den Richtungen, die die Verbindung offen lässt; „Um 180° drehen“ wechselt zwischen gleich guten Lagen; „Einsinken“ schiebt Teile minimal ineinander, damit der Slicer sie verschmilzt.</li>
+            <li><b>Prüfen</b> – „Passung prüfen“: grün liegt an, gelb Spalt, rot dringt ein.</li>
+            <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Auf Fläche legen“; für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
+            <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“.</li>
+          </ol>
+          <h3>Teileliste</h3>
+          <dl class="keys">
+            <dt>Farbfeld</dt><dd>Farbe des Teils – wird beim Export das Filament</dd>
+            <dt>Kästchen</dt><dd>ein- und ausblenden</dd>
+            <dt>Name</dt><dd>Klick zeigt das Teil, Doppelklick benennt um</dd>
+            <dt>Basis</dt><dd>bleibt liegen, alles andere wird daran angefügt</dd>
+            <dt>⛓</dt><dd>Teil aus seiner Gruppe lösen</dd>
+            <dt>✥</dt><dd>Teil von Hand bewegen und drehen</dd>
+            <dt>✕</dt><dd>Teil entfernen</dd>
+          </dl>
+          <p class="help">In der Flächenliste einer Verbindung: Kästchen anhaken und „… zusammenfassen“ macht aus mehreren Flächen eine, ⇹ trennt sie wieder, Rechtsklick auf eine Markierung im Modell entfernt sie. Den Rand der Seitenleiste ziehen ändert ihre Breite, Doppelklick setzt sie zurück.</p>
+        </section>
+        <section>
+          <h3>Tasten</h3>
+          <dl class="keys">
+            <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
+            <dt><kbd>T</kbd></dt><dd>Passung: Zapfen, Bohrung oder Fläche anpassen</dd>
+            <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
+            <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden</dd>
+            <dt><kbd>Strg/⌘</kbd> <kbd>Z</kbd></dt><dd>Rückgängig – jede Aktion</dd>
+            <dt><kbd>Strg/⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd></dt><dd>Wiederholen (auch <kbd>Strg</kbd> <kbd>Y</kbd>)</dd>
+            <dt><kbd>Strg/⌘</kbd> <kbd>S</kbd></dt><dd>Projekt speichern</dd>
+            <dt><kbd>Enter</kbd></dt><dd>im Passungs-Feld: übernehmen</dd>
+            <dt><kbd>?</kbd></dt><dd>diese Hilfe</dd>
+          </dl>
+          <h3>Maus im 3D-Fenster</h3>
+          <dl class="keys">
+            <dt>Klick</dt><dd>Fläche, Kante oder Punkt wählen – nochmal: abwählen</dd>
+            <dt><kbd>Alt/⌥</kbd> + Klick</dt><dd>Fläche an die zuletzt gewählte anhängen (zusammenfassen)</dd>
+            <dt><kbd>⇧</kbd> + Klick</dt><dd>Teil in der Teileliste zeigen</dd>
+            <dt>Rechtsklick</dt><dd>auf eine Markierung: Auswahl entfernen</dd>
+            <dt>Links ziehen</dt><dd>Ansicht drehen</dd>
+            <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben</dd>
+            <dt>Mausrad</dt><dd>zoomen, dorthin, wo der Zeiger steht</dd>
+            <dt><kbd>Strg/⌘</kbd> + ziehen</dt><dd>Teil (mit allem, was daran hängt) über die Platte schieben</dd>
+            <dt>Pinsel</dt><dd>Maustaste halten und über die Kontaktstelle streichen</dd>
+          </dl>
+          <h3>Gut zu wissen</h3>
+          <ul>
+            <li>„Auf die Druckplatte stellen“ (Standard): Jede Baugruppe steht mit ihrem tiefsten Punkt auf der Platte – im Slicer schwebt nichts.</li>
+            <li>PartJoin sichert deine Arbeit laufend im Browser; nach dem Neuladen „Wiederherstellen“.</li>
+            <li>Etwas ging schief? <kbd>Strg/⌘</kbd> <kbd>Z</kbd> nimmt jede Aktion zurück.</li>
+          </ul>
+        </section>
+      </div>
+    </dialog>
   </body>
 </html>

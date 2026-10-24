@@ -8,6 +8,9 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 
 ## So funktioniert's
 
+Im Programm zeigt **?** (Knopf oben im 3D-Fenster oder Taste ?) eine Kurzanleitung mit allen Tastenkürzeln
+und Mausaktionen.
+
 1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ mit MTL, 3MF, STEP, IGES, BREP, PLY, AMF, GLB/GLTF, FBX,
    DAE, WRL, 3DS, VTK). CAD-Dateien (STEP/IGES/BREP) liest OpenCascade im Hintergrund und trianguliert sie
    fein für den Druck (Sehnenfehler 0,02 mm); jeder Körper wird ein Teil mit Name und Farbe aus der Datei,

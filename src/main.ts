@@ -2458,6 +2458,13 @@ function editsText(el: EventTarget | null): boolean {
 window.addEventListener('keydown', (e) => {
   // In Textfeldern gelten die Tasten dem Feld (auch dessen eigenes Rückgängig)
   if (editsText(e.target)) return;
+  // Hilfe offen: nur sie bedienen (Esc schließt sie selbst)
+  if (helpDialog.open) return;
+  if (e.key === '?' || e.key === 'F1') {
+    e.preventDefault();
+    openHelp();
+    return;
+  }
   // Kästchen, Listen usw.: nur Strg+Z/Y übernehmen, Buchstaben-Kürzel nicht
   if ((e.target as HTMLElement).closest('input, select, textarea') && !isUndoKey(e)) return;
   // Strg/⌘+Z: letzte Aktion zurücknehmen, Strg/⌘+Umschalt+Z oder Strg+Y: wiederholen
@@ -2657,7 +2664,7 @@ function renderHint() {
   const what = { face: 'Flächen', edge: 'Kanten', point: 'Punkte', brush: 'Flächen' }[pickMode];
   if (tool === 'lay') el.textContent = 'Klicke die Fläche, die unten auf der Druckplatte liegen soll – die ganze Baugruppe dreht sich mit. Esc bricht ab.';
   else if (tool === 'fit') el.textContent = fitTarget ? 'Wert oben eingeben und „Übernehmen" – oder eine andere Fläche anklicken. Esc bricht ab.' : 'Klicke einen Zapfen, eine Bohrung oder eine ebene Fläche an, deren Passung du ändern willst. Esc bricht ab.';
-  else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel.';
+  else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel. Taste ? zeigt Anleitung und Tastenkürzel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
   else if (!j) el.textContent = 'Lege links eine Verbindung an.';
   else if (j.auto && !j.ma.length && !j.mb.length && !j.fa.length && !j.fb.length) {
@@ -3463,6 +3470,19 @@ function replaceGeometry(old: Part, positions: Float32Array): Part {
   for (const j of joints) mergedTargets.delete(j);
   return fresh;
 }
+
+// ---------------------------------------------------------------- Hilfe
+
+const helpDialog = document.getElementById('help') as HTMLDialogElement;
+function openHelp() {
+  if (!helpDialog.open) helpDialog.showModal();
+}
+document.getElementById('helpBtn')!.addEventListener('click', openHelp);
+document.getElementById('helpClose')!.addEventListener('click', () => helpDialog.close());
+// Klick neben das Fenster schließt es
+helpDialog.addEventListener('click', (e) => {
+  if (e.target === helpDialog) helpDialog.close();
+});
 
 // ---------------------------------------------------------------- Projekt speichern / öffnen
 
