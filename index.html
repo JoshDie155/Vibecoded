@@ -50,25 +50,31 @@
             <span id="partsCount" class="help"></span>
           </div>
           <div id="selBar" class="selbar" hidden>
-            <strong id="selCount"></strong>
-            <button class="ghost small" data-sel="group" title="Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam">Gruppieren</button>
-            <button class="ghost small" data-sel="ungroup" title="Alle Teile der Gruppen bewegen sich danach einzeln">Gruppe auflösen</button>
-            <button class="ghost small" data-sel="hide">Ausblenden</button>
-            <button class="ghost small" data-sel="color">Farbe</button>
-            <select id="selBool" title="Teile miteinander verrechnen: vereinigen, ausschneiden, Überschneidung"></select>
-            <select id="selAlign" title="Baugruppen der Auswahl ausrichten oder gleichmäßig verteilen">
-              <option value="">Ausrichten …</option>
-              <option value="0-min">Links bündig</option>
-              <option value="0-mid">Mittig (links/rechts)</option>
-              <option value="0-max">Rechts bündig</option>
-              <option value="1-min">Vorne bündig</option>
-              <option value="1-mid">Mittig (vorne/hinten)</option>
-              <option value="1-max">Hinten bündig</option>
-              <option value="0-dist">Gleichmäßig verteilen (X)</option>
-              <option value="1-dist">Gleichmäßig verteilen (Y)</option>
-            </select>
-            <button class="ghost small danger" data-sel="remove">Entfernen</button>
-            <button class="icon" data-sel="clear" title="Auswahl aufheben (Esc)" aria-label="Auswahl aufheben">✕</button>
+            <div class="selhead">
+              <strong id="selCount"></strong>
+              <button class="icon" data-sel="clear" title="Auswahl aufheben (Esc)" aria-label="Auswahl aufheben">✕</button>
+            </div>
+            <div class="selacts">
+              <button class="ghost small" data-sel="group" title="Die Teile bleiben, wo sie sind, und bewegen sich künftig gemeinsam">Gruppieren</button>
+              <button class="ghost small" data-sel="ungroup" title="Alle Teile der Gruppen bewegen sich danach einzeln">Gruppe auflösen</button>
+              <button class="ghost small" data-sel="hide">Ausblenden</button>
+              <button class="ghost small" data-sel="color">Farbe</button>
+              <button class="ghost small danger" data-sel="remove">Entfernen</button>
+            </div>
+            <div class="selacts">
+              <select id="selBool" title="Teile miteinander verrechnen: vereinigen, ausschneiden, Überschneidung"></select>
+              <select id="selAlign" title="Baugruppen der Auswahl ausrichten oder gleichmäßig verteilen">
+                <option value="">Ausrichten …</option>
+                <option value="0-min">Links bündig</option>
+                <option value="0-mid">Mittig (links/rechts)</option>
+                <option value="0-max">Rechts bündig</option>
+                <option value="1-min">Vorne bündig</option>
+                <option value="1-mid">Mittig (vorne/hinten)</option>
+                <option value="1-max">Hinten bündig</option>
+                <option value="0-dist">Gleichmäßig verteilen (X)</option>
+                <option value="1-dist">Gleichmäßig verteilen (Y)</option>
+              </select>
+            </div>
           </div>
           <ul id="parts" class="parts"></ul>
           <div class="row wrap">

@@ -282,19 +282,26 @@ const selGroup = new THREE.Group();
 scene.add(selGroup);
 const selBar = document.getElementById('selBar')!;
 
+/** Akzentfarbe des Designs – zwischengespeichert: getComputedStyle nach Änderungen an der Seite erzwingt ein neues Layout. */
+let accentColor = '#2f6fde';
 function applyTheme() {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches &&
     document.documentElement.dataset.theme !== 'light' || document.documentElement.dataset.theme === 'dark';
-  const bg = getComputedStyle(document.documentElement).getPropertyValue('--view').trim();
+  const css = getComputedStyle(document.documentElement);
+  const bg = css.getPropertyValue('--view').trim();
+  accentColor = css.getPropertyValue('--accent').trim() || '#2f6fde';
   renderer.setClearColor(new THREE.Color(bg || (dark ? '#161a21' : '#e9ecf1')));
 }
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
+/** Höhe der Zeichenfläche (aus resize – clientHeight zu lesen erzwänge nach Änderungen an der Seite ein Layout). */
+let viewHeight = 1;
 function resize() {
   const w = view.clientWidth;
   const h = view.clientHeight;
+  viewHeight = Math.max(1, h);
   renderer.setSize(w, h, false);
   camera.aspect = w / Math.max(h, 1);
   camera.updateProjectionMatrix();
@@ -307,8 +314,7 @@ new ResizeObserver(() => view.style.setProperty('--bar-top', `${toolbarEl.offset
 
 /** Markierungen behalten auf dem Bildschirm eine feste Größe (in Pixeln). */
 function scaleMarkers() {
-  const h = renderer.domElement.clientHeight || 1;
-  const k = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / h;
+  const k = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / viewHeight;
   for (const o of markerGroup.children) {
     const u = o.userData as { px: number; anchor: THREE.Vector3; normal: THREE.Vector3; lift: number };
     const wpp = k * camera.position.distanceTo(u.anchor);
@@ -598,8 +604,28 @@ function toast(msg: string, ms = 3200) {
   const el = document.getElementById('toast')!;
   el.textContent = msg;
   el.classList.add('show');
+  placeToast(el);
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => el.classList.remove('show'), ms);
+}
+
+/** Meldung über Hinweis und Leisten unten rechts halten, statt sie zu überdecken. */
+function placeToast(el: HTMLElement) {
+  el.style.bottom = '';
+  const v = view.getBoundingClientRect();
+  const t = el.getBoundingClientRect();
+  let bottom = v.bottom - t.bottom;
+  const others = ['hint', 'explodeBar', 'sectionBar'].map((id) => document.getElementById(id)!).filter((o) => !o.hidden && o.textContent?.trim());
+  // Zweimal: Hinweis und Leisten können übereinander liegen
+  for (let k = 0; k < 2; k++) {
+    for (const o of others) {
+      const r = o.getBoundingClientRect();
+      if (!r.width || r.left >= t.right || r.right <= t.left) continue;
+      const top = v.bottom - bottom - t.height;
+      if (r.top < v.bottom - bottom + 8 && r.bottom > top - 8) bottom = v.bottom - r.top + 8;
+    }
+  }
+  el.style.bottom = `${bottom}px`;
 }
 
 /**
@@ -4822,7 +4848,7 @@ async function updateCutPreview() {
   }
   const W = p.mesh.matrixWorld;
   const n = new THREE.Vector3(...opts.normal).transformDirection(W);
-  const color = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde');
+  const color = new THREE.Color(accentColor);
   if (res.shape) {
     // Schwalbenschwanz: die Feder selbst zeigen
     const g = new THREE.BufferGeometry();
@@ -5079,7 +5105,7 @@ async function updatePocketPreview() {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(res.tool, 3));
   g.computeVertexNormals();
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde';
+  const accent = accentColor;
   const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.55, depthTest: false }));
   m.renderOrder = 8;
   m.raycast = () => {};
@@ -5803,7 +5829,7 @@ function drawSelection() {
     (o as THREE.LineSegments).geometry.dispose();
     ((o as THREE.LineSegments).material as THREE.Material).dispose();
   }
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f6fde';
+  const accent = accentColor;
   for (const p of selectedParts()) {
     if (!p.visible) continue;
     const helper = new THREE.Box3Helper(partBox(p).expandByScalar(0.3), new THREE.Color(accent));
@@ -6286,7 +6312,8 @@ function viewPlate(i: number) {
     box.expandByPoint(new THREE.Vector3(c.x - w / 2, c.y - d / 2, 0)).expandByPoint(new THREE.Vector3(c.x + w / 2, c.y + d / 2, 0));
   }
   for (const p of parts) if (p.visible && (i < 0 || plateOfBox(partBox(p)).i === i)) box.max.z = Math.max(box.max.z, partBox(p).max.z);
-  fitBox(box);
+  // Etwas Rand: die Beschriftung vor und hinter der Platte soll mit ins Bild
+  fitBox(box.expandByVector(new THREE.Vector3(w * 0.05, d * 0.1, 0)));
 }
 
 function setPlatesShown(on: boolean) {
@@ -6399,19 +6426,24 @@ function nozzleNote(): string {
     if (sides.length) hits.push({ name: u.name, sides });
   }
   if (!hits.length) return '';
-  const what = (sides: string[]) => (sides.length > 1 ? 'die nur je eine Düse erreicht' : `den nur die ${sides[0] === 'links' ? 'linke' : 'rechte'} Düse erreicht`);
+  const one = hits[0];
   const text = hits.length > 1
     ? `${hits.length} Baugruppen liegen in Bereichen, die nur eine Düse erreicht`
-    : `„${esc(hits[0].name)}“ liegt im Bereich, ${what(hits[0].sides)}`;
+    : one.sides.length > 1
+      ? `„${esc(one.name)}“ reicht in beide Randstreifen, die jeweils nur eine Düse erreicht`
+      : `„${esc(one.name)}“ liegt im Bereich, den nur die ${one.sides[0] === 'links' ? 'linke' : 'rechte'} Düse erreicht`;
   return ` · <span class="note" title="Bambu Studio druckt dort nur mit den Filamenten dieser Düse – mehrfarbige Teile besser weiter zur Mitte schieben.">◧ ${text}</span>`;
 }
 
 const plateBar = document.getElementById('plateBar')!;
+let plateBarHtml = '';
 function renderPlateBar() {
   const used = occupiedPlates();
   const list = document.getElementById('plateList')!;
-  list.innerHTML = Array.from({ length: plateTotal }, (_, i) => `<button class="ghost small${used.has(i) ? '' : ' empty'}" data-plate="${i}" title="Platte ${i + 1} ansehen${used.has(i) ? '' : ' (leer)'}">${i + 1}</button>`).join('')
+  const html = Array.from({ length: plateTotal }, (_, i) => `<button class="ghost small${used.has(i) ? '' : ' empty'}" data-plate="${i}" title="Platte ${i + 1} ansehen${used.has(i) ? '' : ' (leer)'}">${i + 1}</button>`).join('')
     + (plateTotal > 1 && used.size < plateTotal ? '<button class="ghost small" data-plate-trim title="Leere Platten entfernen">−</button>' : '');
+  // Nur bei Änderung neu aufbauen (ein Klick darauf soll nicht ins Leere gehen)
+  if (html !== plateBarHtml) list.innerHTML = plateBarHtml = html;
   document.getElementById('platesShow')!.classList.toggle('on', platesShown);
   plateBar.classList.toggle('off', !platesShown);
 }
@@ -6901,13 +6933,18 @@ let sessionSig = '';
 let sessionBusy = false;
 const restoreBar = document.getElementById('restoreBar')!;
 
-async function autosave() {
+/** Maustaste gedrückt (Ziehen, Drehen der Ansicht): Sicherung wartet, damit nichts ruckelt. */
+let pointerHeld = false;
+window.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+for (const t of ['pointerup', 'pointercancel', 'blur'] as const) window.addEventListener(t, () => { pointerHeld = false; }, true);
+
+async function autosave(force = false) {
   // Neue Arbeit begonnen, ohne über die alte Sitzung zu entscheiden: die neue gilt
   if (!sessionArmed && !restoreBar.hidden && parts.length) {
     restoreBar.hidden = true;
     sessionArmed = true;
   }
-  if (!sessionArmed || sessionBusy) return;
+  if (!sessionArmed || sessionBusy || (pointerHeld && !force)) return;
   const sig = `${stateSig()}|${onFloor.checked}`;
   if (sig === sessionSig) return;
   sessionBusy = true;
@@ -6927,7 +6964,7 @@ async function autosave() {
 }
 setInterval(() => void autosave(), 2500);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') void autosave();
+  if (document.visibilityState === 'hidden') void autosave(true);
 });
 
 document.getElementById('restoreYes')!.addEventListener('click', async () => {
@@ -6991,3 +7028,5 @@ Object.assign(window as unknown as Record<string, unknown>, {
 
 solveAll();
 renderAll();
+// Beim Start: die ganze Platte im Bild
+if (!parts.length) viewPlate(0);
