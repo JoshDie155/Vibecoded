@@ -42,7 +42,8 @@ export interface ProjectData {
   joints: Record<string, unknown>[];
   baseId: number | null;
   activeJointId: number | null;
-  settings: { onFloor: boolean; printer?: string };
+  /** plates: Zahl der Druckplatten (Raster wie in Bambu Studio) */
+  settings: { onFloor: boolean; printer?: string; plates?: number };
   camera?: { position: number[]; target: number[] };
 }
 

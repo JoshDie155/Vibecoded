@@ -17,7 +17,7 @@ import { VRMLLoader } from 'three/addons/loaders/VRMLLoader.js';
 import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
 import { VTKLoader } from 'three/addons/loaders/VTKLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { ImportedPart, SlicerExtras } from './threemf';
+import type { ImportedPart, ReadInfo, SlicerExtras } from './threemf';
 import { compute } from '../compute/client';
 import { CAD_FORMATS } from './step';
 
@@ -33,6 +33,8 @@ export interface LoadedPart extends SlicerExtras {
   group?: string;
   /** Netze einer Datei, die richtig zueinander liegen (CAD-Baugruppe, OBJ/GLB): stehen gemeinsam auf der Platte. */
   together?: string;
+  /** Bambu-Projekt: Druckplatte (ab 0). */
+  plate?: number;
 }
 
 export interface LoadOptions {
@@ -40,8 +42,8 @@ export interface LoadOptions {
   split: boolean;
   /** Inhalt einer passenden .mtl-Datei (Farben für OBJ). */
   mtl?: string;
-  /** Bekommt den Bambu-Drucker, falls die Datei ein Bambu-Projekt ist. */
-  info?: { printer?: string };
+  /** Bekommt Drucker, Plattenzahl und Druckbereich, falls die Datei ein Bambu-Projekt ist. */
+  info?: ReadInfo;
 }
 
 /** Mehr Netze als hier werden nicht mehr einzeln geladen (z. B. ein GLB aus tausenden Einzelteilen). */
@@ -125,8 +127,8 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
 
   if (ext === '3mf') {
     // Lesen im Hintergrund-Thread: große Projekte blockieren die Oberfläche nicht
-    const { parts, printer } = await compute('read3mf', { data: new Uint8Array(buf) });
-    if (opts.info) opts.info.printer = printer;
+    const { parts, printer, plates, bed } = await compute('read3mf', { data: new Uint8Array(buf) });
+    if (opts.info) Object.assign(opts.info, { printer, plates, bed });
     const list = opts.split && parts.length <= MAX_SPLIT ? parts : [joinParts(parts)];
     return list.map((p) => {
       const g = new THREE.BufferGeometry();
@@ -137,6 +139,7 @@ export async function loadModel(file: File, opts: LoadOptions = { split: true })
       if (p.modifiers) out.modifiers = p.modifiers;
       if (p.settings) out.settings = p.settings;
       if (p.objectSettings) out.objectSettings = p.objectSettings;
+      if (p.plate !== undefined && list.length > 1) out.plate = p.plate;
       return out;
     });
   }

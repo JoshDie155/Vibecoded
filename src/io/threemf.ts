@@ -65,6 +65,18 @@ export interface ImportedPart extends SlicerExtras {
   color?: string;
   /** Teile desselben Objekts haben dieselbe Gruppe. */
   group: string;
+  /** Bambu-Projekt: Druckplatte des Objekts (ab 0). */
+  plate?: number;
+}
+
+/** Zusatzangaben beim Lesen eines Bambu-Projekts. */
+export interface ReadInfo {
+  /** Kennung aus BAMBU_PRINTERS */
+  printer?: string;
+  /** Zahl der Druckplatten im Projekt */
+  plates?: number;
+  /** Druckbereich des Projekts in mm (Lage der Platten in Bambu Studio, siehe bambuPlateOrigin) */
+  bed?: [number, number];
 }
 
 export interface ColoredPart extends SlicerExtras {
@@ -451,9 +463,14 @@ function readSlicerConfig(files: Record<string, Uint8Array>): { objects: Map<str
  * Liest alle Teile einer 3MF-Datei.
  * @param info bekommt den Bambu-Drucker des Projekts (Kennung aus BAMBU_PRINTERS), falls erkennbar
  */
-export function read3MF(data: Uint8Array, info?: { printer?: string }): ImportedPart[] {
+export function read3MF(data: Uint8Array, info?: ReadInfo): ImportedPart[] {
   const files = unzipSync(data);
   if (info) info.printer = bambuPrinterOf(files);
+  const plates = bambuPlatesOf(files);
+  if (info && plates) {
+    info.plates = plates.count;
+    info.bed = plates.bed;
+  }
   const root = rootModelPath(files);
   const models = new Map<string, RawModel>();
   const modelAt = (path: string | undefined): RawModel | undefined => {
@@ -639,6 +656,8 @@ export function read3MF(data: Uint8Array, info?: { printer?: string }): Imported
     });
     // Modifier wirken im Slicer auf das ganze Objekt; sie hängen am ersten Teil und bewegen sich mit dessen Gruppe
     if (modifiers.length && parts.length > first) parts[first].modifiers = modifiers;
+    const plate = plates?.of.get(it.objectid);
+    if (plate !== undefined) for (let k = first; k < parts.length; k++) parts[k].plate = plate;
   });
   if (!parts.length) throw new Error('Die 3MF-Datei enthält keine Dreiecksnetze.');
   return parts;
@@ -842,6 +861,11 @@ export interface BambuPrinter {
   height?: number;
   /** Drucker mit zwei Düsen: Art jedes Extruders (wie im Druckerprofil von Bambu Studio). */
   extruders?: string[];
+  /**
+   * Zwei Düsen: Bereich in X (mm ab dem linken Rand), den die linke bzw. rechte Düse erreicht
+   * (extruder_printable_area im Druckerprofil).
+   */
+  reach?: [[number, number], [number, number]];
 }
 
 export const BAMBU_PRINTERS: BambuPrinter[] = [
@@ -855,10 +879,10 @@ export const BAMBU_PRINTERS: BambuPrinter[] = [
   { id: 'A1M', label: 'A1 mini', model: 'Bambu Lab A1 mini', printer: 'Bambu Lab A1 mini 0.4 nozzle', process: '0.20mm Standard @BBL A1M', filament: 'Bambu PLA Basic @BBL A1M', bed: [180, 180], height: 180 },
   { id: 'A2L', label: 'A2L', model: 'Bambu Lab A2L', printer: 'Bambu Lab A2L 0.4 nozzle', process: '0.20mm Standard @BBL A2L', filament: 'Bambu PLA Basic @BBL A2L 0.4 nozzle', bed: [330, 320] },
   { id: 'H2S', label: 'H2S', model: 'Bambu Lab H2S', printer: 'Bambu Lab H2S 0.4 nozzle', process: '0.20mm Standard @BBL H2S', filament: 'Bambu PLA Basic @BBL H2S', bed: [340, 320], height: 340 },
-  { id: 'H2C', label: 'H2C', model: 'Bambu Lab H2C', printer: 'Bambu Lab H2C 0.4 nozzle', process: '0.20mm Standard @BBL H2C', filament: 'Bambu PLA Basic @BBL H2C', bed: [330, 320], extruders: ['Direct Drive', 'Direct Drive'] },
-  { id: 'H2D', label: 'H2D', model: 'Bambu Lab H2D', printer: 'Bambu Lab H2D 0.4 nozzle', process: '0.20mm Standard @BBL H2D', filament: 'Bambu PLA Basic @BBL H2D', bed: [350, 320], height: 325, extruders: ['Direct Drive', 'Direct Drive'] },
-  { id: 'H2DP', label: 'H2D Pro', model: 'Bambu Lab H2D Pro', printer: 'Bambu Lab H2D Pro 0.4 nozzle', process: '0.20mm Standard @BBL H2DP', filament: 'Bambu PLA Basic @BBL H2DP', bed: [350, 320], height: 325, extruders: ['Direct Drive', 'Direct Drive'] },
-  { id: 'X2D', label: 'X2D', model: 'Bambu Lab X2D', printer: 'Bambu Lab X2D 0.4 nozzle', process: '0.20mm Standard @BBL X2D', filament: 'Bambu PLA Basic @BBL X2D 0.4 nozzle', bed: [256, 256], extruders: ['Direct Drive', 'Bowden'] },
+  { id: 'H2C', label: 'H2C', model: 'Bambu Lab H2C', printer: 'Bambu Lab H2C 0.4 nozzle', process: '0.20mm Standard @BBL H2C', filament: 'Bambu PLA Basic @BBL H2C', bed: [330, 320], extruders: ['Direct Drive', 'Direct Drive'], reach: [[0, 325], [25, 330]] },
+  { id: 'H2D', label: 'H2D', model: 'Bambu Lab H2D', printer: 'Bambu Lab H2D 0.4 nozzle', process: '0.20mm Standard @BBL H2D', filament: 'Bambu PLA Basic @BBL H2D', bed: [350, 320], height: 325, extruders: ['Direct Drive', 'Direct Drive'], reach: [[0, 325], [25, 350]] },
+  { id: 'H2DP', label: 'H2D Pro', model: 'Bambu Lab H2D Pro', printer: 'Bambu Lab H2D Pro 0.4 nozzle', process: '0.20mm Standard @BBL H2DP', filament: 'Bambu PLA Basic @BBL H2DP', bed: [350, 320], height: 325, extruders: ['Direct Drive', 'Direct Drive'], reach: [[0, 325], [25, 350]] },
+  { id: 'X2D', label: 'X2D', model: 'Bambu Lab X2D', printer: 'Bambu Lab X2D 0.4 nozzle', process: '0.20mm Standard @BBL X2D', filament: 'Bambu PLA Basic @BBL X2D 0.4 nozzle', bed: [256, 256], extruders: ['Direct Drive', 'Bowden'], reach: [[0, 256], [20.5, 256]] },
 ];
 
 export interface BambuOptions {
@@ -916,6 +940,40 @@ function bambuProjectSettings(printer: BambuPrinter, colors: string[], version: 
     inherits_group: Array.from({ length: n + 2 }, () => ''),
     different_settings_to_system: Array.from({ length: n + 2 }, () => ''),
   }, null, 4);
+}
+
+/**
+ * Druckplatten eines Bambu-Projekts: Platte je Objekt (Nummer ab 0, nach plater_id geordnet) und der
+ * Druckbereich, mit dem Bambu Studio die Platten angeordnet hat.
+ */
+export function bambuPlatesOf(files: Record<string, Uint8Array>): { count: number; of: Map<string, number>; bed: [number, number] } | undefined {
+  const cfg = files['Metadata/model_settings.config'];
+  if (!cfg) return undefined;
+  const xml = strFromU8(cfg);
+  const list = [...xml.matchAll(/<plate>([\s\S]*?)<\/plate>/g)].map((m) => ({
+    id: Number(/key="plater_id"\s+value="(\d+)"/.exec(m[1])?.[1] ?? 0),
+    objects: [...m[1].matchAll(/key="object_id"\s+value="([^"]+)"/g)].map((x) => x[1]),
+  }));
+  if (!list.length) return undefined;
+  list.sort((a, b) => a.id - b.id);
+  const of = new Map<string, number>();
+  list.forEach((p, i) => { for (const o of p.objects) if (!of.has(o)) of.set(o, i); });
+  let bed: [number, number] = [256, 256];
+  const project = files['Metadata/project_settings.config'];
+  try {
+    const json = project ? JSON.parse(strFromU8(project)) : {};
+    const pts = (json.printable_area as string[] | undefined)?.map((s) => s.trim().split('x').map(Number));
+    if (pts?.length && pts.every((p) => p.length === 2 && p.every(Number.isFinite))) {
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      bed = [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+    } else {
+      const known = BAMBU_PRINTERS.find((p) => p.model === json.printer_model);
+      if (known) bed = known.bed;
+    }
+  } catch {
+    // ohne Projekteinstellungen: Standardplatte
+  }
+  return { count: list.length, of, bed };
 }
 
 /** Bambu-Drucker eines Projekts (printer_model aus den Projekteinstellungen), falls bekannt. */
@@ -1104,7 +1162,7 @@ ${configObjects.join('\n')}
 ${plateInstances.map((list, i) => `  <plate>
     <metadata key="plater_id" value="${i + 1}"/>
     <metadata key="plater_name" value=""/>
-    <metadata key="locked" value="false"/>${opts.thumbnails?.[i] ? `
+    <metadata key="locked" value="false"/>${opts.thumbnails?.[i]?.length ? `
     <metadata key="thumbnail_file" value="Metadata/plate_${i + 1}.png"/>` : ''}
 ${list.join('\n')}
   </plate>`).join('\n')}
@@ -1123,10 +1181,11 @@ ${assemble.join('\n')}
   const thumbs = opts.thumbnails ?? [];
   const rels = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
- <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>${thumbs[0] ? `
+ <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>${thumbs[0]?.length ? `
  <Relationship Target="/Metadata/plate_1.png" Id="rel-2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>` : ''}
 </Relationships>`;
-  for (const [i, png] of thumbs.entries()) if (png) files[`Metadata/plate_${i + 1}.png`] = png;
+  // Leere Platten haben kein Bild
+  for (const [i, png] of thumbs.entries()) if (png?.length) files[`Metadata/plate_${i + 1}.png`] = png;
   const modelRels = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 ${subRels.join('\n')}

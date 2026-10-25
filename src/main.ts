@@ -21,7 +21,7 @@ import { layFlat } from './math/orient';
 import { offsetCylinder, offsetPlane } from './math/offset';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
-import { BAMBU_PRINTERS, type ColoredPart, type SlicerExtras, colorSlots } from './io/threemf';
+import { BAMBU_PRINTERS, type ColoredPart, type ReadInfo, type SlicerExtras, bambuPlateOrigin, colorSlots } from './io/threemf';
 import { compute, hasWorker } from './compute/client';
 import { decorate, disposeDecor } from './decor';
 import {
@@ -355,6 +355,7 @@ interface Snapshot {
   joints: Joint[];
   baseId: number | null;
   activeJointId: number | null;
+  plates: number;
   sig: string;
 }
 const UNDO_LIMIT = 60;
@@ -373,6 +374,7 @@ function stateSig(): string {
   const fs = (f: PickedFeature) => [f.kind, f.on ?? 0, f.tris[0], f.tris.length, f.pieces?.length ?? 0];
   return JSON.stringify([
     baseId,
+    plateTotal,
     parts.map((p) => [p.id, p.geom.uuid, p.name, p.visible, p.color.getHexString(), p.group ?? '', p.layout.elements.map(r)]),
     joints.map((j) => [
       j.id, j.a, j.b, j.applied, j.alt, j.seat, j.ordered, j.normals, j.overlap, j.spin, j.turnIdx ?? 0, j.proposalIdx ?? 0,
@@ -388,6 +390,7 @@ function snapshot(): Snapshot {
     joints: joints.map(jointCopy),
     baseId,
     activeJointId,
+    plates: plateTotal,
     sig: stateSig(),
   };
 }
@@ -422,6 +425,7 @@ function restoreSnapshot(snap: Snapshot) {
   joints.push(...next);
   baseId = snap.baseId;
   activeJointId = snap.activeJointId;
+  plateTotal = snap.plates;
   mergePick.clear();
   solveAll();
   renderAll();
@@ -632,6 +636,11 @@ function fitView() {
   const box = new THREE.Box3();
   for (const p of parts) if (p.visible) box.union(partBox(p));
   if (box.isEmpty()) return;
+  fitBox(box);
+}
+
+/** Kamera so, dass der Umriss ganz zu sehen ist (Blickrichtung bleibt). */
+function fitBox(box: THREE.Box3) {
   const c = box.getCenter(new THREE.Vector3());
   const r = box.getSize(new THREE.Vector3()).length() / 2;
   const dir = camera.position.clone().sub(controls.target).normalize();
@@ -877,10 +886,10 @@ async function loadFiles(files: FileList | File[]) {
     try {
       const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase();
       const mtl = mtls.get(stem) ?? (mtls.size === 1 ? [...mtls.values()][0] : undefined);
-      const info: { printer?: string } = {};
+      const info: ReadInfo = {};
       let loaded: LoadedPart[] = await loadModel(file, { split, mtl, info });
-      // Drucker eines Bambu-Projekts vorauswählen (die eigene Wahl bleibt gespeichert)
-      if (info.printer) bambuPrinter.value = info.printer;
+      // Drucker eines Bambu-Projekts vorauswählen (Teile, die schon da sind, bleiben auf ihrer Platte)
+      if (info.printer && info.printer !== bambuPrinter.value) changePrinter(info.printer);
       // Stecken mehrere lose Teile in einem Netz (z. B. eine ganze Druckplatte), diese trennen
       let separated = false;
       if (split) {
@@ -901,7 +910,7 @@ async function loadFiles(files: FileList | File[]) {
             g.computeVertexNormals();
             g.computeBoundingBox();
             g.computeBoundingSphere();
-            return { name: `${l.name} ${k + 1}`, geom: g, color: l.color, group, together: l.together };
+            return { name: `${l.name} ${k + 1}`, geom: g, color: l.color, group, together: l.together, plate: l.plate };
           });
         });
       }
@@ -909,6 +918,23 @@ async function loadFiles(files: FileList | File[]) {
       const bb = new THREE.Box3();
       for (const l of loaded) bb.union(l.geom.boundingBox!);
       const layout = keep ? new THREE.Matrix4() : nextLayout(bb);
+      // Bambu-Projekt mit Platten: jedes Objekt auf seine Platte, an dieselbe Stelle wie in Bambu Studio;
+      // die Platten kommen hinter die schon belegten
+      let plateLayout: ((l: LoadedPart) => THREE.Matrix4) | null = null;
+      if (info.plates && loaded.some((l) => l.plate !== undefined)) {
+        const n = info.plates;
+        const fileBed = info.bed ?? currentPrinter().bed;
+        const occupied = [...occupiedPlates()];
+        const offset = parts.length && occupied.length ? Math.max(...occupied) + 1 : 0;
+        // Leere Arbeitsfläche: genau die Platten des Projekts
+        relayoutPlates(parts.length ? Math.max(plateTotal, offset + n) : n);
+        plateLayout = (l) => {
+          const i = Math.min(n - 1, l.plate ?? 0);
+          const [ox, oy] = bambuPlateOrigin(i, n, fileBed);
+          const c = plateCenter(offset + i);
+          return new THREE.Matrix4().makeTranslation(c.x - ox - fileBed[0] / 2, c.y - oy - fileBed[1] / 2, 0);
+        };
+      }
       // Suchbaum und Oberflächenpunkte vorab, mit kurzen Pausen: große Dateien blockieren die Oberfläche nicht
       const samples: Sample[][] = [];
       let lastYield = performance.now();
@@ -923,12 +949,13 @@ async function loadFiles(files: FileList | File[]) {
       for (const [i, l] of loaded.entries()) {
         const { paint, palette, modifiers, settings, objectSettings } = l;
         const part = addPart(l.name, l.geom, {
-          color: l.color, group: l.group, layout, samples: samples[i], extras: { paint, palette, modifiers, settings, objectSettings },
+          color: l.color, group: l.group, layout: plateLayout ? plateLayout(l) : layout, samples: samples[i], extras: { paint, palette, modifiers, settings, objectSettings },
         });
-        if (keep) part.fromFile = true;
+        // Auf Platten verteilt: jedes Objekt bleibt für sich (nicht alle Teile der Datei gemeinsam)
+        if (keep && !plateLayout) part.fromFile = true;
         if (l.together) part.together = l.together;
       }
-      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
+      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${plateLayout && info.plates! > 1 ? ` – auf ${info.plates} Platten wie in Bambu Studio` : ''}${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
     } catch (e) {
       toast(`${file.name}: ${(e as Error).message}`);
     }
@@ -3583,16 +3610,22 @@ const bambuPrinter = document.getElementById('bambuPrinter') as HTMLSelectElemen
 bambuPrinter.innerHTML = BAMBU_PRINTERS.map((p) => `<option value="${p.id}">${p.label}</option>`).join('');
 try { bambuPrinter.value = localStorage.getItem('partjoin.bambuPrinter') ?? 'X1C'; } catch { /* ohne Speicher */ }
 if (!bambuPrinter.value) bambuPrinter.value = 'X1C';
+/** Drucker, für den die Platten gerade liegen. */
+let shownPrinter = bambuPrinter.value;
 function setBambuPrinter(id: string) {
   bambuPrinter.value = id;
+  shownPrinter = id;
   try { localStorage.setItem('partjoin.bambuPrinter', id); } catch { /* ohne Speicher */ }
 }
-bambuPrinter.addEventListener('change', () => {
-  setBambuPrinter(bambuPrinter.value);
-  drawBed();
-  renderStatus();
+/** Anderer Drucker: Platten bekommen seine Größe, die Teile bleiben auf ihrer Platte an derselben Stelle. */
+function changePrinter(id: string) {
+  const from = (BAMBU_PRINTERS.find((b) => b.id === shownPrinter) ?? BAMBU_PRINTERS[0]).bed;
+  setBambuPrinter(id);
+  if (parts.length) relayoutPlates(plateTotal, (i) => i, from);
+  renderAll();
   if (splitTarget) renderSplit();
-});
+}
+bambuPrinter.addEventListener('change', () => changePrinter(bambuPrinter.value));
 
 onFloor.addEventListener('change', () => {
   // Ausschalten: alles bleibt, wo es gerade steht (die Anhebung wird Teil der Ausgangslage)
@@ -3694,7 +3727,8 @@ async function thumbnails(plates: number): Promise<Uint8Array[]> {
     const [w, d] = currentPrinter().bed;
     const out: Uint8Array[] = [];
     for (let i = 0; i < plates; i++) {
-      const b = new THREE.Box3(new THREE.Vector3(plateCenterX(i) - w / 2, -d / 2, -1e6), new THREE.Vector3(plateCenterX(i) + w / 2, d / 2, 1e6));
+      const c = plateCenter(i);
+      const b = new THREE.Box3(new THREE.Vector3(c.x - w / 2, c.y - d / 2, -1e6), new THREE.Vector3(c.x + w / 2, c.y + d / 2, 1e6));
       out.push((await thumbnail(b)) ?? new Uint8Array(0));
     }
     return out;
@@ -3737,7 +3771,7 @@ async function exportAs(kind: string) {
   try {
     const fit = bedFit();
     const onBed = !fit.outside.length && !fit.tooBig.length;
-    const plates = onBed ? plateCount() : 1;
+    const plates = onBed ? plateTotal : 1;
     // Platte je Teil: die seiner Baugruppe
     if (onBed && plates > 1) {
       const unitPlate = new Map<number, number>();
@@ -3753,7 +3787,7 @@ async function exportAs(kind: string) {
           opts: {
             printer: bambuPrinter.value,
             plateCenter: onBed ? [0, 0] : undefined,
-            plateCenters: onBed && plates > 1 ? Array.from({ length: plates }, (_, i) => [plateCenterX(i), 0] as [number, number]) : undefined,
+            plateCenters: onBed && plates > 1 ? Array.from({ length: plates }, (_, i) => plateCenter(i).toArray() as [number, number]) : undefined,
             thumbnails: await thumbnails(plates),
           },
         })
@@ -6029,6 +6063,11 @@ function viewMenu(x: number, y: number) {
     { label: `Alle Teile zeigen${hidden.length ? ` (${hidden.length} ausgeblendet)` : ''}`, run: () => setVisible(parts, true), disabled: !hidden.length },
     'sep',
     { label: 'Auf der Platte anordnen', run: () => void arrangeOnBed(), disabled: !parts.length },
+    { label: platesShown ? 'Druckplatten ausblenden' : 'Druckplatten einblenden', run: () => setPlatesShown(!platesShown), title: 'Umriss, Raster und Beschriftung der Platten (Knopf „Platten“ unter dem Würfel)' },
+    { label: 'Platte hinzufügen', run: addPlate, title: 'Weitere Druckplatte wie in Bambu Studio – das Raster ordnet sich neu, die Teile wandern mit ihrer Platte' },
+    { label: 'Leere Platten entfernen', run: removeEmptyPlates, disabled: plateTotal === 1 || occupiedPlates().size >= plateTotal },
+    ...(plateTotal > 1 ? [{ label: 'Alle Platten ansehen', run: () => viewPlate(-1) }] : []),
+    'sep',
     { label: 'Hilfe und Tastenkürzel', run: openHelp },
   ]);
 }
@@ -6091,7 +6130,7 @@ function renderStatus() {
   }
   const open = parts.filter((q) => q.health && !q.health.closed);
   if (open.length) bits.push(`<span class="warn">⚠ ${open.length > 1 ? `${open.length} Netze sind` : `„${esc(open[0].name)}“ ist`} nicht geschlossen – Rechtsklick › „Netz reparieren“</span>`);
-  statusEl.innerHTML = bits.join(' · ') + bedWarning();
+  statusEl.innerHTML = bits.join(' · ') + bedWarning() + nozzleNote();
 }
 
 /** Hinweis, wenn Baugruppen nicht auf die Druckplatte passen. */
@@ -6124,73 +6163,266 @@ scene.add(bedGroup);
 let bedDrawn = '';
 
 /**
- * Weitere Druckplatten liegen in PartJoin nebeneinander rechts der ersten (Abstand ein Fünftel, wie in
- * Bambu Studio); beim Export kommen sie in dessen Plattenraster.
+ * Druckplatten wie in Bambu Studio: plateTotal Platten im Raster – etwa √n Spalten, Abstand ein Fünftel
+ * der Platte, weitere Reihen nach vorne (siehe bambuPlateOrigin). Platte 1 liegt mit ihrer Mitte im
+ * Ursprung. Die Zahl steht fest wie in Bambu Studio; ändert sie sich (Anordnen, Platte hinzufügen,
+ * Bambu-Projekt laden) oder der Drucker, wandern die Teile mit ihrer Platte.
  */
-const plateStep = () => currentPrinter().bed[0] * 1.2;
-const plateCenterX = (i: number) => i * plateStep();
+let plateTotal = 1;
+let platesShown = true;
+try { platesShown = localStorage.getItem('partjoin.platesShown') !== '0'; } catch { /* ohne Speicher */ }
 
-/** Auf welcher Platte liegt ein Umriss – und ganz? (−1: keiner) */
-function plateOfBox(box: THREE.Box3): { i: number; inside: boolean } {
-  const [w, d] = currentPrinter().bed;
+/** Mitte von Platte i (bei count Platten dieser Größe). */
+function plateCenter(i: number, count = plateTotal, bed = currentPrinter().bed): THREE.Vector2 {
+  const [x, y] = bambuPlateOrigin(i, count, bed);
+  return new THREE.Vector2(x, y);
+}
+
+/** Nächste Platte zu einem Umriss – und liegt er ganz darauf? */
+function plateOfBox(box: THREE.Box3, count = plateTotal, bed = currentPrinter().bed): { i: number; inside: boolean } {
+  const [w, d] = bed;
   const cx = (box.min.x + box.max.x) / 2;
-  const i = Math.max(0, Math.round(cx / plateStep()));
-  const x0 = plateCenterX(i) - w / 2;
+  const cy = (box.min.y + box.max.y) / 2;
+  let i = 0;
+  let best = Infinity;
+  for (let k = 0; k < count; k++) {
+    const c = plateCenter(k, count, bed);
+    const dist = ((cx - c.x) / w) ** 2 + ((cy - c.y) / d) ** 2;
+    if (dist < best) { best = dist; i = k; }
+  }
+  const c = plateCenter(i, count, bed);
   const eps = 0.01;
-  const inside = box.min.x >= x0 - eps && box.max.x <= x0 + w + eps && box.min.y >= -d / 2 - eps && box.max.y <= d / 2 + eps;
+  const inside = box.min.x >= c.x - w / 2 - eps && box.max.x <= c.x + w / 2 + eps && box.min.y >= c.y - d / 2 - eps && box.max.y <= c.y + d / 2 + eps;
   return { i, inside };
 }
 
-/** Benutzte Platten: bis zur letzten, auf der eine Baugruppe ganz liegt. */
-function plateCount(): number {
-  let n = 1;
-  for (const u of visibleUnits()) {
-    const pl = plateOfBox(u.box);
-    if (pl.inside) n = Math.max(n, pl.i + 1);
+/** Alle Baugruppen, auch ausgeblendete Teile. */
+function allUnits(): Part[][] {
+  const seen = new Set<number>();
+  const out: Part[][] = [];
+  for (const p of parts) {
+    const key = unitOf.get(p.id) ?? p.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(unitMembers(p));
   }
-  return n;
+  return out;
+}
+
+/** Platten, auf oder neben denen etwas liegt (auch Ausgeblendetes) – die übrigen sind leer. */
+function occupiedPlates(): Set<number> {
+  const used = new Set<number>();
+  for (const members of allUnits()) {
+    const box = unitBox(members);
+    if (!box.isEmpty()) used.add(plateOfBox(box).i);
+  }
+  return used;
+}
+
+/**
+ * Platten neu legen: total Platten; was auf Platte i liegt, kommt auf Platte to(i) – an dieselbe Stelle
+ * darauf. from: Plattengröße vorher (anderer Drucker).
+ */
+function relayoutPlates(total: number, to: (i: number) => number = (i) => i, from: [number, number] = currentPrinter().bed) {
+  const before = plateTotal;
+  total = Math.max(1, total);
+  const moves = allUnits().map((members) => {
+    const box = unitBox(members);
+    if (box.isEmpty()) return null;
+    const i = plateOfBox(box, before, from).i;
+    const a = plateCenter(i, before, from);
+    const b = plateCenter(Math.max(0, Math.min(total - 1, to(i))), total);
+    return { members, dx: b.x - a.x, dy: b.y - a.y };
+  });
+  plateTotal = total;
+  for (const m of moves) {
+    if (!m || (Math.abs(m.dx) < 1e-9 && Math.abs(m.dy) < 1e-9)) continue;
+    const T = new THREE.Matrix4().makeTranslation(m.dx, m.dy, 0);
+    for (const q of m.members) q.layout.premultiply(T);
+  }
+  solveAll();
+  if (gizmoTarget) placeGizmo();
+}
+
+function addPlate() {
+  beginAction();
+  relayoutPlates(plateTotal + 1);
+  renderAll();
+  viewPlate(plateTotal - 1);
+  toast(`Platte ${plateTotal} hinzugefügt – Teile mit Strg/⌘ + Ziehen daraufschieben oder „Anordnen“ (A).`, 5000);
+}
+
+function removeEmptyPlates() {
+  const used = occupiedPlates();
+  const keep = Array.from({ length: plateTotal }, (_, i) => i).filter((i) => used.has(i));
+  if (keep.length === plateTotal || plateTotal === 1) return;
+  const removed = plateTotal - Math.max(1, keep.length);
+  beginAction();
+  const map = new Map(keep.map((i, k) => [i, k]));
+  relayoutPlates(keep.length, (i) => map.get(i) ?? 0);
+  renderAll();
+  toast(`${removed} leere Platte${removed > 1 ? 'n' : ''} entfernt.`);
+}
+
+/** Ältere Projekte ohne Plattenzahl: so viele Platten, dass die meisten Baugruppen ganz auf einer liegen. */
+function guessPlates(): number {
+  const units = visibleUnits();
+  let best = 1;
+  let most = -1;
+  for (let n = 1; n <= 36; n++) {
+    const k = units.filter((u) => plateOfBox(u.box, n).inside).length;
+    if (k > most) { most = k; best = n; }
+  }
+  return best;
+}
+
+/** Ansicht auf eine Platte (−1: alle Platten). */
+function viewPlate(i: number) {
+  const [w, d] = currentPrinter().bed;
+  const box = new THREE.Box3();
+  for (let k = 0; k < plateTotal; k++) {
+    if (i >= 0 && k !== i) continue;
+    const c = plateCenter(k);
+    box.expandByPoint(new THREE.Vector3(c.x - w / 2, c.y - d / 2, 0)).expandByPoint(new THREE.Vector3(c.x + w / 2, c.y + d / 2, 0));
+  }
+  for (const p of parts) if (p.visible && (i < 0 || plateOfBox(partBox(p)).i === i)) box.max.z = Math.max(box.max.z, partBox(p).max.z);
+  fitBox(box);
+}
+
+function setPlatesShown(on: boolean) {
+  platesShown = on;
+  try { localStorage.setItem('partjoin.platesShown', on ? '1' : '0'); } catch { /* ohne Speicher */ }
+  drawBed();
+}
+
+/** Zwei Düsen: Streifen der Platte (X ab dem linken Rand), die nur eine der Düsen erreicht. */
+function nozzleZones(printer = currentPrinter()): { x0: number; x1: number; side: 'links' | 'rechts' }[] {
+  if (!printer.reach) return [];
+  const [l, r] = printer.reach;
+  const out: { x0: number; x1: number; side: 'links' | 'rechts' }[] = [];
+  if (r[0] > l[0]) out.push({ x0: l[0], x1: Math.min(r[0], l[1]), side: 'links' });
+  if (r[1] > l[1]) out.push({ x0: Math.max(l[1], r[0]), x1: r[1], side: 'rechts' });
+  return out;
+}
+const ZONE_COLORS = { links: '#e39b2d', rechts: '#9a6cf0' };
+
+/** Beschriftung flach auf der Platte (Breite in mm; anchor: wo der Text am Punkt steht). */
+function flatLabel(text: string, color: string, width: number, x: number, y: number, anchor: 'left' | 'right' = 'left'): THREE.Mesh {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 64;
+  const g = c.getContext('2d')!;
+  g.font = '600 34px system-ui, sans-serif';
+  g.fillStyle = color;
+  g.textAlign = anchor;
+  g.fillText(text, anchor === 'left' ? 4 : 508, 44);
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(width, width / 8), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  label.position.set(anchor === 'left' ? x + width / 2 : x - width / 2, y, 0.03);
+  label.raycast = () => {};
+  return label;
 }
 
 function drawBed() {
   const printer = currentPrinter();
   const { outside, tooBig } = bedFit();
   const bad = outside.length + tooBig.length > 0;
-  const count = plateCount();
-  const key = `${printer.id}|${bad}|${count}`;
+  bedGroup.visible = platesShown;
+  // Ohne Platten: ein schlichtes Raster als Boden
+  grid.visible = !platesShown;
+  renderPlateBar();
+  const key = `${printer.id}|${bad}|${plateTotal}`;
   if (key === bedDrawn) return;
   bedDrawn = key;
   disposeGroup(bedGroup);
   const [w, d] = printer.bed;
   const color = bad ? 0xe5484d : 0x2f6fde;
-  for (let i = 0; i < count; i++) {
-    const x = plateCenterX(i);
+  const zones = nozzleZones(printer);
+  const lw = Math.min(w * 0.6, 160);
+  for (let i = 0; i < plateTotal; i++) {
+    const { x, y } = plateCenter(i);
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(w, d),
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.06, depthWrite: false, side: THREE.DoubleSide }),
     );
-    plate.position.set(x, 0, -0.02);
+    plate.position.set(x, y, -0.02);
     plate.raycast = () => {};
     const outline = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints([[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(([px, py]) => new THREE.Vector3(x + px, py, 0.02))),
+      new THREE.BufferGeometry().setFromPoints([[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(([px, py]) => new THREE.Vector3(x + px, y + py, 0.02))),
       new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 }),
     );
     outline.raycast = () => {};
-    // Beschriftung vorne links, flach auf der Platte
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 64;
-    const g = c.getContext('2d')!;
-    g.font = '600 34px system-ui, sans-serif';
-    g.fillStyle = bad ? '#e5484d' : '#2f6fde';
-    g.fillText(i === 0 ? `${printer.label} · ${w} × ${d} mm${count > 1 ? ' · Platte 1' : ''}` : `Platte ${i + 1}`, 4, 44);
-    const tex = new THREE.CanvasTexture(c);
-    const lw = Math.min(w * 0.6, 160);
-    const label = new THREE.Mesh(new THREE.PlaneGeometry(lw, lw / 8), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
-    label.position.set(x - w / 2 + lw / 2 + 2, -d / 2 - lw / 16 - 2, 0.03);
-    label.raycast = () => {};
-    bedGroup.add(plate, outline, label);
+    // Raster alle 10 mm
+    const lines: number[] = [];
+    for (let gx = 10; gx < w - 1e-6; gx += 10) lines.push(x - w / 2 + gx, y - d / 2, 0.01, x - w / 2 + gx, y + d / 2, 0.01);
+    for (let gy = 10; gy < d - 1e-6; gy += 10) lines.push(x - w / 2, y - d / 2 + gy, 0.01, x + w / 2, y - d / 2 + gy, 0.01);
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    const gridLines = new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: 0x8890a0, transparent: true, opacity: 0.22, depthWrite: false }));
+    gridLines.raycast = () => {};
+    // Beschriftung vorne links
+    const text = i === 0 ? `${printer.label} · ${w} × ${d} mm${plateTotal > 1 ? ' · Platte 1' : ''}` : `Platte ${i + 1}`;
+    bedGroup.add(plate, outline, gridLines, flatLabel(text, bad ? '#e5484d' : '#2f6fde', lw, x - w / 2 + 2, y - d / 2 - lw / 16 - 2));
+    // Bereiche, die nur eine Düse erreicht: getönt, mit Grenzlinie und Beschriftung hinter der Platte
+    for (const z of zones) {
+      const zc = new THREE.Color(ZONE_COLORS[z.side]);
+      const zw = z.x1 - z.x0;
+      const strip = new THREE.Mesh(new THREE.PlaneGeometry(zw, d), new THREE.MeshBasicMaterial({ color: zc, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }));
+      strip.position.set(x - w / 2 + z.x0 + zw / 2, y, -0.01);
+      strip.raycast = () => {};
+      const edge = x - w / 2 + (z.side === 'links' ? z.x1 : z.x0);
+      const border = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(edge, y - d / 2, 0.02), new THREE.Vector3(edge, y + d / 2, 0.02)]),
+        new THREE.LineDashedMaterial({ color: zc, dashSize: 4, gapSize: 3, transparent: true, opacity: 0.9 }),
+      );
+      border.computeLineDistances();
+      border.raycast = () => {};
+      const zl = Math.min(w * 0.45, 110);
+      const label = z.side === 'links'
+        ? flatLabel('◧ nur linke Düse', ZONE_COLORS.links, zl, x - w / 2, y + d / 2 + zl / 16 + 1, 'left')
+        : flatLabel('nur rechte Düse ◨', ZONE_COLORS.rechts, zl, x + w / 2, y + d / 2 + zl / 16 + 1, 'right');
+      bedGroup.add(strip, border, label);
+    }
   }
 }
+
+/** Liegt eine Baugruppe in einem Streifen, den nur eine Düse erreicht? Hinweis für die Statuszeile. */
+function nozzleNote(): string {
+  const zones = nozzleZones();
+  if (!zones.length) return '';
+  const [w] = currentPrinter().bed;
+  const hits: { name: string; sides: string[] }[] = [];
+  for (const u of visibleUnits()) {
+    const pl = plateOfBox(u.box);
+    if (!pl.inside) continue;
+    const x0 = plateCenter(pl.i).x - w / 2;
+    const sides = zones.filter((z) => u.box.min.x < x0 + z.x1 - 0.01 && u.box.max.x > x0 + z.x0 + 0.01).map((z) => z.side);
+    if (sides.length) hits.push({ name: u.name, sides });
+  }
+  if (!hits.length) return '';
+  const what = (sides: string[]) => (sides.length > 1 ? 'die nur je eine Düse erreicht' : `den nur die ${sides[0] === 'links' ? 'linke' : 'rechte'} Düse erreicht`);
+  const text = hits.length > 1
+    ? `${hits.length} Baugruppen liegen in Bereichen, die nur eine Düse erreicht`
+    : `„${esc(hits[0].name)}“ liegt im Bereich, ${what(hits[0].sides)}`;
+  return ` · <span class="note" title="Bambu Studio druckt dort nur mit den Filamenten dieser Düse – mehrfarbige Teile besser weiter zur Mitte schieben.">◧ ${text}</span>`;
+}
+
+const plateBar = document.getElementById('plateBar')!;
+function renderPlateBar() {
+  const used = occupiedPlates();
+  const list = document.getElementById('plateList')!;
+  list.innerHTML = Array.from({ length: plateTotal }, (_, i) => `<button class="ghost small${used.has(i) ? '' : ' empty'}" data-plate="${i}" title="Platte ${i + 1} ansehen${used.has(i) ? '' : ' (leer)'}">${i + 1}</button>`).join('')
+    + (plateTotal > 1 && used.size < plateTotal ? '<button class="ghost small" data-plate-trim title="Leere Platten entfernen">−</button>' : '');
+  document.getElementById('platesShow')!.classList.toggle('on', platesShown);
+  plateBar.classList.toggle('off', !platesShown);
+}
+plateBar.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('button');
+  if (!b) return;
+  if (b.id === 'platesShow') setPlatesShown(!platesShown);
+  else if (b.id === 'plateAdd') addPlate();
+  else if (b.dataset.plateTrim !== undefined) removeEmptyPlates();
+  else if (b.dataset.plate !== undefined) viewPlate(Number(b.dataset.plate));
+});
 
 /** Sichtbare Baugruppen mit ihrem Umriss (Weltkoordinaten). */
 function visibleUnits(): { members: Part[]; box: THREE.Box3; name: string }[] {
@@ -6242,7 +6474,8 @@ async function arrangeOnBed() {
   let y = -d / 2;
   let rowDepth = 0;
   const big = items.filter((it) => it.size.x > w || it.size.y > d);
-  const placed = new Map<(typeof items)[number], [number, number]>();
+  // Erst nur Platte und Lage darauf (Mitte der Platte = 0) – die Lage der Platten hängt von ihrer Zahl ab
+  const local = new Map<(typeof items)[number], [number, number, number]>();
   for (const it of items) {
     if (big.includes(it)) continue;
     if (x + it.size.x > w / 2 && x > -w / 2) {
@@ -6258,21 +6491,28 @@ async function arrangeOnBed() {
       y = -d / 2;
       rowDepth = 0;
     }
-    placed.set(it, [plateCenterX(plate) + x + it.size.x / 2, y + it.size.y / 2]);
+    local.set(it, [plate, x + it.size.x / 2, y + it.size.y / 2]);
     x += it.size.x + gap;
     rowDepth = Math.max(rowDepth, it.size.y);
   }
-  // Zu groß für jede Platte: rechts neben die letzte
-  let ox = plateCenterX(plate) + w / 2 + 20;
+  const plates = plate + 1;
+  // So viele Platten wie nötig; Ausgeblendetes wandert mit seiner Platte
+  relayoutPlates(plates);
+  const placed = new Map<(typeof items)[number], [number, number]>();
+  for (const [it, [i, lx, ly]] of local) {
+    const c = plateCenter(i);
+    placed.set(it, [c.x + lx, c.y + ly]);
+  }
+  // Zu groß für jede Platte: rechts neben das Raster
+  let ox = Math.max(...Array.from({ length: plates }, (_, i) => plateCenter(i).x)) + w / 2 + 20;
   for (const it of big) {
     placed.set(it, [ox + it.size.x / 2, -d / 2 + it.size.y / 2]);
     ox += it.size.x + gap;
   }
   const overflow = big.length;
-  const plates = plate + 1;
   for (const it of items) {
     const [cx, cy] = placed.get(it)!;
-    const c = it.box.getCenter(new THREE.Vector3());
+    const c = unitBox(it.members).getCenter(new THREE.Vector3());
     const T = new THREE.Matrix4().makeTranslation(cx - c.x, cy - c.y, 0);
     // Ganze Baugruppe verschieben (auch ausgeblendete Teile)
     for (const q of unitMembers(it.members[0])) q.layout.premultiply(T);
@@ -6550,7 +6790,7 @@ function projectState(): { data: ProjectData; blobs: Blobs } {
   return {
     data: newProject({
       parts: list, joints: saved, baseId, activeJointId,
-      settings: { onFloor: onFloor.checked, printer: bambuPrinter.value },
+      settings: { onFloor: onFloor.checked, printer: bambuPrinter.value, plates: plateTotal },
       camera: { position: camera.position.toArray(), target: controls.target.toArray() },
     }),
     blobs,
@@ -6612,9 +6852,10 @@ function openProject(data: ProjectData, blobs: Blobs) {
   activeJointId = (data.activeJointId !== null ? jointIds.get(data.activeJointId) : undefined) ?? joints[0]?.id ?? null;
   onFloor.checked = data.settings?.onFloor ?? true;
   const printer = data.settings?.printer;
-  if (printer && BAMBU_PRINTERS.some((b) => b.id === printer)) bambuPrinter.value = printer;
+  if (printer && BAMBU_PRINTERS.some((b) => b.id === printer)) setBambuPrinter(printer);
   ensureJoint();
   solveAll();
+  plateTotal = data.settings?.plates ?? guessPlates();
   renderAll();
   if (data.camera) {
     camera.position.fromArray(data.camera.position);

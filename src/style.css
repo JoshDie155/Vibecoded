@@ -210,6 +210,17 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
   font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer;
 }
 #viewCube .face > span { display: flex; align-items: center; justify-content: center; }
+/* Druckplatten: unter dem Würfel */
+#plateBar {
+  position: absolute; top: 120px; right: 6px; z-index: 3; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px;
+  max-width: 132px; padding: 4px; border-radius: 9px; border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, transparent); font-size: 12px;
+}
+#plateBar button { padding: 1px 7px; min-width: 24px; font-variant-numeric: tabular-nums; }
+#plateBar #plateList { display: contents; }
+#plateBar button.empty { opacity: 0.55; }
+#plateBar.off #plateList, #plateBar.off #plateAdd { display: none; }
+#status .note { color: var(--text); }
 #viewCube .face > span.hl { background: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent-ink); }
 #viewCube #viewHome {
   position: absolute; left: 0; top: 2px; width: 24px; height: 24px; padding: 0; font-size: 15px; line-height: 1;

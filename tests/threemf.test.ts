@@ -595,6 +595,22 @@ describe('Bambu-Export: mehrere Druckplatten', () => {
     expect(at(plates[2][0])[9]).toBeCloseTo(30 + 128, 3);
     expect(at(plates[2][0])[10]).toBeCloseTo(-40 + 128 - W, 3);
   });
+  it('liest die Platten eines Bambu-Projekts zurück: Platte je Objekt, Zahl der Platten, Plattengröße', () => {
+    const W = 256 * 1.2;
+    const parts = [
+      { name: 'A', color: '#ff0000', object: 'a', plate: 0, positions: box(20, 20, 10) },
+      { name: 'B', color: '#00ff00', object: 'b', plate: 2, positions: transformPositions(box(20, 20, 10), new THREE.Matrix4().makeTranslation(0, -W, 0)) },
+      { name: 'C', color: '#0000ff', object: 'c', plate: 1, positions: transformPositions(box(20, 20, 10), new THREE.Matrix4().makeTranslation(W, 0, 0)) },
+    ];
+    const file = write3MFBambu(parts, { printer: 'P2S', plateCenters: [[0, 0], [W, 0], [0, -W]] });
+    const info: { printer?: string; plates?: number; bed?: [number, number] } = {};
+    const back = read3MF(file, info);
+    expect(info).toMatchObject({ printer: 'P2S', plates: 3, bed: [256, 256] });
+    expect(back.map((p) => [p.name, p.plate])).toEqual([['A', 0], ['B', 2], ['C', 1]]);
+    // Lage in Bambu Studio: Platte 3 in der zweiten Reihe (Ursprung 0, −W)
+    const minY = (p: Float32Array) => Math.min(...Array.from(p).filter((_, i) => i % 3 === 1));
+    expect(minY(back[1].positions)).toBeCloseTo(128 - 10 - W, 3);
+  });
 });
 
 describe('Vorschaubilder', () => {
@@ -626,5 +642,10 @@ describe('Vorschaubilder', () => {
     const cfg = strFromU8(files['Metadata/model_settings.config']);
     expect([...cfg.matchAll(/key="thumbnail_file" value="([^"]+)"/g)].map((m) => m[1])).toEqual(['Metadata/plate_1.png', 'Metadata/plate_2.png']);
     expect(strFromU8(files['_rels/.rels'])).toContain('Target="/Metadata/plate_1.png"');
+
+    // Leere Platte: kein Bild, kein Eintrag
+    const gap = unzipSync(write3MFBambu(parts, { printer: 'P2S', plateCenters: [[0, 0], [W, 0]], thumbnails: [png, new Uint8Array(0)] }));
+    expect(gap['Metadata/plate_2.png']).toBeUndefined();
+    expect((strFromU8(gap['Metadata/model_settings.config']).match(/thumbnail_file/g) ?? []).length).toBe(1);
   });
 });

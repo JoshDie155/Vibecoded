@@ -144,6 +144,11 @@
           <div class="cube"></div>
           <button id="viewHome" title="Schrägansicht (Taste 0)" aria-label="Schrägansicht">⌂</button>
         </div>
+        <div id="plateBar" role="group" aria-label="Druckplatten">
+          <button id="platesShow" class="ghost small" title="Druckplatten ein- oder ausblenden (Umriss, Raster, Düsenbereiche)">Platten</button>
+          <span id="plateList"></span>
+          <button id="plateAdd" class="ghost small" title="Platte hinzufügen – wie in Bambu Studio im Raster; die Teile wandern mit ihrer Platte" aria-label="Platte hinzufügen">+</button>
+        </div>
         <div id="measureBar" hidden>
           <strong>Messen</strong>
           <span id="measureText"></span>
@@ -385,6 +390,8 @@
           <ul>
             <li>„Auf die Druckplatte stellen“ (Standard): Jede Baugruppe steht mit ihrem tiefsten Punkt auf der Platte – im Slicer schwebt nichts.</li>
             <li>Der Umriss zeigt die Druckplatte des gewählten Druckers; rot heißt: etwas liegt daneben oder ist zu groß. Liegt alles darauf, kommt es im Slicer genau so an.</li>
+            <li>Mehrere Platten liegen wie in Bambu Studio im Raster; die Leiste „Platten“ unter dem Würfel blendet sie ein und aus, springt per Nummer zu einer Platte und fügt mit + eine hinzu. Bambu-Projekte kommen mit ihren Platten.</li>
+            <li>Drucker mit zwei Düsen (H2D, H2C, X2D …): Getönte Streifen am Rand erreicht nur die linke bzw. rechte Düse.</li>
             <li>Die Statuszeile unten zeigt die Maße der Baugruppe unter dem Mauszeiger.</li>
             <li>PartJoin sichert deine Arbeit laufend im Browser; nach dem Neuladen „Wiederherstellen“.</li>
             <li>Etwas ging schief? <kbd>Strg/⌘</kbd> <kbd>Z</kbd> nimmt jede Aktion zurück.</li>

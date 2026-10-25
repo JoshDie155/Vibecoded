@@ -2,7 +2,7 @@
  * Rechenaufgaben, die im Hintergrund laufen (compute/worker.ts) – oder, falls der Browser keinen
  * Worker erlaubt, genauso im Hauptthread (compute/client.ts). Ein- und Ausgaben sind reine Daten.
  */
-import { type ColoredPart, type ImportedPart, type BambuOptions, read3MF, write3MF, write3MFBambu } from '../io/threemf';
+import { type ColoredPart, type ImportedPart, type BambuOptions, type ReadInfo, read3MF, write3MF, write3MFBambu } from '../io/threemf';
 import { type Blobs, type ProjectData, packProject } from '../io/project';
 import { type Feature, buildTopology } from '../math/features';
 import { findCandidateFaces } from '../math/segment';
@@ -31,10 +31,10 @@ const buffers = (arrays: (ArrayBufferView | undefined)[]) => [...new Set(arrays.
 
 export const TASKS = {
   /** 3MF lesen. */
-  read3mf(a: { data: Uint8Array }): TaskResult<{ parts: ImportedPart[]; printer?: string }> {
-    const info: { printer?: string } = {};
+  read3mf(a: { data: Uint8Array }): TaskResult<{ parts: ImportedPart[] } & ReadInfo> {
+    const info: ReadInfo = {};
     const parts = read3MF(a.data, info);
-    return { result: { parts, printer: info.printer }, transfer: buffers(parts.flatMap((p) => [p.positions, ...(p.modifiers ?? []).map((m) => m.positions)])) };
+    return { result: { parts, ...info }, transfer: buffers(parts.flatMap((p) => [p.positions, ...(p.modifiers ?? []).map((m) => m.positions)])) };
   },
   /** Markante Flächen eines Teils für automatische Vorschläge. */
   candidates(a: { positions: Float32Array }): TaskResult<Feature[]> {

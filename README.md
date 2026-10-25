@@ -82,11 +82,19 @@ und Mausaktionen.
    ihren Winkel (mit Innenwinkel), zwei Zapfen/Bohrungen den Winkel ihrer Achsen, Achse und Fläche den Winkel
    dazwischen. Ecken rasten ein.
    Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger.
-   **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers liegt im Ursprung; rot, wenn eine
-   Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte anordnen"
-   (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf; passt nicht alles auf eine Platte, füllt es
-   weitere Platten (rechts daneben gezeichnet, „Platte 2", …). Liegt alles auf den Platten, übernimmt der
-   Bambu-Export genau diese Lage – mit derselben Aufteilung auf Platten in Bambu Studio.
+   **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers (mit 10-mm-Raster) liegt im Ursprung;
+   rot, wenn eine Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte
+   anordnen" (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf; passt nicht alles auf eine Platte,
+   füllt es weitere. **Mehrere Platten** liegen wie in Bambu Studio im Raster (etwa √n Spalten, weitere Reihen
+   davor). Die Leiste „Platten" unter dem Ansichtswürfel blendet die Platten ein und aus, springt per Nummer
+   zu einer Platte, fügt mit + eine hinzu und entfernt mit − die leeren (auch im Rechtsklick-Menü ins Leere).
+   Ändert sich die Zahl der Platten oder der Drucker, wandern die Teile mit ihrer Platte. Ein Bambu-Projekt
+   kommt mit seinen Platten: jedes Objekt auf seine Platte, an dieselbe Stelle. Liegt alles auf den Platten,
+   übernimmt der Bambu-Export genau diese Lage – mit derselben Aufteilung auf Platten in Bambu Studio.
+   **Zwei Düsen** (H2D, H2D Pro, H2C, X2D): Getönte Streifen am Plattenrand zeigen, was nur die linke
+   (orange) bzw. nur die rechte Düse (lila) erreicht – Werte aus den Druckerprofilen von Bambu Studio
+   (H2D: links 25 mm, rechts 25 mm; H2C: links 25 mm, rechts 5 mm; X2D: links 20,5 mm). Liegt eine
+   Baugruppe darin, sagt es die Statuszeile: Bambu Studio druckt dort nur mit den Filamenten dieser Düse.
    **Druckausrichtung**: „Für den Druck ausrichten" legt jede Baugruppe mit ihrer größten ebenen
    Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
    was schon gut liegt, bleibt. Von Hand: oben „Auf Fläche legen" (Taste L), dann die Fläche
