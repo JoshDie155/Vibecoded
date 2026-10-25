@@ -136,7 +136,8 @@ Punkt löscht ihn · Strg/⌘+Z nimmt die letzte Aktion zurück (Auswahl, Verbin
 Ausblenden, Entfernen …), Strg/⌘+Umschalt+Z oder Strg+Y stellt sie wieder her · P/F wechselt Punkte/Flächen ·
 im Gizmo G = verschieben, R = drehen, Esc = fertig · linke Maustaste dreht die Ansicht, mittlere oder
 rechte verschiebt sie – stößt der Zeiger dabei an den Fensterrand, geht es unbegrenzt weiter (der Zeiger
-wird bis zum Loslassen festgehalten), Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
+wird bis zum Loslassen festgehalten; lässt der Browser das nicht zu, etwa in einer eingebetteten Vorschau,
+dreht die Ansicht weiter, solange der Zeiger am Rand bleibt), Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
 **Überhänge & Wände** (Abschnitt 3 oder Taste U): färbt Flächen rot, die zu flach nach unten zeigen und
 Stützen brauchen (ab einstellbarem Winkel von der Senkrechten, Standard 45° – auf der Platte liegende und

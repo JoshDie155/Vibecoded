@@ -314,8 +314,9 @@ new ResizeObserver(() => view.style.setProperty('--bar-top', `${toolbarEl.offset
 
 /**
  * Drehen und Verschieben der Ansicht ohne Bildschirmrand: Stößt der Mauszeiger beim Ziehen an den Rand des
- * Fensters, wird er gefangen (Pointer Lock) – die Bewegung geht unbegrenzt weiter, bis die Taste losgelassen
- * wird. Gerechnet wird wie in OrbitControls selbst (dessen Drehen/Verschieben, aus der relativen Bewegung).
+ * Fensters, wird er festgehalten (Pointer Lock) – die Bewegung geht unbegrenzt weiter, bis die Taste losgelassen
+ * wird. Lässt der Browser das nicht zu (z. B. in einer eingebetteten Vorschau), dreht die Ansicht weiter,
+ * solange der Zeiger am Rand bleibt. Gerechnet wird wie in OrbitControls selbst.
  */
 {
   const orbit = controls as unknown as { state: number; _rotateLeft?(a: number): void; _rotateUp?(a: number): void; _pan?(x: number, y: number): void };
@@ -323,31 +324,88 @@ new ResizeObserver(() => view.style.setProperty('--bar-top', `${toolbarEl.offset
   const PAN = 2;
   const canvas = renderer.domElement;
   const locked = () => document.pointerLockElement === canvas;
-  canvas.addEventListener('pointermove', (e) => {
-    if (e.pointerType !== 'mouse' || !e.buttons || locked() || !controls.enabled) return;
-    if (orbit.state !== ROTATE && orbit.state !== PAN) return;
-    const m = 2;
-    if (e.clientX > m && e.clientY > m && e.clientX < innerWidth - 1 - m && e.clientY < innerHeight - 1 - m) return;
-    try {
-      // Neuere Browser geben ein Promise zurück (abgelehnt, wenn nicht erlaubt) – dann eben mit Rand
-      (canvas.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => {});
-    } catch { /* nicht erlaubt */ }
-  });
-  document.addEventListener('mousemove', (e) => {
-    if (!locked() || !e.buttons) return;
-    // Manche Browser melden direkt nach dem Fangen einen Sprung – den nicht mitnehmen
-    if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
-    if (orbit.state === ROTATE && orbit._rotateLeft && orbit._rotateUp) {
-      orbit._rotateLeft((2 * Math.PI * e.movementX * controls.rotateSpeed) / viewHeight);
-      orbit._rotateUp((2 * Math.PI * e.movementY * controls.rotateSpeed) / viewHeight);
-    } else if (orbit.state === PAN && orbit._pan) orbit._pan(e.movementX * controls.panSpeed, e.movementY * controls.panSpeed);
-    else return;
+  const usable = () => !!orbit._rotateLeft && !!orbit._rotateUp && !!orbit._pan;
+  /**
+   * Laufendes Ziehen der Ansicht – selbst gemerkt, denn manche Browser beenden das Ziehen von OrbitControls,
+   * sobald der Zeiger festgehalten wird. asked: in diesem Zug schon angefragt (nur einmal – eine zweite Anfrage,
+   * solange die erste läuft, lehnt der Browser ab); edge: in diesem Zug dreht stattdessen der Rand weiter.
+   */
+  let drag: { mode: number; x: number; y: number; asked: boolean; edge: boolean; failed?: boolean } | null = null;
+  /** Festhalten geht hier nicht (zweimal hintereinander abgelehnt oder nicht vorhanden): dann dreht der Rand weiter. */
+  let noLock = typeof canvas.requestPointerLock !== 'function';
+  let failures = 0;
+  const lockFailed = () => {
+    // Je Zug einmal zählen (Fehler-Ereignis und abgelehntes Promise kommen beide)
+    if (!drag || drag.failed) return;
+    drag.failed = true;
+    drag.edge = true;
+    if (++failures < 2 || noLock) return;
+    noLock = true;
+    toast('Der Browser lässt den Mauszeiger hier nicht festhalten – halte ihn beim Drehen am Rand, dann dreht die Ansicht weiter.', 7000);
+  };
+  const move = (dx: number, dy: number) => {
+    if (!drag || !usable()) return;
+    if (drag.mode === ROTATE) {
+      orbit._rotateLeft!((2 * Math.PI * dx * controls.rotateSpeed) / viewHeight);
+      orbit._rotateUp!((2 * Math.PI * dy * controls.rotateSpeed) / viewHeight);
+    } else orbit._pan!(dx * controls.panSpeed, dy * controls.panSpeed);
     controls.update();
+  };
+  /** Richtung, in der der Zeiger am Fensterrand steht (0, wenn nicht). */
+  const edgeOf = (x: number, y: number) => {
+    const m = 3;
+    return { x: x <= m ? -1 : x >= innerWidth - 1 - m ? 1 : 0, y: y <= m ? -1 : y >= innerHeight - 1 - m ? 1 : 0 };
+  };
+  controls.addEventListener('start', () => {
+    drag = orbit.state === ROTATE || orbit.state === PAN ? { mode: orbit.state, x: -1, y: -1, asked: false, edge: noLock } : null;
   });
-  const release = () => { if (locked()) document.exitPointerLock(); };
-  document.addEventListener('pointerup', release);
-  document.addEventListener('mouseup', release);
-  window.addEventListener('blur', release);
+  document.addEventListener('pointerlockerror', () => { if (drag) lockFailed(); });
+  document.addEventListener('pointerlockchange', () => {
+    if (locked()) failures = 0;
+    // Mit Esc freigegeben, Taste noch unten: in diesem Zug am Rand weiterdrehen
+    else if (drag) drag.edge = true;
+  });
+  // Erst hier, dann OrbitControls: Während der Zeiger festgehalten ist, sieht es keine Bewegung (manche Browser
+  // melden dann eine andere Position, das gäbe einen Sprung)
+  canvas.addEventListener('pointermove', (e) => {
+    if (locked()) { e.stopImmediatePropagation(); return; }
+    if (!drag || e.pointerType !== 'mouse' || !usable()) return;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    const edge = edgeOf(e.clientX, e.clientY);
+    if (!(edge.x || edge.y) || drag.edge || drag.asked) return;
+    drag.asked = true;
+    try {
+      // Neuere Browser geben ein Promise zurück, das abgelehnt wird, wenn es nicht erlaubt ist
+      (canvas.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => { if (drag) lockFailed(); });
+    } catch {
+      lockFailed();
+    }
+  }, { capture: true });
+  document.addEventListener('mousemove', (e) => {
+    if (!locked() || !drag) return;
+    // Manche Browser melden direkt nach dem Festhalten einen Sprung – den nicht mitnehmen
+    if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
+    move(e.movementX, e.movementY);
+  });
+  // Ohne Festhalten: Zeiger am Rand dreht weiter (wie 250 Pixel Ziehen je Sekunde – eine Umdrehung in gut 3 s)
+  let last = performance.now();
+  const edgeStep = (t: number) => {
+    requestAnimationFrame(edgeStep);
+    const dt = Math.min(0.05, Math.max(0, (t - last) / 1000));
+    last = t;
+    if (!drag || locked() || !drag.edge || drag.x < 0) return;
+    const edge = edgeOf(drag.x, drag.y);
+    if (edge.x || edge.y) move(edge.x * 250 * dt, edge.y * 250 * dt);
+  };
+  requestAnimationFrame(edgeStep);
+  const end = () => {
+    drag = null;
+    if (locked()) document.exitPointerLock();
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('mouseup', end);
+  window.addEventListener('blur', end);
 }
 
 /** Markierungen behalten auf dem Bildschirm eine feste Größe (in Pixeln). */
