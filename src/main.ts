@@ -7027,6 +7027,8 @@ window.addEventListener('keydown', (e) => {
 let sessionArmed = false;
 let sessionSig = '';
 let sessionBusy = false;
+/** Laufende Sicherung – wer währenddessen sichern will, wartet darauf und sichert danach den neuen Stand. */
+let sessionDone: Promise<void> = Promise.resolve();
 const restoreBar = document.getElementById('restoreBar')!;
 
 /** Maustaste gedrückt (Ziehen, Drehen der Ansicht): Sicherung wartet, damit nichts ruckelt. */
@@ -7040,25 +7042,34 @@ async function autosave(force = false) {
     restoreBar.hidden = true;
     sessionArmed = true;
   }
-  if (!sessionArmed || sessionBusy || (pointerHeld && !force)) return;
+  if (!sessionArmed || (pointerHeld && !force)) return;
+  if (sessionBusy) {
+    // Nicht überspringen: Der Stand kann sich seit Beginn der laufenden Sicherung geändert haben
+    await sessionDone;
+    return autosave(force);
+  }
   const sig = `${stateSig()}|${onFloor.checked}`;
   if (sig === sessionSig) return;
   sessionBusy = true;
-  try {
-    if (!parts.length) await clearSession();
-    else {
-      const { data, blobs } = projectState();
-      await saveSession(data, blobs);
+  sessionDone = (async () => {
+    try {
+      if (!parts.length) await clearSession();
+      else {
+        const { data, blobs } = projectState();
+        await saveSession(data, blobs);
+      }
+      sessionSig = sig;
+    } catch {
+      // Kein Speicher im Browser (z. B. privates Fenster oder voll): dann eben ohne Sicherung
+      sessionArmed = false;
+    } finally {
+      sessionBusy = false;
     }
-    sessionSig = sig;
-  } catch {
-    // Kein Speicher im Browser (z. B. privates Fenster oder voll): dann eben ohne Sicherung
-    sessionArmed = false;
-  } finally {
-    sessionBusy = false;
-  }
+  })();
+  await sessionDone;
 }
-setInterval(() => void autosave(), 2500);
+// Regelmäßig – läuft noch eine Sicherung, kommt die nächste Runde dran (nur ausdrückliche Aufrufe warten)
+setInterval(() => { if (!sessionBusy) void autosave(); }, 2500);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') void autosave(true);
 });
