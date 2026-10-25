@@ -108,19 +108,22 @@
             <button id="arrange" class="ghost" title="Legt alle sichtbaren Baugruppen platzsparend nebeneinander auf die Druckplatte des gewählten Druckers (Taste A). Was nicht mehr passt, liegt rechts daneben.">Auf der Platte anordnen</button>
           </div>
           <div id="checkResult"></div>
-          <div class="row wrap">
-            <button data-export="stl">STL</button>
+          <h3 class="subhead">Exportieren</h3>
+          <div class="row wrap exports">
             <button data-export="3mf-bambu" title="Projektformat von Bambu Studio und OrcaSlicer: ein Objekt aus mehreren Teilen, Teile gleicher Farbe bekommen dasselbe Filament in dieser Farbe.">3MF für Bambu Studio / OrcaSlicer</button>
             <button data-export="3mf-color" title="Format von PrusaSlicer: ein Objekt aus mehreren Teilen mit eigenem Extruder je Farbe.">3MF für PrusaSlicer</button>
             <button data-export="3mf" title="Alle Teile als ein Körper, ohne Farben.">3MF (ein Körper)</button>
+            <button data-export="stl">STL</button>
             <button data-export="obj">OBJ</button>
           </div>
-          <label class="check small" title="Drucker, Prozess- und Filamentprofil im Bambu-Projekt (System-Profile von Bambu Studio, 0,4-mm-Düse, Bambu PLA Basic). Die Teilefarben werden die Filamentfarben.">
-            Drucker im Bambu-Projekt <select id="bambuPrinter"></select>
-          </label>
-          <label class="check small" title="Boolesche Vereinigung: Überlappungen und innenliegende Flächen verschwinden, der Slicer bekommt ein einziges geschlossenes Netz. Gilt für STL, OBJ und 3MF (ein Körper).">
-            <input type="checkbox" id="unionExport" checked /> Zu einem Körper vereinigen (STL, OBJ, 3MF ein Körper)
-          </label>
+          <div class="exportopts">
+            <label class="check small" title="Drucker, Prozess- und Filamentprofil im Bambu-Projekt (System-Profile von Bambu Studio, 0,4-mm-Düse, Bambu PLA Basic). Die Teilefarben werden die Filamentfarben.">
+              Drucker <select id="bambuPrinter"></select>
+            </label>
+            <label class="check small" title="Boolesche Vereinigung: Überlappungen und innenliegende Flächen verschwinden, der Slicer bekommt ein einziges geschlossenes Netz. Gilt für STL, OBJ und 3MF (ein Körper).">
+              <input type="checkbox" id="unionExport" checked /> Zu einem Körper vereinigen (STL, OBJ, 3MF ein Körper)
+            </label>
+          </div>
           <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. Die mehrfarbigen 3MF-Varianten behalten Teile und Farben: Jede Farbe bekommt eine eigene Filament-/Extrudernummer. Für Bambu Studio wird jede Baugruppe ein eigenes Objekt. Bambu Studio übernimmt die Teilefarben direkt als Filamentfarben (Profil: Bambu PLA Basic, im Slicer änderbar); in PrusaSlicer ordnest du jedem Extruder das passende Filament zu.</p>
         </section>
       </aside>
@@ -385,8 +388,8 @@
             <dt><kbd>Alt/⌥</kbd> + Klick</dt><dd>Fläche an die zuletzt gewählte anhängen (zusammenfassen)</dd>
             <dt><kbd>⇧</kbd> + Klick</dt><dd>Teil auswählen (weitere ⇧-Klicks: mehrere) und in der Teileliste zeigen</dd>
             <dt>Rechtsklick</dt><dd>auf ein Teil: Menü (ausblenden, Farbe, Basis, hinlegen, Passung, skalieren, zerschneiden, bewegen, entfernen …) – auch in der Teileliste; auf einen Punkt: entfernen</dd>
-            <dt>Links ziehen</dt><dd>Ansicht drehen</dd>
-            <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben</dd>
+            <dt>Links ziehen</dt><dd>Ansicht drehen – am Fensterrand geht es unbegrenzt weiter (der Zeiger bleibt bis zum Loslassen stehen)</dd>
+            <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben, ebenfalls über den Rand hinaus</dd>
             <dt>Mausrad</dt><dd>zoomen, dorthin, wo der Zeiger steht</dd>
             <dt>Ansichtswürfel</dt><dd>oben rechts: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht dorthin, Ziehen dreht sie, ⌂ = Schrägansicht</dd>
             <dt><kbd>Strg/⌘</kbd> + ziehen</dt><dd>Teil (mit allem, was daran hängt) über die Platte schieben</dd>

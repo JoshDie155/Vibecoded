@@ -312,6 +312,44 @@ resize();
 const toolbarEl = document.getElementById('toolbar')!;
 new ResizeObserver(() => view.style.setProperty('--bar-top', `${toolbarEl.offsetTop + toolbarEl.offsetHeight + 6}px`)).observe(toolbarEl);
 
+/**
+ * Drehen und Verschieben der Ansicht ohne Bildschirmrand: Stößt der Mauszeiger beim Ziehen an den Rand des
+ * Fensters, wird er gefangen (Pointer Lock) – die Bewegung geht unbegrenzt weiter, bis die Taste losgelassen
+ * wird. Gerechnet wird wie in OrbitControls selbst (dessen Drehen/Verschieben, aus der relativen Bewegung).
+ */
+{
+  const orbit = controls as unknown as { state: number; _rotateLeft?(a: number): void; _rotateUp?(a: number): void; _pan?(x: number, y: number): void };
+  const ROTATE = 0;
+  const PAN = 2;
+  const canvas = renderer.domElement;
+  const locked = () => document.pointerLockElement === canvas;
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse' || !e.buttons || locked() || !controls.enabled) return;
+    if (orbit.state !== ROTATE && orbit.state !== PAN) return;
+    const m = 2;
+    if (e.clientX > m && e.clientY > m && e.clientX < innerWidth - 1 - m && e.clientY < innerHeight - 1 - m) return;
+    try {
+      // Neuere Browser geben ein Promise zurück (abgelehnt, wenn nicht erlaubt) – dann eben mit Rand
+      (canvas.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => {});
+    } catch { /* nicht erlaubt */ }
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!locked() || !e.buttons) return;
+    // Manche Browser melden direkt nach dem Fangen einen Sprung – den nicht mitnehmen
+    if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
+    if (orbit.state === ROTATE && orbit._rotateLeft && orbit._rotateUp) {
+      orbit._rotateLeft((2 * Math.PI * e.movementX * controls.rotateSpeed) / viewHeight);
+      orbit._rotateUp((2 * Math.PI * e.movementY * controls.rotateSpeed) / viewHeight);
+    } else if (orbit.state === PAN && orbit._pan) orbit._pan(e.movementX * controls.panSpeed, e.movementY * controls.panSpeed);
+    else return;
+    controls.update();
+  });
+  const release = () => { if (locked()) document.exitPointerLock(); };
+  document.addEventListener('pointerup', release);
+  document.addEventListener('mouseup', release);
+  window.addEventListener('blur', release);
+}
+
 /** Markierungen behalten auf dem Bildschirm eine feste Größe (in Pixeln). */
 function scaleMarkers() {
   const k = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / viewHeight;
