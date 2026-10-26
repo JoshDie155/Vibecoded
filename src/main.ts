@@ -549,6 +549,32 @@ function releaseUnused() {
   }
 }
 
+/**
+ * Speicher für alte Netze in der Historie begrenzen: Bei großen Netzen (Scans mit Millionen Dreiecken)
+ * behält jede Reparatur, jedes Vereinfachen oder Schneiden das vorige Netz – ohne Grenze läuft der Tab voll.
+ */
+let undoBytes = 800e6;
+let undoTrimmed = false;
+function trimHistory() {
+  const retained = () => {
+    const current = new Set(parts);
+    const held = new Set<Part>();
+    for (const s of [...undoStack, ...redoStack]) for (const e of s.parts) if (!current.has(e.part)) held.add(e.part);
+    // Positionen, Normalen und Suchbaum (grob)
+    let bytes = 0;
+    for (const p of held) bytes += 3 * positionsOf(p).byteLength;
+    return bytes;
+  };
+  let dropped = false;
+  while (undoStack.length > 1 && retained() > undoBytes) {
+    undoStack.shift();
+    dropped = true;
+  }
+  if (!dropped) return;
+  releaseUnused();
+  undoTrimmed = true;
+}
+
 /** Vor jeder Bedienung aufrufen: merkt sich den Zustand, damit sie sich zurücknehmen lässt. */
 function beginAction() {
   commitAction();
@@ -562,6 +588,7 @@ function commitAction() {
     redoStack.length = 0;
     pendingUndo = null;
     releaseUnused();
+    trimHistory();
   }
   pendingUndo = null;
 }
@@ -569,7 +596,10 @@ function commitAction() {
 function undo() {
   commitAction();
   const s = undoStack.pop();
-  if (!s) { toast('Nichts mehr rückgängig zu machen.', 1800); return; }
+  if (!s) {
+    toast(undoTrimmed ? 'Nichts mehr rückgängig zu machen – ältere Schritte wurden wegen der großen Netze nicht behalten.' : 'Nichts mehr rückgängig zu machen.', undoTrimmed ? 4000 : 1800);
+    return;
+  }
   redoStack.push(snapshot());
   restoreSnapshot(s);
   toast('Rückgängig gemacht · Strg/⌘+Umschalt+Z stellt es wieder her', 2200);
@@ -913,7 +943,7 @@ function nextLayout(bb: THREE.Box3): THREE.Matrix4 {
 
 function addPart(
   name: string, geom: THREE.BufferGeometry,
-  opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras; samples?: Sample[]; id?: number } = {},
+  opts: { color?: string; group?: string; layout?: THREE.Matrix4; extras?: SlicerExtras; samples?: Sample[]; id?: number; topo?: Topology } = {},
 ) {
   if (!geom.boundsTree) geom.computeBoundsTree();
   const color = new THREE.Color(opts.color ?? PART_COLORS[(nextPartId - 1) % PART_COLORS.length]);
@@ -931,6 +961,7 @@ function addPart(
   const part: Part = {
     id: opts.id ?? nextPartId++, name, geom, mesh, color, layout, visible: true, samples: opts.samples ?? sampleSurface(geom, 6000), group: opts.group, ...opts.extras,
   };
+  if (opts.topo) part.topo = opts.topo;
   decorate(mesh, part);
   mesh.userData.partId = part.id;
   parts.push(part);
@@ -986,8 +1017,16 @@ function ensureJoint() {
   j.auto = true;
 }
 
-async function loadFiles(files: FileList | File[]) {
+/** Laden nacheinander: Dateien, die während des Ladens dazukommen, warten (sonst lägen sie übereinander). */
+let loadQueue: Promise<void> = Promise.resolve();
+function loadFiles(files: FileList | File[]): Promise<void> {
   const list = Array.from(files);
+  loadQueue = loadQueue.then(() => loadList(list)).catch((e) => toast(`Laden fehlgeschlagen: ${(e as Error).message}`));
+  return loadQueue;
+}
+
+async function loadList(list: File[]) {
+  const before = parts.length;
   const split = (document.getElementById('splitParts') as HTMLInputElement).checked;
   const keep = (document.getElementById('keepPos') as HTMLInputElement).checked;
   // Farben für OBJ: passende .mtl-Datei (gleicher Name oder die einzige mitgegebene)
@@ -1011,19 +1050,30 @@ async function loadFiles(files: FileList | File[]) {
       const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase();
       const mtl = mtls.get(stem) ?? (mtls.size === 1 ? [...mtls.values()][0] : undefined);
       const info: ReadInfo = {};
+      // Große Dateien brauchen einen Moment: sagen, dass etwas passiert
+      if (file.size > 4e6 || /\.(step|stp|iges|igs|brep|brp)$/i.test(file.name)) {
+        toast(`Lade „${file.name}“${file.size > 4e6 ? ` (${(file.size / 1e6).toFixed(0)} MB)` : ''} …`, 120000);
+        await new Promise((r) => setTimeout(r, 30));
+      }
       let loaded: LoadedPart[] = await loadModel(file, { split, mtl, info });
       // Drucker eines Bambu-Projekts vorauswählen (Teile, die schon da sind, bleiben auf ihrer Platte)
       if (info.printer && info.printer !== bambuPrinter.value) changePrinter(info.printer);
       // Stecken mehrere lose Teile in einem Netz (z. B. eine ganze Druckplatte), diese trennen
       let separated = false;
+      // Nachbarschaften aus der Prüfung weiterverwenden (sonst beim ersten Zeigen auf das Teil nochmal)
+      const topos = new Map<LoadedPart, Topology>();
       if (split) {
         const members = new Map<string, number>();
         for (const l of loaded) if (l.group) members.set(l.group, (members.get(l.group) ?? 0) + 1);
         loaded = loaded.flatMap((l) => {
           // Bemalung und Modifier gehören zu genau diesem Netz – solche Teile bleiben ganz
           if (l.paint || l.modifiers) return [l];
-          const pieces = splitLoosePieces(l.geom.getAttribute('position').array as Float32Array);
-          if (pieces.length < 2) return [l];
+          const found: { topo?: Topology } = {};
+          const pieces = splitLoosePieces(l.geom.getAttribute('position').array as Float32Array, {}, found);
+          if (pieces.length < 2) {
+            if (found.topo) topos.set(l, found.topo);
+            return [l];
+          }
           separated = true;
           l.geom.dispose();
           // Gehörte das Netz zu einem Objekt aus mehreren Teilen, bleiben die Stücke in dessen Gruppe
@@ -1073,7 +1123,7 @@ async function loadFiles(files: FileList | File[]) {
       for (const [i, l] of loaded.entries()) {
         const { paint, palette, modifiers, settings, objectSettings } = l;
         const part = addPart(l.name, l.geom, {
-          color: l.color, group: l.group, layout: plateLayout ? plateLayout(l) : layout, samples: samples[i], extras: { paint, palette, modifiers, settings, objectSettings },
+          color: l.color, group: l.group, layout: plateLayout ? plateLayout(l) : layout, samples: samples[i], topo: topos.get(l), extras: { paint, palette, modifiers, settings, objectSettings },
         });
         // Auf Platten verteilt: jedes Objekt bleibt für sich (nicht alle Teile der Datei gemeinsam)
         if (keep && !plateLayout) part.fromFile = true;
@@ -1088,6 +1138,12 @@ async function loadFiles(files: FileList | File[]) {
   solveAll();
   fitView();
   renderAll();
+  // Ladehinweis nicht stehen lassen
+  const note = document.getElementById('toast')!;
+  if (note.classList.contains('show') && note.textContent?.startsWith('Lade „')) {
+    const n = Math.max(0, parts.length - before);
+    toast(n ? `Geladen: ${n} Teil${n === 1 ? '' : 'e'}.` : 'Geladen.', 2000);
+  }
   // Markante Flächen schon jetzt im Hintergrund suchen: „Vorschlagen" ist dann sofort da
   if (hasWorker()) void ensureCandidates(parts.filter((p) => p.visible)).catch(() => {});
 }
@@ -3774,8 +3830,20 @@ onFloor.addEventListener('change', () => {
   toast(onFloor.checked ? 'Jede Baugruppe steht jetzt auf der Druckplatte.' : 'Teile bleiben frei im Raum, wo sie gerade sind.');
 });
 
+/** Speichern und Exportieren nacheinander: ein Doppelklick erzeugt keine zweite Datei. */
+let saving = false;
+async function exclusive(run: () => Promise<void>) {
+  if (saving) { toast('Einen Moment – die vorige Datei wird noch gespeichert.', 2500); return; }
+  saving = true;
+  try {
+    await run();
+  } finally {
+    saving = false;
+  }
+}
+
 document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
-  b.addEventListener('click', () => void exportAs(b.dataset.export ?? 'stl')),
+  b.addEventListener('click', () => void exclusive(() => exportAs(b.dataset.export ?? 'stl'))),
 );
 
 /**
@@ -7228,8 +7296,13 @@ async function saveProject() {
   }
   const { data, blobs } = projectState();
   toast('Speichere Projekt …', 20000);
-  const bytes = await compute('packProject', { data, blobs });
-  await download(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), `${projectName()}.${PROJECT_EXT}`);
+  try {
+    const bytes = await compute('packProject', { data, blobs });
+    await download(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), `${projectName()}.${PROJECT_EXT}`);
+  } catch (e) {
+    toast(`Speichern nicht möglich: ${(e as Error).message ?? e}`, 6000);
+    return;
+  }
   toast('Projekt gespeichert. Zum Weiterarbeiten die Datei hier hineinziehen oder „Projekt öffnen" wählen.', 6000);
 }
 
@@ -7239,12 +7312,12 @@ projFile.addEventListener('change', () => {
   if (projFile.files?.length) void loadFiles(projFile.files);
   projFile.value = '';
 });
-document.getElementById('projSave')!.addEventListener('click', () => void saveProject());
+document.getElementById('projSave')!.addEventListener('click', () => void exclusive(saveProject));
 // Strg/⌘+S speichert das Projekt statt der Webseite
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 's') return;
   e.preventDefault();
-  void saveProject();
+  void exclusive(saveProject);
 });
 
 // ---------------------------------------------------------------- Sitzung im Browser sichern
@@ -7274,7 +7347,7 @@ async function autosave(force = false) {
     await sessionDone;
     return autosave(force);
   }
-  const sig = `${stateSig()}|${onFloor.checked}`;
+  const sig = `${stateSig()}|${onFloor.checked}|${bambuPrinter.value}`;
   if (sig === sessionSig) return;
   sessionBusy = true;
   sessionDone = (async () => {
@@ -7344,6 +7417,10 @@ Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
     parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor, autosave, hasWorker,
     checkCount: () => checkGroup.children.length,
+    /** Belegte Netze und Texturen auf der Grafikkarte (für Tests auf Speicherlecks). */
+    gpu: () => ({ ...renderer.info.memory }),
+    /** Speichergrenze der Historie (für Tests kleiner). */
+    setUndoBytes: (n: number) => { undoBytes = n; },
     gizmoLocked: () => [...gizmoLocked],
     hoverLineVisible: () => hoverLine.visible,
     undoInfo: () => ({ undo: undoStack.map((u) => u.parts.map((e) => e.visible)), redo: redoStack.length, pending: pendingUndo?.parts.map((e) => e.visible) ?? null }),

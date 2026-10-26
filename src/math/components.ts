@@ -6,7 +6,7 @@
  */
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { buildTopology } from './features';
+import { type Topology, buildTopology } from './features';
 
 export interface SplitOptions {
   /** Abstand, bis zu dem sich zwei Stücke berühren (Standard: 1e-4 der Diagonale, mindestens 0,01 mm). */
@@ -19,6 +19,8 @@ interface Piece {
   tris: number[];
   min: THREE.Vector3;
   max: THREE.Vector3;
+  /** Umschließender Quader beim Sammeln (minX, minY, minZ, maxX, maxY, maxZ) */
+  box: Float64Array;
   geom?: THREE.BufferGeometry;
   bvh?: MeshBVH;
 }
@@ -52,12 +54,14 @@ function inside(bvh: MeshBVH, p: THREE.Vector3): boolean {
 
 /**
  * Trennt die losen Stücke eines Netzes (nicht indizierte Dreiecke).
+ * @param info bekommt die Nachbarschaften des ganzen Netzes (zum Weiterverwenden, wenn nichts getrennt wird)
  * @returns ein Positions-Array je Teil; genau eines, wenn nichts zu trennen ist
  */
-export function splitLoosePieces(positions: Float32Array, opts: SplitOptions = {}): Float32Array[] {
+export function splitLoosePieces(positions: Float32Array, opts: SplitOptions = {}, info?: { topo?: Topology }): Float32Array[] {
   const triCount = positions.length / 9;
   if (triCount < 2) return [positions];
   const topo = buildTopology(positions);
+  if (info) info.topo = topo;
   // Zusammenhang über gemeinsame (verschweißte) Eckpunkte – robuster als über Kanten
   const parent = new Int32Array(topo.vertCount);
   for (let i = 0; i < parent.length; i++) parent[i] = i;
@@ -70,23 +74,34 @@ export function splitLoosePieces(positions: Float32Array, opts: SplitOptions = {
     union(topo.vertIds[3 * t], topo.vertIds[3 * t + 1]);
     union(topo.vertIds[3 * t + 1], topo.vertIds[3 * t + 2]);
   }
+  // Erst zählen: meist ist es ein einziges Stück, dann ist hier schon Schluss
+  const roots = new Set<number>();
+  for (let t = 0; t < triCount && roots.size <= (opts.maxPieces ?? 2000); t++) roots.add(find(parent, topo.vertIds[3 * t]));
+  if (roots.size < 2 || roots.size > (opts.maxPieces ?? 2000)) return [positions];
   const byRoot = new Map<number, Piece>();
   for (let t = 0; t < triCount; t++) {
     const r = find(parent, topo.vertIds[3 * t]);
     let piece = byRoot.get(r);
     if (!piece) {
-      piece = { tris: [], min: new THREE.Vector3(Infinity, Infinity, Infinity), max: new THREE.Vector3(-Infinity, -Infinity, -Infinity) };
+      piece = { tris: [], min: new THREE.Vector3(), max: new THREE.Vector3(), box: new Float64Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]) };
       byRoot.set(r, piece);
     }
     piece.tris.push(t);
-    for (let k = 0; k < 3; k++) {
-      const o = t * 9 + k * 3;
-      piece.min.min(new THREE.Vector3(positions[o], positions[o + 1], positions[o + 2]));
-      piece.max.max(new THREE.Vector3(positions[o], positions[o + 1], positions[o + 2]));
+    // Ohne Hilfsobjekte je Ecke: bei Millionen Dreiecken spürbar schneller
+    const b = piece.box;
+    for (let o = t * 9; o < t * 9 + 9; o += 3) {
+      for (let a = 0; a < 3; a++) {
+        const x = positions[o + a];
+        if (x < b[a]) b[a] = x;
+        if (x > b[a + 3]) b[a + 3] = x;
+      }
     }
   }
   const pieces = [...byRoot.values()];
-  if (pieces.length < 2 || pieces.length > (opts.maxPieces ?? 2000)) return [positions];
+  for (const p of pieces) {
+    p.min.set(p.box[0], p.box[1], p.box[2]);
+    p.max.set(p.box[3], p.box[4], p.box[5]);
+  }
 
   const tol = opts.touchTol ?? Math.max(0.01, topo.diag * 1e-4);
   const group = new Int32Array(pieces.length);

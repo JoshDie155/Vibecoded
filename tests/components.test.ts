@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { splitLoosePieces } from '../src/math/components';
+import { buildTopology } from '../src/math/features';
 import { box, concat, cylinder, ring, transformPositions } from './helpers/meshes';
 
 const at = (p: Float32Array, x: number, y = 0, z = 0) => transformPositions(p, new THREE.Matrix4().makeTranslation(x, y, z));
@@ -12,6 +13,15 @@ describe('splitLoosePieces', () => {
     const r = splitLoosePieces(p);
     expect(r).toHaveLength(1);
     expect(r[0]).toBe(p);
+  });
+
+  it('gibt die Nachbarschaften des Netzes zum Weiterverwenden heraus', () => {
+    const p = ring(10, 3, 4, 32);
+    const info: { topo?: ReturnType<typeof buildTopology> } = {};
+    expect(splitLoosePieces(p, {}, info)).toHaveLength(1);
+    const fresh = buildTopology(p);
+    expect(info.topo?.triCount).toBe(fresh.triCount);
+    expect(Array.from(info.topo!.neighbors)).toEqual(Array.from(fresh.neighbors));
   });
 
   it('trennt Teile, die nebeneinander auf der Platte liegen – auch dicht an dicht', () => {
