@@ -77,10 +77,15 @@ und Mausaktionen.
    ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
-   **Messen** (oben „Messen", Taste M): zwei Stellen anklicken ergibt Abstand und ΔX/ΔY/ΔZ, ein Klick auf eine
-   Rundung ihren Durchmesser, zwei parallele Flächen ihren Abstand (Wandstärke, Spalt), zwei schräge Flächen
-   ihren Winkel (mit Innenwinkel), zwei Zapfen/Bohrungen den Winkel ihrer Achsen, Achse und Fläche den Winkel
-   dazwischen. Ecken rasten ein.
+   **Messen** (oben „Messen", Taste M) funktioniert wie in Bambu Studio: Unter dem Zeiger leuchtet das
+   Merkmal auf – Ecke, gerade Kante, Kreis oder Bogen (Bohrung, runde Außenkante, auch abgerundete Ecken),
+   Seite eines Vielecks (Sechskant), ebene Fläche oder auf Rundungen der ganze Zapfen bzw. die Bohrung. Schon
+   ein Merkmal zeigt sein Maß: eine Kante ihre Länge, ein Kreis seinen Durchmesser (im Bild und in der
+   Leiste), eine Fläche ihren Inhalt. Zwei Merkmale ergeben je nach Art Winkel, (senkrechten) Abstand,
+   Achsabstand, direkten Abstand und ΔX/ΔY/ΔZ – jeweils mit Kopierknopf; Kreise zählen dabei mit ihrer Mitte.
+   Ein Klick auf den Mittelpunkt eines gewählten Kreises nimmt die Mitte, Umschalt + Klick einen beliebigen
+   Punkt; ein weiterer Klick ersetzt das zweite Merkmal, ein Klick auf ein gewähltes wählt es ab. Entf bzw.
+   „Neu" beginnt von vorn, Esc nimmt ein Merkmal zurück und beendet ohne Auswahl das Messen.
    Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger.
    **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers (mit 10-mm-Raster) liegt im Ursprung;
    rot, wenn eine Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte

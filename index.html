@@ -139,7 +139,7 @@
           </span>
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
-          <button id="measureTool" class="ghost small" title="Messen: zwei Stellen anklicken für den Abstand, ein Klick auf eine Rundung zeigt ihren Durchmesser, zwei parallele Flächen ihren Abstand, zwei schräge Flächen oder Achsen den Winkel (Taste M, Esc beendet)">Messen</button>
+          <button id="measureTool" class="ghost small" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)">Messen</button>
           <button id="explodeTool" class="ghost small" title="Explosionsansicht: Baugruppen auseinandergezogen zeigen – nur zum Ansehen (Taste X)">Explosion</button>
           <button id="sectionTool" class="ghost small" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)">Schnitt</button>
           <button id="fitTool" class="ghost small" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)">Passung</button>
@@ -160,7 +160,8 @@
         </div>
         <div id="measureBar" hidden>
           <strong>Messen</strong>
-          <span id="measureText"></span>
+          <button id="measureReset" class="ghost small" title="Auswahl löschen und neu beginnen (Entf)">Neu</button>
+          <div id="measureText"></div>
         </div>
         <div id="fitBar" hidden>
           <strong id="fitTitle"></strong>
@@ -362,7 +363,7 @@
           <h3>Tasten</h3>
           <dl class="keys">
             <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
-            <dt><kbd>M</kbd></dt><dd>Messen: Abstand, Durchmesser, Flächenabstand, Winkel</dd>
+            <dt><kbd>M</kbd></dt><dd>Messen wie in Bambu Studio: Kante (Länge), Kreis (Durchmesser), Fläche; zwei Merkmale: Abstand, Winkel. Umschalt + Klick: beliebiger Punkt, <kbd>Entf</kbd> neu, <kbd>Esc</kbd> ein Merkmal zurück</dd>
             <dt><kbd>C</kbd></dt><dd>Schnittansicht ein/aus (Regler unten rechts)</dd>
             <dt><kbd>X</kbd></dt><dd>Explosionsansicht ein/aus – Baugruppen auseinandergezogen ansehen</dd>
             <dt><kbd>U</kbd></dt><dd>Überhänge und dünne Wände einfärben</dd>

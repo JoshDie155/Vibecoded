@@ -4,11 +4,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } from 'three-mesh-bvh';
-import { type Rigid, type Vec3, IDENTITY, compose, rotate, rotationAbout } from './math/align';
+import { type Rigid, type Vec3, IDENTITY, compose, cross, rotate, rotationAbout, sub } from './math/align';
 import { type JointResult, type Marker, type NormalMode, applyAdjustments, solveJoint } from './math/match';
 import { type Sample, refineICP, sameShape, sampleSurface } from './math/icp';
 import { type CylinderFeature, type EdgeFeature, type Feature, type PlaneFeature, type Topology, buildTopology, detectFeature, featureFromTris, mergeFeatures, similarity, similarityFeature, transformFeature, transformMesh } from './math/features';
 import { detectEdge } from './math/edges';
+import { type MFeature, type MeasureModel, centerOf, featureAt, measureBetween, measureModel, pointOn, toWorld } from './math/measure';
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
 import { splitLoosePieces } from './math/components';
@@ -440,6 +441,7 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
   undo();
   updateCube();
+  placeMeasureLabels();
 });
 
 /** Vier Pfeile: Teil frei bewegen */
@@ -2794,6 +2796,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
   const h = pick(e);
   hoverName(e, h?.part ?? null);
+  if (tool === 'measure') {
+    cursor.visible = false;
+    updateHover(null);
+    updateMeasureHover(h, e.shiftKey);
+    renderer.domElement.style.cursor = h || measureCenterAt(e) ? 'pointer' : 'default';
+    return;
+  }
   if (tool) {
     // Werkzeug (Auf Fläche legen, Passung): jede Fläche jedes Teils
     cursor.visible = false;
@@ -2815,6 +2824,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 renderer.domElement.addEventListener('pointerleave', () => {
   cursor.visible = false;
   updateHover(null);
+  if (tool === 'measure') updateMeasureHover(null, false);
   hideTip();
 });
 
@@ -2826,6 +2836,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (moved > 5) return; // war eine Kamerabewegung
 
   const h = pick(e);
+  if (tool === 'measure') {
+    clickMeasure(e, h);
+    return;
+  }
   if (!h) return;
   if (tool === 'lay') {
     layOnFace(h);
@@ -2833,10 +2847,6 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
   if (tool === 'fit') {
     pickFit(h);
-    return;
-  }
-  if (tool === 'measure') {
-    pickMeasure(h);
     return;
   }
   if (tool === 'pocket') {
@@ -3046,6 +3056,8 @@ window.addEventListener('keydown', (e) => {
   else if (splitTarget && k === 'escape') closeSplit();
   else if (simpTarget && k === 'escape') closeSimplify();
   else if (!tolBar.hidden && k === 'escape') tolBar.hidden = true;
+  else if (tool === 'measure' && k === 'escape' && measureSel.length) { measureSel.pop(); renderMeasure(); }
+  else if (tool === 'measure' && (k === 'delete' || k === 'backspace')) { measureSel = []; renderMeasure(); }
   else if (tool && k === 'escape') setTool(null);
   else if (gizmoTarget && (k === 'g' || k === 'r')) {
     gizmoMode = k === 'g' ? 'translate' : 'rotate';
@@ -3234,9 +3246,11 @@ function renderHint() {
   else if (tool === 'pocket') el.textContent = pocketPlace
     ? 'Art und Größe oben wählen, dann „Einsetzen“ – oder eine andere Stelle anklicken. Esc beendet.'
     : 'Klicke die Stelle an, an der die Aussparung sitzen soll (auf runden Flächen rastet sie in der Mitte ein). Esc beendet.';
-  else if (tool === 'measure') el.textContent = measure.length === 1
-    ? 'Zweite Stelle anklicken – oder Esc zum Beenden.'
-    : 'Klicke eine Stelle an (Ecken rasten ein). Rundung: Durchmesser, zwei Stellen: Abstand, zwei parallele Flächen: ihr Abstand. Esc beendet.';
+  else if (tool === 'measure') el.textContent = measureSel.length === 1
+    ? 'Zweites Merkmal anklicken für Abstand und Winkel – erneut anklicken wählt ab. Kreise: die Mitte ist anklickbar. Entf: neu, Esc: zurück.'
+    : measureSel.length === 2
+      ? 'Ein weiterer Klick ersetzt das zweite Merkmal, ein Klick auf ein gewähltes wählt es ab. Entf: neu, Esc: zurück.'
+      : 'Zeige auf eine Ecke, Kante, einen Kreis oder eine Fläche und klicke (Umschalt: beliebiger Punkt). Esc beendet.';
   else if (tool === 'fit') el.textContent = fitTarget ? 'Wert oben eingeben und „Übernehmen" – oder eine andere Fläche anklicken. Esc bricht ab.' : 'Klicke einen Zapfen, eine Bohrung oder eine ebene Fläche an, deren Passung du ändern willst. Esc bricht ab.';
   else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel. Taste ? zeigt Anleitung und Tastenkürzel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
@@ -3293,6 +3307,8 @@ function renderAll() {
   renderHint();
   drawBed();
   renderStatus();
+  // Maße folgen bewegten oder geänderten Teilen
+  if (tool === 'measure') renderMeasure();
   if (scaleTarget) renderScaleBar(true);
   if (section) { sectionRange(); updateSection(); }
   scheduleAnalysis();
@@ -3969,6 +3985,7 @@ function setTool(t: typeof tool) {
   measureBtn.classList.toggle('on', tool === 'measure');
   if (tool !== 'fit') closeFit();
   if (tool !== 'measure') clearMeasure();
+  else renderMeasure();
   if (tool !== 'pocket') closePocket();
   if (!tool) updateHover(null);
   renderHint();
@@ -6658,16 +6675,53 @@ document.getElementById('arrange')!.addEventListener('click', () => void arrange
 
 // ---------------------------------------------------------------- Messen
 
-/** Bisher angeklickte Stellen (Weltkoordinaten) mit der Fläche darunter. */
-let measure: { p: THREE.Vector3; f: Feature; part: Part }[] = [];
+/**
+ * Messen wie in Bambu Studio: Unter dem Zeiger leuchtet das Merkmal auf – Ecke, Kante, Kreis oder Bogen,
+ * ebene Fläche, auf Rundungen der Zylinder. Ein Klick wählt es (Kante: Länge, Kreis: Durchmesser), ein
+ * zweites zeigt Winkel und Abstände. Nochmal klicken wählt ab, ein drittes ersetzt das zweite. Bei Kreisen
+ * und Vielecken lässt sich der Mittelpunkt anklicken, mit Umschalt ein beliebiger Punkt. Entf beginnt neu.
+ * Gespeichert in Koordinaten des Teils – bewegt es sich, wandert die Messung mit.
+ */
+interface MPick {
+  part: Part;
+  f: MFeature;
+  /** Mitte bzw. Punkt auf diesem Merkmal */
+  src?: MFeature;
+  /** Netz, auf dem das Merkmal gefunden wurde (ändert es sich, etwa durch Rückgängig, fällt es weg) */
+  geom?: THREE.BufferGeometry;
+  /** f liegt schon in Weltkoordinaten (Maßlinien) */
+  world?: boolean;
+}
+let measureSel: MPick[] = [];
+let measureHover: MPick | null = null;
+/** Letzter Treffer unter dem Zeiger (für Umschalt ohne Mausbewegung). */
+let measureLast: { h: Hit | null; shift: boolean } = { h: null, shift: false };
 const measureGroup = new THREE.Group();
 scene.add(measureGroup);
+const measureHoverGroup = new THREE.Group();
+scene.add(measureHoverGroup);
 const measureBar = document.getElementById('measureBar')!;
 const measureText = document.getElementById('measureText')!;
+const measureLabels = document.createElement('div');
+measureLabels.id = 'measureLabels';
+view.appendChild(measureLabels);
+let measureLabelAt: { el: HTMLElement; at: THREE.Vector3 }[] = [];
+const measureModels = new WeakMap<THREE.BufferGeometry, MeasureModel>();
+const MEASURE_COLORS = { hover: '#ffc266', first: '#ff8a00', second: '#14b8a6', line: '#ffb000', perp: '#b48cff' };
+
+function measureModelOf(p: Part): MeasureModel {
+  let m = measureModels.get(p.geom);
+  if (!m) measureModels.set(p.geom, (m = measureModel(topologyOf(p))));
+  return m;
+}
 
 function clearMeasure() {
-  measure = [];
+  measureSel = [];
+  measureHover = null;
   disposeGroup(measureGroup);
+  disposeGroup(measureHoverGroup);
+  measureLabels.replaceChildren();
+  measureLabelAt = [];
   measureBar.hidden = true;
 }
 
@@ -6675,73 +6729,245 @@ const mmText2 = (x: number) => x.toFixed(2).replace('.', ',');
 
 const degText = (x: number) => `${x.toFixed(1).replace('.', ',')}°`;
 
-/** Richtung eines Merkmals (Welt): Fläche → Normale, Zylinder → Achse, Kante → Richtung. */
-function featureDir(x: { f: Feature; part: Part }): { v: THREE.Vector3; line: boolean } | null {
-  const W = x.part.mesh.matrixWorld;
-  const f = x.f;
-  if (f.kind === 'plane' || f.kind === 'surface') return { v: new THREE.Vector3(...f.normal).transformDirection(W), line: false };
-  if (f.kind === 'cylinder') return { v: new THREE.Vector3(...f.axis).transformDirection(W), line: true };
-  if (f.kind === 'edge') return { v: new THREE.Vector3(...f.dir).transformDirection(W), line: true };
+const worldOf = (s: MPick) => (s.world ? s.f : toWorld(s.f, s.part.mesh.matrixWorld.elements));
+
+/** Beschreibung eines gewählten Merkmals, z. B. „Kante · Länge 25,00 mm“. */
+function measureName(s: MPick): string {
+  const f = worldOf(s);
+  const src = s.src && toWorld(s.src, s.part.mesh.matrixWorld.elements);
+  switch (f.kind) {
+    case 'point':
+      if (f.on === 'center') return src?.kind === 'cylinder' ? 'Mitte der Achse' : src?.kind === 'edge' ? `Mitte des ${src.sides ?? ''}-Ecks` : 'Mitte des Kreises';
+      return { vertex: 'Ecke', edge: 'Punkt auf Kante', circle: 'Punkt auf Kreis', plane: 'Punkt auf Fläche', surface: 'Punkt auf Fläche', center: 'Mitte' }[f.on];
+    case 'edge': return `Kante · Länge <b>${mmText2(Math.hypot(...sub(f.b, f.a)))} mm</b>${f.sides ? ` (${f.sides}-Eck)` : ''}`;
+    case 'circle': return f.arc >= 2 * Math.PI - 1e-6
+      ? `Kreis · <b>⌀ ${mmText2(2 * f.radius)} mm</b>`
+      : `Bogen · <b>⌀ ${mmText2(2 * f.radius)} mm</b> (r ${mmText2(f.radius)}, ${degText(f.arc / Math.PI * 180)})`;
+    case 'plane': return `Fläche · ${mmText2(f.area)} mm²`;
+    case 'cylinder': return `${f.hole ? 'Bohrung' : 'Zapfen'} · <b>⌀ ${mmText2(2 * f.radius)} mm</b>, ${mmText2(f.length)} mm lang`;
+  }
+}
+
+/** Sind zwei Auswahlen dasselbe Merkmal? */
+function sameMeasure(a: MPick, b: MPick): boolean {
+  if (a.part !== b.part || a.f.kind !== b.f.kind) return false;
+  const near = (x: Vec3, y: Vec3) => Math.hypot(...sub(x, y)) < 1e-6;
+  const f = a.f;
+  const g = b.f as typeof f;
+  switch (f.kind) {
+    case 'point': return near(f.p, (g as typeof f).p);
+    case 'edge': return (near(f.a, (g as typeof f).a) && near(f.b, (g as typeof f).b)) || (near(f.a, (g as typeof f).b) && near(f.b, (g as typeof f).a));
+    case 'circle': return near(f.center, (g as typeof f).center) && Math.abs(f.radius - (g as typeof f).radius) < 1e-6;
+    case 'plane': return f.region === (g as typeof f).region;
+    case 'cylinder': return f.tris[0] === (g as typeof f).tris[0];
+  }
+}
+
+/** Modellgröße eines Bildschirmpixels an einem Punkt. */
+const pxAt = (p: Vec3) => (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.position.distanceTo(new THREE.Vector3(...p))) / viewHeight;
+
+/** Darstellung eines Merkmals (Welt): Punkt als Kugel, Kante als Stab, Kreis als Ring, Fläche getönt. */
+function measureObject(s: MPick, color: string, emphasis = 1): THREE.Object3D {
+  const f = worldOf(s);
+  const mat = (opacity = 0.95) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false });
+  const group = new THREE.Group();
+  const tube = (a: Vec3, b: Vec3, r: number) => {
+    const A = new THREE.Vector3(...a);
+    const B = new THREE.Vector3(...b);
+    const g = new THREE.CylinderGeometry(r, r, A.distanceTo(B), 8);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize()));
+    g.translate(...A.add(B).multiplyScalar(0.5).toArray());
+    return new THREE.Mesh(g, mat());
+  };
+  const dot = (p: Vec3, px: number) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(px * pxAt(p), 14, 10), mat());
+    m.position.set(...p);
+    return m;
+  };
+  if (f.kind === 'point') group.add(dot(f.p, 5 * emphasis));
+  else if (f.kind === 'edge') group.add(tube(f.a, f.b, 1.6 * emphasis * pxAt(f.a.map((x, i) => (x + f.b[i]) / 2) as Vec3)));
+  else if (f.kind === 'circle') {
+    const steps = Math.max(12, Math.ceil((f.arc / (2 * Math.PI)) * 96));
+    const v = cross(f.normal, f.start);
+    const pts = Array.from({ length: steps + 1 }, (_, i) => {
+      const t = (f.arc * i) / steps;
+      return new THREE.Vector3(...f.center).addScaledVector(new THREE.Vector3(...f.start), f.radius * Math.cos(t)).addScaledVector(new THREE.Vector3(...v), f.radius * Math.sin(t));
+    });
+    const curve = new THREE.CatmullRomCurve3(pts, f.arc >= 2 * Math.PI - 1e-6);
+    group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, steps, 1.6 * emphasis * pxAt(f.center), 6, f.arc >= 2 * Math.PI - 1e-6), mat()));
+  } else {
+    // Fläche bzw. Zylinder: Dreiecke getönt
+    const tris = f.kind === 'cylinder' ? f.tris : measureModelOf(s.part).regions[f.region].tris;
+    // Mit Tiefenprüfung, damit die Tönung nicht durch andere Teile scheint
+    const tint = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const m = new THREE.Mesh(subGeometry(s.part, tris), tint);
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(s.part.mesh.matrixWorld);
+    group.add(m);
+  }
+  // Mittelpunkt zum Anklicken (Kreis, Vieleck, Zylinder)
+  const c = centerOf(f);
+  if (c && emphasis <= 1 && measureSel.includes(s)) group.add(dot(c.p, 3.5));
+  group.traverse((o) => { o.renderOrder = 12; o.raycast = () => {}; });
+  return group;
+}
+
+function measureLabel(text: string, at: Vec3, kind = '') {
+  const el = document.createElement('span');
+  el.className = `mlabel ${kind}`;
+  el.innerHTML = text;
+  measureLabels.appendChild(el);
+  measureLabelAt.push({ el, at: new THREE.Vector3(...at) });
+}
+
+/** Beschriftungen an ihre Stelle im Bild (jedes Bild neu). */
+function placeMeasureLabels() {
+  if (!measureLabelAt.length) return;
+  const w = renderer.domElement.clientWidth;
+  for (const { el, at } of measureLabelAt) {
+    const p = at.clone().project(camera);
+    const hidden = p.z > 1 || p.z < -1;
+    el.style.display = hidden ? 'none' : '';
+    el.style.transform = `translate(${((p.x + 1) / 2) * w}px, ${((1 - p.y) / 2) * viewHeight}px) translate(-50%, -130%)`;
+  }
+}
+
+/** Gewählte Merkmale, Maßlinien und Werte zeichnen. */
+function renderMeasure() {
+  disposeGroup(measureGroup);
+  measureLabels.replaceChildren();
+  measureLabelAt = [];
+  if (tool !== 'measure') return;
+  measureSel = measureSel.filter((s) => getPart(s.part.id) === s.part && s.part.visible && s.geom === s.part.geom);
+  const colors = [MEASURE_COLORS.first, MEASURE_COLORS.second];
+  measureSel.forEach((s, i) => measureGroup.add(measureObject(s, colors[i])));
+  const rows: string[] = [];
+  const copy = (v: string) => `<button class="icon mcopy" data-copy="${v}" title="Wert kopieren" aria-label="Wert kopieren">⧉</button>`;
+  measureSel.forEach((s, i) => rows.push(`<div class="msel"><i style="background:${colors[i]}"></i><span>${measureName(s)}</span><button class="icon" data-mdrop="${i}" title="Abwählen" aria-label="Abwählen">✕</button></div>`));
+  const line = (from: Vec3, to: Vec3, color: string) => {
+    if (Math.hypot(...sub(to, from)) < 1e-9) return;
+    measureGroup.add(measureObject({ part: measureSel[0].part, f: { kind: 'edge', a: from, b: to }, world: true }, color, 0.6));
+  };
+  if (measureSel.length === 1) {
+    // Ein Merkmal: sein Maß direkt am Teil
+    const f = worldOf(measureSel[0]);
+    if (f.kind === 'edge') measureLabel(`${mmText2(Math.hypot(...sub(f.b, f.a)))} mm`, f.a.map((x, i) => (x + f.b[i]) / 2) as Vec3);
+    else if (f.kind === 'circle' || f.kind === 'cylinder') measureLabel(`⌀ ${mmText2(2 * f.radius)} mm`, f.center);
+  } else if (measureSel.length === 2) {
+    const [a, b] = measureSel.map(worldOf);
+    const r = measureBetween(a, b);
+    if (r.angle) {
+      rows.push(`<div class="mres"><span>Winkel <b>${degText(r.angle.deg)}</b>${r.angle.inner !== undefined && degText(r.angle.inner) !== degText(r.angle.deg) ? ` (dazwischen ${degText(r.angle.inner)})` : ''}</span>${copy(r.angle.deg.toFixed(2))}</div>`);
+    }
+    if (r.perpendicular) {
+      const p = r.perpendicular;
+      const name = p.axis ? 'Achsabstand' : r.direct ? 'Senkrechter Abstand' : 'Abstand';
+      rows.push(`<div class="mres"><span>${name} <b>${mmText2(p.d)} mm</b></span>${copy(p.d.toFixed(3))}</div>`);
+      line(p.from, p.to, MEASURE_COLORS.perp);
+      measureLabel(`${mmText2(p.d)} mm`, p.from.map((x, i) => (x + p.to[i]) / 2) as Vec3, 'perp');
+    }
+    if (r.direct) {
+      const d = r.direct;
+      rows.push(`<div class="mres"><span>${r.perpendicular ? 'Direkter Abstand' : 'Abstand'} <b>${mmText2(d.d)} mm</b></span>${copy(d.d.toFixed(3))}</div>`);
+      const delta = sub(d.to, d.from);
+      if (d.d > 1e-6) rows.push(`<div class="mres xyz">ΔX ${mmText2(Math.abs(delta[0]))} · ΔY ${mmText2(Math.abs(delta[1]))} · ΔZ ${mmText2(Math.abs(delta[2]))} mm</div>`);
+      line(d.from, d.to, MEASURE_COLORS.line);
+      measureLabel(`${mmText2(d.d)} mm`, d.from.map((x, i) => (x + d.to[i]) / 2) as Vec3);
+    }
+    if (!r.angle && !r.perpendicular && !r.direct) rows.push('<div class="mres">Kein gemeinsames Maß – z. B. zwei Flächen, Kanten oder Punkte wählen.</div>');
+  }
+  if (!measureSel.length) rows.push('<div class="mres help">Zeige auf eine Kante, einen Kreis, eine Ecke oder Fläche und klicke. Umschalt: beliebiger Punkt.</div>');
+  measureText.innerHTML = rows.join('');
+  measureBar.hidden = false;
+  placeMeasureLabels();
+  renderHint();
+}
+
+/** Hervorhebung unter dem Zeiger; Umschalt: der Punkt auf dem Merkmal. */
+function updateMeasureHover(h: Hit | null, shift: boolean) {
+  measureLast = { h, shift };
+  disposeGroup(measureHoverGroup);
+  measureHover = null;
+  if (!h) return;
+  const m = measureModelOf(h.part);
+  // Fangbereich: 8 Pixel, in Koordinaten des Teils
+  const s = h.part.mesh.matrixWorld.getMaxScaleOnAxis() || 1;
+  let f = featureAt(m, h.tri, h.raw, (8 * h.worldPerPx) / s);
+  let src: MFeature | undefined;
+  if (shift) {
+    src = f;
+    f = pointOn(f, h.raw);
+  }
+  measureHover = { part: h.part, f, src, geom: h.part.geom };
+  const known = measureSel.find((x) => sameMeasure(x, measureHover!));
+  if (!known) measureHoverGroup.add(measureObject(measureHover, MEASURE_COLORS.hover));
+}
+
+/** Mittelpunkt eines gewählten Merkmals unter dem Zeiger (höchstens 10 Pixel entfernt)? */
+function measureCenterAt(e: MouseEvent): { i: number; pick: MPick } | null {
+  const rect = renderer.domElement.getBoundingClientRect();
+  for (let i = measureSel.length - 1; i >= 0; i--) {
+    const s = measureSel[i];
+    const base = s.src && s.f.kind === 'point' && s.f.on === 'center' ? s.src : s.f;
+    const c = centerOf(base);
+    if (!c) continue;
+    const p = new THREE.Vector3(...c.p).applyMatrix4(s.part.mesh.matrixWorld).project(camera);
+    const x = rect.left + ((p.x + 1) / 2) * rect.width;
+    const y = rect.top + ((1 - p.y) / 2) * rect.height;
+    if (Math.hypot(e.clientX - x, e.clientY - y) <= 10) {
+      // Schon die Mitte gewählt: zurück zum Merkmal, sonst zur Mitte
+      return { i, pick: base === s.f ? { part: s.part, f: c, src: base, geom: s.geom } : { part: s.part, f: base, geom: s.geom } };
+    }
+  }
   return null;
 }
 
-/** Winkel zweier gemessener Stellen – leer, wenn sie parallel sind (dann zählt der Abstand). */
-function measureAngle(a: { f: Feature; part: Part }, b: { f: Feature; part: Part }): string {
-  const da = featureDir(a);
-  const db = featureDir(b);
-  if (!da || !db) return '';
-  const deg = THREE.MathUtils.radToDeg(da.v.angleTo(db.v));
-  if (!da.line && !db.line) {
-    if (deg < 0.5 || deg > 179.5) return '';
-    return `Winkel <b>${degText(deg)}</b> (Innenwinkel ${degText(180 - deg)})`;
+/** Klick im Messen: wählen, abwählen, ersetzen (wie in Bambu Studio). */
+function clickMeasure(e: MouseEvent, h: Hit | null) {
+  const center = measureCenterAt(e);
+  if (center) {
+    measureSel[center.i] = center.pick;
+  } else {
+    if (!h) return;
+    if (!measureHover || measureHover.part !== h.part) updateMeasureHover(h, e.shiftKey);
+    const item = measureHover!;
+    const i = measureSel.findIndex((s) => sameMeasure(s, item));
+    if (i >= 0) measureSel.splice(i, 1);
+    else if (measureSel.length < 2) measureSel.push(item);
+    else measureSel[1] = item;
   }
-  // Achsen haben keine Richtung: 0–90°
-  const line = Math.min(deg, 180 - deg);
-  if (da.line && db.line) return line < 0.5 ? 'Achsen parallel' : `Winkel der Achsen <b>${degText(line)}</b>`;
-  // Achse gegen Fläche: 90° = senkrecht auf der Fläche
-  return `Winkel zur Fläche <b>${degText(90 - line)}</b>`;
+  disposeGroup(measureHoverGroup);
+  renderMeasure();
 }
 
-function pickMeasure(h: Hit) {
-  if (measure.length >= 2) clearMeasure();
-  const f = detectFeature(topologyOf(h.part), h.tri, FEATURE_OPTS);
-  measure.push({ p: h.world.clone(), f, part: h.part });
-  // Markierung
-  const r = Math.max(0.4, sceneScale() * 0.006);
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff8a00, depthTest: false }));
-  dot.position.copy(h.world);
-  dot.renderOrder = 10;
-  measureGroup.add(dot);
-  const out: string[] = [];
-  const round = (x: { f: Feature }) => (x.f.kind === 'cylinder' ? `${x.f.hole ? 'Bohrung' : 'Zapfen'} <b>⌀ ${mmText2(2 * x.f.radius)} mm</b>` : '');
-  if (measure.length === 1) {
-    out.push(round(measure[0]) || 'Erste Stelle gewählt – jetzt die zweite anklicken.');
-  } else {
-    const [a, b] = measure;
-    const d = b.p.clone().sub(a.p);
-    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a.p, b.p]), new THREE.LineBasicMaterial({ color: 0xff8a00, depthTest: false }));
-    line.renderOrder = 10;
-    measureGroup.add(line);
-    out.push(`Abstand <b>${mmText2(d.length())} mm</b>`, `ΔX ${mmText2(Math.abs(d.x))}`, `ΔY ${mmText2(Math.abs(d.y))}`, `ΔZ ${mmText2(Math.abs(d.z))}`);
-    // Winkel zwischen Flächen, Achsen oder Achse und Fläche
-    const ang = measureAngle(a, b);
-    if (ang) out.push(ang);
-    // Zwei parallele ebene Flächen: ihr Abstand (Wandstärke, Spalt)
-    if (a.f.kind === 'plane' && b.f.kind === 'plane') {
-      const na = new THREE.Vector3(...a.f.normal).transformDirection(a.part.mesh.matrixWorld);
-      const nb = new THREE.Vector3(...b.f.normal).transformDirection(b.part.mesh.matrixWorld);
-      if (Math.abs(na.dot(nb)) > Math.cos(THREE.MathUtils.degToRad(1))) {
-        const ca = new THREE.Vector3(...a.f.centroid).applyMatrix4(a.part.mesh.matrixWorld);
-        const cb = new THREE.Vector3(...b.f.centroid).applyMatrix4(b.part.mesh.matrixWorld);
-        out.push(`Flächenabstand <b>${mmText2(Math.abs(cb.sub(ca).dot(na)))} mm</b>`);
-      }
-    }
-    for (const x of [a, b]) if (round(x)) out.push(round(x));
+measureText.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('button');
+  if (!b) return;
+  if (b.dataset.copy) {
+    void navigator.clipboard?.writeText(b.dataset.copy.replace('.', ',')).then(() => toast(`${b.dataset.copy!.replace('.', ',')} kopiert.`), () => toast('Kopieren nicht möglich.'));
+  } else if (b.dataset.mdrop) {
+    measureSel.splice(Number(b.dataset.mdrop), 1);
+    renderMeasure();
   }
-  measureText.innerHTML = out.join(' · ');
-  measureBar.hidden = false;
-  renderHint();
+});
+document.getElementById('measureReset')!.addEventListener('click', () => { measureSel = []; renderMeasure(); });
+// Umschalt drücken/loslassen ohne Mausbewegung: Hervorhebung wechselt zum Punkt bzw. Merkmal
+for (const t of ['keydown', 'keyup'] as const) {
+  window.addEventListener(t, (e) => {
+    if (tool !== 'measure' || e.key !== 'Shift' || e.shiftKey === measureLast.shift) return;
+    updateMeasureHover(measureLast.h, e.shiftKey);
+  });
 }
+// Dicke der Linien und Kugeln in Bildschirmpixeln: nach Kamerabewegung neu zeichnen
+let measureRedraw = 0;
+controls.addEventListener('change', () => {
+  if (tool !== 'measure' || measureRedraw) return;
+  measureRedraw = requestAnimationFrame(() => {
+    measureRedraw = 0;
+    renderMeasure();
+    if (measureLast.h) updateMeasureHover(measureLast.h, measureLast.shift);
+  });
+});
 
 // ---------------------------------------------------------------- Passung
 
