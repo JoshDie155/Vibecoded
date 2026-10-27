@@ -18,12 +18,20 @@ export interface OffsetResult {
   moved: number;
 }
 
-/** Verschiebt alle Ecken an den Eckpunkten der Dreiecke tris mit move (Position → neue Position). */
-function moveVertices(topo: Topology, tris: number[], move: (p: Vec3) => Vec3): OffsetResult {
+/**
+ * Verschiebt alle Ecken an den Eckpunkten der Dreiecke tris mit move (Position → neue Position);
+ * also: weitere Eckpunkte, die ebenfalls mitwandern (z. B. alle, die auf derselben Zylinderwand liegen).
+ */
+function moveVertices(topo: Topology, tris: number[], move: (p: Vec3) => Vec3, also?: (p: Vec3) => boolean): OffsetResult {
   const src = topo.positions;
   const out = src.slice();
   const ids = new Set<number>();
   for (const t of tris) for (let k = 0; k < 3; k++) ids.add(topo.vertIds[3 * t + k]);
+  if (also) {
+    for (let v = 0; v < topo.vertCount; v++) {
+      if (!ids.has(v) && also([topo.vertPos[3 * v], topo.vertPos[3 * v + 1], topo.vertPos[3 * v + 2]])) ids.add(v);
+    }
+  }
   const touched = new Set<number>();
   for (let c = 0; c < topo.triCount * 3; c++) {
     if (!ids.has(topo.vertIds[c])) continue;
@@ -47,19 +55,30 @@ function moveVertices(topo: Topology, tris: number[], move: (p: Vec3) => Vec3): 
   return { positions: out, flippedArea, moved: ids.size };
 }
 
-/** Zylinder (Zapfen oder Bohrung) auf einen neuen Radius bringen: Eckpunkte radial versetzt. */
-export function offsetCylinder(topo: Topology, f: CylinderFeature, radius: number): OffsetResult {
+/**
+ * Zylinder (Zapfen oder Bohrung) auf einen neuen Radius bringen: Eckpunkte radial versetzt.
+ * @param wall alle Eckpunkte auf der Wand mitnehmen (Abstand zur Achse ± tol, entlang der Achse in span um
+ *   center) – auch solche, die nur zu Nachbardreiecken gehören (Splitter, Ränder an einem Schnitt)
+ */
+export function offsetCylinder(topo: Topology, f: CylinderFeature, radius: number, wall?: { tol: number; span: [number, number] }): OffsetResult {
   const d = radius - f.radius;
   const [cx, cy, cz] = f.center;
   const [ax, ay, az] = f.axis;
-  return moveVertices(topo, f.tris, (p) => {
+  const polar = (p: Vec3) => {
     const qx = p[0] - cx, qy = p[1] - cy, qz = p[2] - cz;
     const h = qx * ax + qy * ay + qz * az;
     const rx = qx - h * ax, ry = qy - h * ay, rz = qz - h * az;
-    const l = Math.hypot(rx, ry, rz);
+    return { h, rx, ry, rz, l: Math.hypot(rx, ry, rz) };
+  };
+  const onWall = wall && ((p: Vec3) => {
+    const q = polar(p);
+    return Math.abs(q.l - f.radius) <= wall.tol && q.h >= wall.span[0] - wall.tol && q.h <= wall.span[1] + wall.tol;
+  });
+  return moveVertices(topo, f.tris, (p) => {
+    const { rx, ry, rz, l } = polar(p);
     if (l < 1e-9) return p;
     return [p[0] + (rx / l) * d, p[1] + (ry / l) * d, p[2] + (rz / l) * d];
-  });
+  }, onWall);
 }
 
 /** Ebene Fläche entlang ihrer Außennormale versetzen (negativ = ins Teil hinein, zurücksetzen). */

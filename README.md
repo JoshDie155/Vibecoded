@@ -121,7 +121,10 @@ und Mausaktionen.
    anklicken und das neue Maß eingeben – z. B. Zapfen 0,2 mm dünner (Schnellknöpfe −0,1/−0,2/−0,3),
    Bohrung weiter oder eine Fläche zurücksetzen. Nur die Form ändert sich, die Verbindungen bleiben,
    wo sie sind; so entsteht genau dieser Spalt (gut für getrennt gedruckte Steckteile oder bewegliche
-   Gelenke). Strg+Z macht es rückgängig.
+   Gelenke). Bei Bohrungen und Zapfen nimmt PartJoin die ganze Wand – auch wenn ein Schnitt (z. B. aus
+   Bambu Studio) durch die Bohrung geht und ein Teil der Wand im anderen Teil liegt, oder unsaubere Netze
+   sie zerstückeln; der Durchmesser wird aus allen Stücken bestimmt. „auch in …" weitet die Stücke in den
+   angrenzenden Teilen mit (abhaken, wenn nur ein Teil mehr Spiel bekommen soll). Strg+Z macht es rückgängig.
 5. **Exportieren**
    - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): **jede Baugruppe ein eigenes
      Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in PartJoin und

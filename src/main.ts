@@ -22,6 +22,7 @@ import { describeFeature, featureTag } from './math/mate';
 import { fitFeatures } from './math/fit';
 import { layFlat } from './math/orient';
 import { offsetCylinder, offsetPlane } from './math/offset';
+import { cylinderWall } from './math/wall';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
 import { BAMBU_PRINTERS, type ColoredPart, type ReadInfo, type SlicerExtras, bambuPlateOrigin, colorSlots } from './io/threemf';
@@ -175,7 +176,15 @@ let nextPartId = 1;
 let nextJointId = 1;
 /** Werkzeug im 3D-Fenster (siehe setTool) und die im Passungs-Werkzeug gewählte Fläche. */
 let tool: 'lay' | 'fit' | 'measure' | 'pocket' | null = null;
-let fitTarget: { part: Part; f: CylinderFeature | PlaneFeature } | null = null;
+/**
+ * Gewählte Fläche der Passung. wall: ganze Wand einer Bohrung bzw. eines Zapfens (Weltkoordinaten) – auch
+ * Stücke in angrenzenden Teilen, z. B. wenn ein Schnitt durch die Bohrung geht.
+ */
+let fitTarget: {
+  part: Part;
+  f: CylinderFeature | PlaneFeature;
+  wall?: { center: Vec3; axis: Vec3; radius: number; span: [number, number]; pieces: { part: Part; tris: number[] }[] };
+} | null = null;
 /** Ort der Aussparung (Werkzeug „Aussparung“, Koordinaten des Teils). */
 let pocketPlace: { partId: number; point: Vec3; normal: Vec3 } | null = null;
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
@@ -7405,11 +7414,55 @@ controls.addEventListener('change', () => {
 const fitBar = document.getElementById('fitBar')!;
 const fitValue = document.getElementById('fitValue') as HTMLInputElement;
 
+const fitGroup = new THREE.Group();
+scene.add(fitGroup);
+const fitAlso = document.getElementById('fitAlso') as HTMLInputElement;
+
 function closeFit() {
   fitTarget = null;
   fitBar.hidden = true;
+  disposeGroup(fitGroup);
   updateHover(null);
 }
+
+/** Ganze Wand der Bohrung bzw. des Zapfens: alle sichtbaren Teile, deren Umriss die Achse erreicht. */
+function fitWallOf(part: Part, f: CylinderFeature) {
+  const W = part.mesh.matrixWorld;
+  const c = new THREE.Vector3(...f.center).applyMatrix4(W);
+  const a = new THREE.Vector3(...f.axis).transformDirection(W);
+  const near = parts.filter((p) => {
+    if (!p.visible) return false;
+    if (p === part) return true;
+    // Abstand des Umrisses zur Achse (grob: Mitte minus halbe Diagonale)
+    const b = partBox(p);
+    const m = b.getCenter(new THREE.Vector3()).sub(c);
+    const off = m.clone().sub(a.clone().multiplyScalar(m.dot(a))).length();
+    return off - b.getSize(new THREE.Vector3()).length() / 2 <= f.radius + 1;
+  });
+  const sources = near.map((p) => ({ topo: topologyOf(p), matrix: p.mesh.matrixWorld.elements }));
+  const w = cylinderWall(sources, { source: near.indexOf(part), tris: f.tris, center: f.center, axis: f.axis, radius: f.radius, hole: f.hole });
+  return { center: w.center, axis: w.axis, radius: w.radius, span: w.span, pieces: near.map((p, i) => ({ part: p, tris: w.pieces[i] })).filter((x) => x.tris.length) };
+}
+
+/** Gewählte Wand hervorheben (in allen Teilen, die dazugehören). */
+function showFitWall() {
+  disposeGroup(fitGroup);
+  const wall = fitTarget?.wall;
+  if (!wall) return;
+  for (const { part, tris } of wall.pieces) {
+    if (part !== fitTarget!.part && !fitAlso.checked) continue;
+    const m = new THREE.Mesh(subGeometry(part, tris), new THREE.MeshBasicMaterial({
+      color: new THREE.Color(0x2f6fde).lerp(new THREE.Color(1, 1, 1), 0.4), transparent: true, opacity: 0.85,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    }));
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(part.mesh.matrixWorld);
+    m.renderOrder = 2;
+    fitGroup.add(m);
+  }
+  hoverMesh.visible = false;
+}
+fitAlso.addEventListener('change', showFitWall);
 
 const mm2 = (x: number) => x.toFixed(2).replace('.', ',');
 
@@ -7424,8 +7477,20 @@ function pickFit(h: Hit) {
   fitTarget = { part: h.part, f };
   const quick = document.getElementById('fitQuick')!;
   const help = document.getElementById('fitHelp')!;
+  const alsoWrap = document.getElementById('fitAlsoWrap')!;
+  alsoWrap.hidden = true;
   if (f.kind === 'cylinder') {
-    const d = 2 * f.radius;
+    // Ganze Wand, auch über Schnitte hinweg in angrenzende Teile; der Durchmesser aus allen Stücken
+    const wall = fitWallOf(h.part, f);
+    fitTarget.wall = wall;
+    const others = wall.pieces.filter((x) => x.part !== h.part).map((x) => x.part);
+    if (others.length) {
+      alsoWrap.hidden = false;
+      fitAlso.checked = true;
+      document.getElementById('fitAlsoText')!.textContent = `auch in ${others.slice(0, 2).map((p) => `„${p.name}“`).join(', ')}${others.length > 2 ? ` und ${others.length - 2} weiteren` : ''} (dieselbe ${f.hole ? 'Bohrung' : 'Rundung'})`;
+    }
+    showFitWall();
+    const d = 2 * wall.radius;
     document.getElementById('fitTitle')!.textContent = `${f.hole ? 'Bohrung' : 'Zapfen'} ⌀ ${mm2(d)} mm · ${h.part.name}`;
     document.getElementById('fitLabel')!.textContent = 'Neuer Durchmesser';
     fitValue.value = d.toFixed(2);
@@ -7472,11 +7537,35 @@ function applyFit() {
   let res;
   let text: string;
   if (f.kind === 'cylinder') {
-    const d = 2 * f.radius;
+    const wall = fitTarget.wall ?? { center: f.center, axis: f.axis, radius: f.radius, span: undefined, pieces: [{ part, tris: f.tris }] };
+    const d = 2 * wall.radius;
     if (!(v > 0) || Math.abs(v - d) > Math.max(2, d * 0.3)) { toast(`Der neue Durchmesser sollte nahe bei ${mm2(d)} mm liegen.`); return; }
     if (Math.abs(v - d) < 0.005) { setTool(null); return; }
-    res = offsetCylinder(topo, f, v / 2);
-    text = `${f.hole ? 'Bohrung' : 'Zapfen'} jetzt ⌀ ${mm2(v)} mm (vorher ${mm2(d)} mm).`;
+    // Jedes beteiligte Teil in seinen eigenen Koordinaten
+    const changes: { p: Part; res: ReturnType<typeof offsetCylinder>; area: number }[] = [];
+    for (const { part: p, tris } of wall.pieces) {
+      if (p !== part && !fitAlso.checked) continue;
+      const inv = p.mesh.matrixWorld.clone().invert();
+      const center = v3(new THREE.Vector3(...wall.center).applyMatrix4(inv));
+      const axis = v3(new THREE.Vector3(...wall.axis).transformDirection(inv));
+      const t = topologyOf(p);
+      // Alle Eckpunkte auf der Wand wandern mit (auch Ränder, die nur zu Nachbardreiecken gehören)
+      const onWall = wall.span && Number.isFinite(wall.span[0]) ? { tol: Math.max(0.01, 0.003 * wall.radius), span: wall.span } : undefined;
+      changes.push({ p, res: offsetCylinder(t, { ...f, center, axis, radius: wall.radius, tris }, v / 2, onWall), area: tris.reduce((s, x) => s + t.areas[x], 0) });
+    }
+    if (changes.some((c) => c.res.flippedArea > Math.max(0.5, c.area * 0.02))) {
+      toast('So viel geht nicht: angrenzende Flächen würden umklappen. Bitte einen kleineren Wert.', 6000);
+      return;
+    }
+    beginAction();
+    for (const c of changes) replaceGeometry(c.p, c.res.positions);
+    setTool(null);
+    solveAll();
+    renderAll();
+    if (checkOn) void runCheck();
+    const more = changes.filter((c) => c.p !== part).map((c) => `„${c.p.name}“`);
+    toast(`${f.hole ? 'Bohrung' : 'Zapfen'} jetzt ⌀ ${mm2(v)} mm (vorher ${mm2(d)} mm)${more.length ? ` – auch in ${more.join(', ')}` : ''}. Strg+Z macht es rückgängig.`, 6000);
+    return;
   } else {
     if (Math.abs(v) > 3) { toast('Mehr als 3 mm ist keine Passung mehr – bitte einen kleineren Wert.'); return; }
     if (Math.abs(v) < 0.005) { setTool(null); return; }

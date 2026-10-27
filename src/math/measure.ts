@@ -10,6 +10,9 @@
  */
 import { type Vec3, add, cross, dist, dot, len, normalize, scale, sub } from './align';
 import { type Topology, detectFeature } from './features';
+import { cylinderWall } from './wall';
+
+const IDENTITY16 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 export type MFeature =
   | { kind: 'point'; p: Vec3; on: 'vertex' | 'edge' | 'circle' | 'plane' | 'surface' | 'center' }
@@ -109,9 +112,18 @@ function curvedAt(m: MeasureModel, t: number, r: Region): Extract<MFeature, { ki
     r.planar = true;
     return 'plane';
   }
-  const out = f.kind === 'cylinder'
-    ? { kind: 'cylinder' as const, center: f.center, axis: f.axis, radius: f.radius, length: f.length, hole: f.hole, tris: f.tris }
-    : null;
+  let out: Extract<MFeature, { kind: 'cylinder' }> | null = null;
+  if (f.kind === 'cylinder') {
+    // Ganze Wand (auch über Splitter und T-Stöße hinweg), Durchmesser aus allen Stücken
+    const w = cylinderWall([{ topo: m.topo, matrix: IDENTITY16 }], { source: 0, tris: f.tris, center: f.center, axis: f.axis, radius: f.radius, hole: f.hole });
+    const mid = (w.span[0] + w.span[1]) / 2;
+    const ok = Number.isFinite(mid);
+    out = {
+      kind: 'cylinder', axis: w.axis, radius: w.radius, hole: f.hole, tris: w.pieces[0],
+      center: ok ? add(w.center, scale(w.axis, mid)) : w.center,
+      length: ok ? w.span[1] - w.span[0] : f.length,
+    };
+  }
   for (const u of f.tris) m.curved.set(u, out);
   m.curved.set(t, out);
   return out;
