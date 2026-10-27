@@ -96,14 +96,30 @@ function ghostModifier(m: Modifier): THREE.Object3D {
   })));
 }
 
+/** Farbbemalung als Kind des Netzes (markiert, damit sie sich einzeln erneuern lässt). */
+function addPaintOverlay(mesh: THREE.Mesh, extras: SlicerExtras) {
+  const codes = extras.paint?.paint_color;
+  if (!codes) return;
+  const overlay = paintOverlay(mesh.geometry.getAttribute('position').array as Float32Array, codes, extras.palette ?? []);
+  if (!overlay) return;
+  overlay.userData.paintOverlay = true;
+  mesh.add(overlay);
+}
+
+/** Farbbemalung neu zeichnen (nach dem Malen oder Rückgängig). */
+export function refreshPaint(mesh: THREE.Mesh, extras: SlicerExtras) {
+  for (const o of [...mesh.children]) {
+    if (!o.userData.paintOverlay) continue;
+    mesh.remove(o);
+    (o as THREE.Mesh).geometry.dispose();
+    ((o as THREE.Mesh).material as THREE.Material).dispose();
+  }
+  addPaintOverlay(mesh, extras);
+}
+
 /** Hängt die Darstellung der Zusätze an das Netz des Teils. */
 export function decorate(mesh: THREE.Mesh, extras: SlicerExtras) {
-  const positions = mesh.geometry.getAttribute('position').array as Float32Array;
-  const codes = extras.paint?.paint_color;
-  if (codes) {
-    const overlay = paintOverlay(positions, codes, extras.palette ?? []);
-    if (overlay) mesh.add(overlay);
-  }
+  addPaintOverlay(mesh, extras);
   for (const m of extras.modifiers ?? []) {
     if (m.subtype === 'modifier_part' && m.color) mesh.add(...colorModifier(mesh.geometry, m));
     else mesh.add(ghostModifier(m));

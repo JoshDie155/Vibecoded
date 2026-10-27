@@ -199,14 +199,14 @@ button.icon:hover { color: var(--err); }
 button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
-#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar {
+#toolbar, #gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar {
   position: absolute; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   max-width: calc(100% - 20px);
   background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
 }
 #toolbar { top: 10px; }
 /* Platz für Ansichtswürfel und Plattenleiste oben rechts (je 108 px breit, 6 px Rand, 16 px Abstand) */
-#toolbar, #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { max-width: calc(100% - 140px); }
+#toolbar, #gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { max-width: calc(100% - 140px); }
 /* Eingaben in den Leisten: überall gleich (auch im dunklen Design) */
 :is(#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar, #explodeBar, #sectionBar, .selbar) :is(input[type='number'], input[type='text'], select) {
   font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px;
@@ -249,7 +249,7 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #activeBar button:hover { color: var(--accent); }
 #status .note { color: var(--text); }
 /* Unter der Werkzeugleiste – auch wenn sie in zwei Zeilen umbricht (--bar-top setzt main.ts) */
-#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { top: var(--bar-top, 58px); font-size: 12.5px; }
+#gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { top: var(--bar-top, 58px); font-size: 12.5px; }
 #anaBar input[type='number'] { width: 54px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #anaBar .help { margin: 0; flex-basis: 100%; }
 #anaBar .chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
@@ -304,6 +304,20 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #standLabels .mlabel.ok { background: #8fe0b4; }
 #standLabels .mlabel.tight { background: #ffd27a; }
 #standLabels .mlabel.tips { background: #ff9c9e; }
+#paintBar .help { margin: 0; flex-basis: 100%; }
+#paintBar input[type='range'] { width: 110px; accent-color: var(--accent); vertical-align: middle; }
+#paintBar #paintSizeVal { display: inline-block; min-width: 46px; font-variant-numeric: tabular-nums; }
+#paintBar input[type='number'] { width: 50px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
+#paintBar #paintInfo { color: var(--muted); }
+#paintSwatches { gap: 4px; align-items: center; }
+#paintSwatches .swatch {
+  width: 26px; height: 26px; padding: 0; border-radius: 6px; border: 2px solid var(--line); background: var(--c);
+  font: 600 11px/1 system-ui, sans-serif; color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000;
+}
+#paintSwatches .swatch.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+#paintSwatches .presets { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; color: var(--muted); }
+#paintSwatches .preset { width: 14px; height: 14px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--c); }
+#paintSwatches input[type='color'] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: none; }
 #fitBar input[type='number'] { width: 76px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #fitBar .help { margin: 0; flex-basis: 100%; }
 #fitBar .help:empty { display: none; }

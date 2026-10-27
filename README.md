@@ -33,6 +33,15 @@ und Mausaktionen.
    Druckeinstellungen je Teil mit: Sie werden angezeigt (die Oberfläche erscheint dort in der
    Filamentfarbe, wo sie im Modifier liegt – so wie gedruckt) und beim Export nach Bambu Studio
    wieder mitgeschrieben.
+   **Farben malen** (oben „Malen", Taste N) – für mehrfarbigen Druck mit AMS oder H2C, wie in Bambu
+   Studio: Oben stehen die Filamente als nummerierte Felder, in derselben Reihenfolge wie im Bambu-Export
+   (die Teilefarben, dann die bemalten); „+" fügt eine übliche Filamentfarbe oder eine eigene hinzu.
+   **Pinsel**: mit gedrückter linker Maustaste über das Teil streichen (Größe = Durchmesser, auch mit Alt +
+   Mausrad) – große Dreiecke werden am Pinselrand fein unterteilt, gemalt wird nur, was zur Kamera zeigt.
+   **Füllen**: eine Fläche anklicken – sie wird bis zu Knicken über dem eingestellten Winkel gefüllt.
+   Umschalt radiert (zurück zum Filament des Teils), Ziehen neben dem Teil dreht die Ansicht, jeder Strich
+   lässt sich mit Strg+Z zurücknehmen. Die Bemalung kommt ins Projekt, in die Sitzungssicherung und als
+   Farbbemalung ins 3MF für Bambu Studio / OrcaSlicer (und PrusaSlicer).
    **Projekt speichern/öffnen**: „Projekt speichern" (Strg/⌘+S) legt alle Teile mit Lage, Farben,
    Gruppen, Aufschriften, Bemalung und allen Verbindungen in einer `.partjoin`-Datei ab; „Projekt
    öffnen" oder Hineinziehen macht dort weiter (die vorige Arbeit holt Strg+Z zurück). Zusätzlich

@@ -150,6 +150,7 @@
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
           <button id="measureTool" class="ghost small" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)">Messen</button>
+          <button id="paintTool" class="ghost small" title="Farben malen wie in Bambu Studio: Filament wählen und über das Teil streichen oder Flächen füllen – für mehrfarbigen Druck mit AMS oder H2C (Taste N)">Malen</button>
           <button id="dimsTool" class="ghost small" title="Außenmaße im Bild: Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile (Taste D)">Maße</button>
           <button id="explodeTool" class="ghost small" title="Explosionsansicht: Baugruppen auseinandergezogen zeigen – nur zum Ansehen (Taste X)">Explosion</button>
           <button id="sectionTool" class="ghost small" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)">Schnitt</button>
@@ -174,6 +175,19 @@
           <strong>Messen</strong>
           <button id="measureReset" class="ghost small" title="Auswahl löschen und neu beginnen (Entf)">Neu</button>
           <div id="measureText"></div>
+        </div>
+        <div id="paintBar" hidden>
+          <strong>Malen</strong>
+          <span id="paintSwatches" class="row"></span>
+          <span class="seg" role="group" aria-label="Malwerkzeug">
+            <button data-pmode="brush" class="on" title="Mit gedrückter Maustaste über das Teil streichen">Pinsel</button>
+            <button data-pmode="fill" title="Zusammenhängende Fläche bis zu einem Knick füllen">Füllen</button>
+          </span>
+          <label class="small" id="paintSizeWrap" title="Durchmesser des Pinsels (Alt + Mausrad)">Größe <input type="range" id="paintSize" min="0.5" max="30" step="0.5" value="4" /> <span id="paintSizeVal"></span></label>
+          <label class="small" id="paintAngleWrap" hidden title="Füllen hört an Knicken auf, die größer sind">bis Knick <input type="number" id="paintAngle" value="30" min="1" max="90" step="5" /> °</label>
+          <span id="paintInfo" class="small"></span>
+          <button id="paintClose" class="ghost small">Fertig</button>
+          <p class="help">Linke Maustaste malt mit dem gewählten Filament, mit Umschalt radiert sie (zurück zum Filament des Teils). Die Nummern sind die Filamente im Bambu-Export, in derselben Reihenfolge. Ziehen neben dem Teil dreht die Ansicht.</p>
         </div>
         <div id="fitBar" hidden>
           <strong id="fitTitle"></strong>
@@ -354,6 +368,7 @@
             <li><b>Laden</b> – Dateien ins Fenster ziehen (STL, 3MF, STEP, OBJ …) oder ein Projekt (.partjoin) öffnen.</li>
             <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder links „Alles automatisch verbinden“.</li>
             <li><b>Nachjustieren</b> – „Von Hand anpassen“ dreht und schiebt in den Richtungen, die die Verbindung offen lässt; „Um 180° drehen“ wechselt zwischen gleich guten Lagen; „Einsinken“ schiebt Teile minimal ineinander, damit der Slicer sie verschmilzt.</li>
+            <li><b>Malen</b> (N) – mehrfarbig für AMS/H2C: Filament wählen, mit dem Pinsel streichen oder Flächen füllen; Umschalt radiert. Kommt als Bemalung ins Bambu-Projekt.</li>
             <li><b>Prüfen</b> – „Passung prüfen“: grün liegt an, gelb Spalt, rot dringt ein. „Standfestigkeit“ zeigt Schwerpunkt und Standfläche und ab welcher Neigung ein Modell kippt. „Filament &amp; Kosten“ schätzt Gramm, Meter und Preis (gesamt und je Platte).</li>
             <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Auf Fläche legen“; für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
             <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“.</li>
@@ -377,6 +392,7 @@
           <dl class="keys">
             <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
             <dt><kbd>M</kbd></dt><dd>Messen wie in Bambu Studio: Kante (Länge), Kreis (Durchmesser), Fläche; zwei Merkmale: Abstand, Winkel. Umschalt + Klick: beliebiger Punkt, <kbd>Entf</kbd> neu, <kbd>Esc</kbd> ein Merkmal zurück</dd>
+            <dt><kbd>N</kbd></dt><dd>Farben malen: Pinsel oder Füllen, Umschalt radiert, Alt + Mausrad Pinselgröße</dd>
             <dt><kbd>D</kbd></dt><dd>Maße im Bild: Breite, Tiefe, Höhe jeder Baugruppe oder der Auswahl</dd>
             <dt><kbd>C</kbd></dt><dd>Schnittansicht ein/aus (Regler unten rechts)</dd>
             <dt><kbd>X</kbd></dt><dd>Explosionsansicht ein/aus – Baugruppen auseinandergezogen ansehen</dd>

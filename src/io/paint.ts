@@ -209,3 +209,111 @@ export function carryPaint(
   }
   return { paint: result, positions: out, lost };
 }
+
+// ---------------------------------------------------------------- Malen (Pinsel)
+
+const sub3 = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot3 = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const dist3 = (a: V3, b: V3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+/** Abstand eines Punkts zum Dreieck (nächster Punkt nach Ericson, „Real-Time Collision Detection“). */
+export function triangleDistance(p: V3, a: V3, b: V3, c: V3): number {
+  const ab = sub3(b, a), ac = sub3(c, a), ap = sub3(p, a);
+  const d1 = dot3(ab, ap), d2 = dot3(ac, ap);
+  if (d1 <= 0 && d2 <= 0) return dist3(p, a);
+  const bp = sub3(p, b);
+  const d3 = dot3(ab, bp), d4 = dot3(ac, bp);
+  if (d3 >= 0 && d4 <= d3) return dist3(p, b);
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3);
+    return dist3(p, [a[0] + v * ab[0], a[1] + v * ab[1], a[2] + v * ab[2]]);
+  }
+  const cp = sub3(p, c);
+  const d5 = dot3(ab, cp), d6 = dot3(ac, cp);
+  if (d6 >= 0 && d5 <= d6) return dist3(p, c);
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6);
+    return dist3(p, [a[0] + w * ac[0], a[1] + w * ac[1], a[2] + w * ac[2]]);
+  }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+    const w = (d4 - d3) / (d4 - d3 + (d5 - d6));
+    return dist3(p, [b[0] + w * (c[0] - b[0]), b[1] + w * (c[1] - b[1]), b[2] + w * (c[2] - b[2])]);
+  }
+  const den = 1 / (va + vb + vc);
+  const v = vb * den, w = vc * den;
+  return dist3(p, [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w]);
+}
+
+/** Ecken der Kinder eines zerlegten Knotens – wie in paintLeaves (TriangleSelector::perform_split). */
+function childVerts(n: Extract<PaintNode, { split: number }>, v: V3[]): V3[][] {
+  const s = n.special % 3;
+  const [A, B, C] = [v[s], v[(s + 1) % 3], v[(s + 2) % 3]];
+  if (n.split === 1) {
+    const m = mid(B, C);
+    return [[A, B, m], [m, C, A]];
+  }
+  if (n.split === 2) {
+    const m1 = mid(B, A);
+    const m2 = mid(A, C);
+    return [[A, m1, m2], [m1, B, m2], [B, C, m2]];
+  }
+  const m01 = mid(A, B);
+  const m12 = mid(B, C);
+  const m20 = mid(C, A);
+  return [[A, m01, m20], [m01, B, m12], [m12, C, m20], [m01, m12, m20]];
+}
+
+export interface BrushOptions {
+  /** Mitte und Radius der Pinselkugel (Koordinaten des Netzes). */
+  center: V3;
+  radius: number;
+  /** Neuer Zustand (Filament; 0 = Filament des Teils, also radieren). */
+  state: number;
+  /** Teildreiecke am Rand höchstens so lang (Kante) – feiner wird nicht zerlegt. */
+  minEdge: number;
+  /** Höchste Zerlegungstiefe. */
+  maxDepth?: number;
+}
+
+/**
+ * Pinselstrich auf einem Dreieck: Was in der Kugel liegt, bekommt den Zustand. Liegt das Dreieck nur
+ * teilweise darin, wird es (wie im Slicer) in vier Teildreiecke zerlegt, bis die Stücke klein genug sind;
+ * gleich bemalte Geschwister werden danach wieder zusammengefasst. Liefert die neue Kodierung.
+ */
+export function brushPaint(code: string, a: V3, b: V3, c: V3, o: BrushOptions): string {
+  const root = decodePaint(code) ?? { state: 0 };
+  const maxDepth = o.maxDepth ?? 9;
+  const r2 = o.radius * o.radius;
+  const inside = (p: V3) => {
+    const d = sub3(p, o.center);
+    return dot3(d, d) <= r2;
+  };
+  const visit = (n: PaintNode, v: V3[], depth: number): PaintNode => {
+    if (inside(v[0]) && inside(v[1]) && inside(v[2])) return { state: o.state };
+    if (triangleDistance(o.center, v[0], v[1], v[2]) > o.radius) return n;
+    const edge = Math.max(dist3(v[0], v[1]), dist3(v[1], v[2]), dist3(v[2], v[0]));
+    if ('state' in n) {
+      if (n.state === o.state) return n;
+      // Klein genug: nach der Mitte entscheiden
+      if (edge <= o.minEdge || depth >= maxDepth) {
+        const m: V3 = [(v[0][0] + v[1][0] + v[2][0]) / 3, (v[0][1] + v[1][1] + v[2][1]) / 3, (v[0][2] + v[1][2] + v[2][2]) / 3];
+        return inside(m) ? { state: o.state } : n;
+      }
+      n = { split: 3, special: 0, children: [{ state: n.state }, { state: n.state }, { state: n.state }, { state: n.state }] };
+    }
+    const sn = n as Extract<PaintNode, { split: number }>;
+    const verts = childVerts(sn, v);
+    const children = sn.children.map((ch, k) => visit(ch, verts[k], depth + 1));
+    // Alle Kinder gleich: wieder ein Blatt
+    const first = children[0];
+    if ('state' in first && children.every((ch) => 'state' in ch && ch.state === first.state)) return { state: first.state };
+    return { ...sn, children };
+  };
+  return encodePaint(visit(root, [a, b, c], 0));
+}
+
+/** Kodierung für ein ganz in einem Zustand bemaltes Dreieck. */
+export const solidPaint = (state: number) => encodePaint({ state });

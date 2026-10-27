@@ -27,7 +27,7 @@ import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
 import { BAMBU_PRINTERS, type ColoredPart, type ReadInfo, type SlicerExtras, bambuPlateOrigin, colorSlots } from './io/threemf';
 import { compute, hasWorker } from './compute/client';
-import { decorate, disposeDecor } from './decor';
+import { decorate, disposeDecor, refreshPaint } from './decor';
 import {
   type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, saveSession, sessionInfo, unpackProject,
 } from './io/project';
@@ -36,7 +36,7 @@ import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
 import { overhangs, pickTriangles, thinWalls } from './math/printcheck';
 import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, type PocketSpec, pocketPreview } from './io/pocket';
-import { carryPaint, decodePaint } from './io/paint';
+import { brushPaint, carryPaint, decodePaint, paintStates, solidPaint, triangleDistance } from './io/paint';
 import { clearanceLabel } from './io/testpiece';
 import type { BoolOp } from './io/boolean';
 import manifoldWasm from 'manifold-3d/manifold.wasm?url';
@@ -77,6 +77,8 @@ interface Part extends SlicerExtras {
   together?: string;
   /** Ergebnis der Netzprüfung (läuft nach dem Laden im Hintergrund). */
   health?: MeshHealth;
+  /** Zählt Änderungen der Bemalung (für Rückgängig und die Sitzungssicherung). */
+  paintRev?: number;
 }
 
 /** Vorschlag für eine Verbindung: diese Fläche am einen Teil passt zu jener am anderen. */
@@ -175,7 +177,7 @@ let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
 /** Werkzeug im 3D-Fenster (siehe setTool) und die im Passungs-Werkzeug gewählte Fläche. */
-let tool: 'lay' | 'fit' | 'measure' | 'pocket' | null = null;
+let tool: 'lay' | 'fit' | 'measure' | 'pocket' | 'paint' | null = null;
 /**
  * Gewählte Fläche der Passung. wall: ganze Wand einer Bohrung bzw. eines Zapfens (Weltkoordinaten) – auch
  * Stücke in angrenzenden Teilen, z. B. wenn ein Schnitt durch die Bohrung geht.
@@ -472,7 +474,7 @@ const MOVE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="
  * nur ersetzt.
  */
 interface Snapshot {
-  parts: { part: Part; layout: THREE.Matrix4; visible: boolean; color: string; name: string; group?: string }[];
+  parts: { part: Part; layout: THREE.Matrix4; visible: boolean; color: string; name: string; group?: string; paint?: Record<string, string[]>; palette?: string[]; paintRev: number }[];
   joints: Joint[];
   baseId: number | null;
   activeJointId: number | null;
@@ -496,7 +498,7 @@ function stateSig(): string {
   return JSON.stringify([
     baseId,
     plateTotal,
-    parts.map((p) => [p.id, p.geom.uuid, p.name, p.visible, p.color.getHexString(), p.group ?? '', p.layout.elements.map(r)]),
+    parts.map((p) => [p.id, p.geom.uuid, p.name, p.visible, p.color.getHexString(), p.group ?? '', p.layout.elements.map(r), p.paintRev ?? 0]),
     joints.map((j) => [
       j.id, j.a, j.b, j.applied, j.alt, j.seat, j.ordered, j.normals, j.overlap, j.spin, j.turnIdx ?? 0, j.proposalIdx ?? 0,
       j.adjust ? [...j.adjust.R, ...j.adjust.t].map(r) : 0,
@@ -507,7 +509,10 @@ function stateSig(): string {
 
 function snapshot(): Snapshot {
   return {
-    parts: parts.map((p) => ({ part: p, layout: p.layout.clone(), visible: p.visible, color: `#${p.color.getHexString()}`, name: p.name, group: p.group })),
+    parts: parts.map((p) => ({
+      part: p, layout: p.layout.clone(), visible: p.visible, color: `#${p.color.getHexString()}`, name: p.name, group: p.group,
+      paint: p.paint, palette: p.palette, paintRev: p.paintRev ?? 0,
+    })),
     joints: joints.map(jointCopy),
     baseId,
     activeJointId,
@@ -532,6 +537,13 @@ function restoreSnapshot(snap: Snapshot) {
     (p.mesh.material as THREE.MeshStandardMaterial).color.copy(p.color);
     p.name = e.name;
     p.group = e.group;
+    // Bemalung (jeder Strich ersetzt die Liste, die alte bleibt hier erhalten)
+    if ((p.paintRev ?? 0) !== e.paintRev) {
+      p.paint = e.paint;
+      p.palette = e.palette;
+      p.paintRev = e.paintRev;
+      refreshPaint(p.mesh, p);
+    }
     parts.push(p);
   }
   // Verbindungsobjekte möglichst weiterverwenden (an ihnen hängen zwischengespeicherte Ergebnisse)
@@ -2868,7 +2880,15 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     return;
   }
   const h = pick(e);
-  hoverName(e, h?.part ?? null);
+  // Beim Malen stört der Name am Zeiger
+  hoverName(e, tool === 'paint' ? null : h?.part ?? null);
+  if (tool === 'paint') {
+    cursor.visible = false;
+    updateHover(null);
+    updatePaintCursor(h, e.shiftKey);
+    renderer.domElement.style.cursor = h ? (paintMode === 'fill' ? 'cell' : 'none') : 'default';
+    return;
+  }
   if (tool === 'measure') {
     cursor.visible = false;
     updateHover(null);
@@ -2898,6 +2918,7 @@ renderer.domElement.addEventListener('pointerleave', () => {
   cursor.visible = false;
   updateHover(null);
   if (tool === 'measure') updateMeasureHover(null, false);
+  if (!paintStroke) paintCursor.visible = false;
   hideTip();
 });
 
@@ -2913,6 +2934,8 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     clickMeasure(e, h);
     return;
   }
+  // Malen arbeitet beim Drücken und Ziehen
+  if (tool === 'paint') return;
   if (!h) return;
   if (tool === 'lay') {
     layOnFace(h);
@@ -3109,6 +3132,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 't') setTool(tool === 'fit' ? null : 'fit');
   else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
   else if (k === 'e') setTool(tool === 'pocket' ? null : 'pocket');
+  else if (k === 'n') setTool(tool === 'paint' ? null : 'paint');
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (k === 'c') setSection(!section);
@@ -3325,6 +3349,9 @@ function renderHint() {
     : measureSel.length === 2
       ? 'Ein weiterer Klick ersetzt das zweite Merkmal, ein Klick auf ein gewähltes wählt es ab. Entf: neu, Esc: zurück.'
       : 'Zeige auf eine Ecke, Kante, einen Kreis oder eine Fläche und klicke (Umschalt: beliebiger Punkt). Esc beendet.';
+  else if (tool === 'paint') el.textContent = paintMode === 'fill'
+    ? 'Klicke eine Fläche an – sie wird bis zu Knicken über dem Winkel gefüllt. Umschalt + Klick: Filament des Teils. Esc beendet.'
+    : 'Über das Teil streichen malt, Umschalt radiert. Alt + Mausrad: Pinselgröße. Ziehen neben dem Teil dreht die Ansicht. Esc beendet.';
   else if (tool === 'fit') el.textContent = fitTarget ? 'Wert oben eingeben und „Übernehmen" – oder eine andere Fläche anklicken. Esc bricht ab.' : 'Klicke einen Zapfen, eine Bohrung oder eine ebene Fläche an, deren Passung du ändern willst. Esc bricht ab.';
   else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel. Taste ? zeigt Anleitung und Tastenkürzel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
@@ -4068,11 +4095,16 @@ async function exportAs(kind: string) {
 const layBtn = document.getElementById('layFlat')!;
 const fitBtn = document.getElementById('fitTool')!;
 const measureBtn = document.getElementById('measureTool')!;
+const paintBtn = document.getElementById('paintTool')!;
+const paintBar = document.getElementById('paintBar')!;
 function setTool(t: typeof tool) {
   tool = t && parts.length > 0 ? t : null;
   layBtn.classList.toggle('on', tool === 'lay');
   fitBtn.classList.toggle('on', tool === 'fit');
   measureBtn.classList.toggle('on', tool === 'measure');
+  paintBtn.classList.toggle('on', tool === 'paint');
+  if (tool !== 'paint') closePaint();
+  else openPaint();
   if (tool !== 'fit') closeFit();
   if (tool !== 'measure') clearMeasure();
   else renderMeasure();
@@ -7871,6 +7903,258 @@ void (async () => {
 })();
 
 // Für automatisierte Tests / Debugging
+// ---------------------------------------------------------------- Farben malen
+
+/**
+ * Farbbemalung wie in Bambu Studio (Taste N): Filament wählen und mit dem Pinsel über das Teil streichen
+ * oder eine Fläche füllen; Umschalt radiert (Filament des Teils). Gespeichert wird wie in Bambu Studio je
+ * Dreieck (am Pinselrand fein unterteilt), der Export ins Bambu-Projekt übernimmt es als Bemalung.
+ */
+const paintSwatches = document.getElementById('paintSwatches')!;
+const paintSize = document.getElementById('paintSize') as HTMLInputElement;
+const paintAngle = document.getElementById('paintAngle') as HTMLInputElement;
+/** Übliche Bambu-Filamentfarben zum schnellen Hinzufügen. */
+const PAINT_PRESETS = ['#ffffff', '#000000', '#c12e1f', '#0a2989', '#f4ee2a', '#00ae42', '#ff6a13', '#8e9089'];
+/** Vom Benutzer hinzugefügte Farben, die noch nirgends verwendet sind. */
+const paintExtra: string[] = [];
+let paintColor = '';
+let paintMode: 'brush' | 'fill' = 'brush';
+const paintCursor = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
+paintCursor.renderOrder = 13;
+paintCursor.visible = false;
+paintCursor.raycast = () => {};
+scene.add(paintCursor);
+
+const hexOf = (p: Part) => `#${p.color.getHexString()}`;
+
+/** Filamente in der Reihenfolge des Exports (Teilefarben, bemalte Farben), dazu neu hinzugefügte. */
+function filamentList(): string[] {
+  const list = colorSlots(parts.filter((p) => p.visible).map((p) => ({ ...p, color: hexOf(p), positions: new Float32Array(0) } as unknown as ColoredPart)));
+  for (const c of paintExtra) if (!list.includes(c)) list.push(c);
+  return list;
+}
+
+function renderPaintBar() {
+  const list = filamentList();
+  if (!list.includes(paintColor)) paintColor = list[1] ?? list[0] ?? '';
+  paintSwatches.innerHTML = list.map((c, i) => `<button class="swatch${c === paintColor ? ' on' : ''}" data-color="${c}" style="--c:${c}" title="Filament ${i + 1} (${c}) – damit malen">${i + 1}</button>`).join('')
+    + `<span class="presets" title="Farbe hinzufügen">+ ${PAINT_PRESETS.filter((c) => !list.includes(c)).map((c) => `<button class="preset" data-add="${c}" style="--c:${c}" title="${c} hinzufügen"></button>`).join('')}<input type="color" id="paintPick" value="#3366ff" title="Eigene Farbe hinzufügen" /></span>`;
+  paintBar.querySelectorAll<HTMLElement>('[data-pmode]').forEach((b) => b.classList.toggle('on', b.dataset.pmode === paintMode));
+  document.getElementById('paintSizeWrap')!.hidden = paintMode !== 'brush';
+  document.getElementById('paintAngleWrap')!.hidden = paintMode !== 'fill';
+  document.getElementById('paintSizeVal')!.textContent = `${mmText1(Number(paintSize.value))} mm`;
+  document.getElementById('paintInfo')!.textContent = list.length > 4 ? `${list.length} Filamente – mehr als ein AMS (4 Plätze)` : `${list.length} Filament${list.length === 1 ? '' : 'e'}`;
+}
+
+function openPaint() {
+  paintBar.hidden = false;
+  renderPaintBar();
+}
+function closePaint() {
+  paintBar.hidden = true;
+  paintCursor.visible = false;
+}
+
+paintSwatches.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-color], [data-add]');
+  if (!b) return;
+  const c = (b.dataset.color ?? b.dataset.add)!.toLowerCase();
+  if (b.dataset.add && !paintExtra.includes(c)) paintExtra.push(c);
+  paintColor = c;
+  renderPaintBar();
+});
+paintSwatches.addEventListener('change', (e) => {
+  const input = e.target as HTMLInputElement;
+  if (input.id !== 'paintPick') return;
+  const c = input.value.toLowerCase();
+  if (!paintExtra.includes(c)) paintExtra.push(c);
+  paintColor = c;
+  renderPaintBar();
+});
+paintBar.querySelectorAll<HTMLElement>('[data-pmode]').forEach((b) => b.addEventListener('click', () => {
+  paintMode = b.dataset.pmode as typeof paintMode;
+  renderPaintBar();
+  renderHint();
+}));
+paintSize.addEventListener('input', () => renderPaintBar());
+document.getElementById('paintClose')!.addEventListener('click', () => setTool(null));
+paintBtn.addEventListener('click', () => setTool(tool === 'paint' ? null : 'paint'));
+
+/** Zustand (Filamentnummer im Teil) für eine Farbe; die Farbe des Teils ist 0. Neue Farben kommen in die Palette. */
+function paintStateFor(p: Part, palette: string[], color: string): number {
+  if (!color || color === hexOf(p)) return 0;
+  const i = palette.findIndex((c) => c.toLowerCase() === color);
+  if (i >= 0) return i + 1;
+  palette.push(color);
+  return palette.length;
+}
+
+/** Laufender Strich: Bemalung und Palette werden erst am Ende ins Teil geschrieben (eine Rückgängig-Stufe). */
+let paintStroke: { id: number; part: Part; codes: string[]; palette: string[]; state: number; last: Vec3 | null; changed: boolean } | null = null;
+const paintDirty = new Set<Part>();
+let paintFrame = 0;
+/** Bemalung im Bild erneuern – höchstens einmal je Bild. */
+function schedulePaint(p: Part) {
+  paintDirty.add(p);
+  if (paintFrame) return;
+  paintFrame = requestAnimationFrame(() => {
+    paintFrame = 0;
+    for (const q of paintDirty) {
+      const extras = paintStroke?.part === q ? { paint: { ...q.paint, paint_color: paintStroke.codes }, palette: paintStroke.palette } : q;
+      refreshPaint(q.mesh, extras);
+    }
+    paintDirty.clear();
+  });
+}
+
+/** Ein Tupfer des Pinsels (Kugel um p, Koordinaten des Teils) – nur auf Dreiecken, die zur Kamera zeigen. */
+function paintDab(p: Vec3, tri: number) {
+  const s = paintStroke!;
+  const topo = topologyOf(s.part);
+  const R = Math.max(0.05, Number(paintSize.value) / 2);
+  const cam = camera.position.clone().applyMatrix4(s.part.mesh.matrixWorld.clone().invert());
+  const pos = topo.positions;
+  const V = (t: number, k: number): Vec3 => [pos[9 * t + 3 * k], pos[9 * t + 3 * k + 1], pos[9 * t + 3 * k + 2]];
+  const stack = [tri];
+  const seen = new Set(stack);
+  // Rand fein genug, dass er rund wirkt (wie in Bambu Studio), aber nicht feiner als nötig
+  const opts = { center: p, radius: R, state: s.state, minEdge: Math.max(R / 10, 0.03) };
+  while (stack.length && seen.size < 200000) {
+    const t = stack.pop()!;
+    if (triangleDistance(p, V(t, 0), V(t, 1), V(t, 2)) > R) continue;
+    const n = [topo.normals[3 * t], topo.normals[3 * t + 1], topo.normals[3 * t + 2]];
+    const c = [topo.centroids[3 * t], topo.centroids[3 * t + 1], topo.centroids[3 * t + 2]];
+    const facing = n[0] * (cam.x - c[0]) + n[1] * (cam.y - c[1]) + n[2] * (cam.z - c[2]) > 0;
+    if (facing || t === tri) {
+      const code = brushPaint(s.codes[t] ?? '', V(t, 0), V(t, 1), V(t, 2), opts);
+      if (code !== (s.codes[t] ?? '')) { s.codes[t] = code; s.changed = true; }
+    }
+    for (let k = 0; k < 3; k++) {
+      const nb = topo.neighbors[3 * t + k];
+      if (nb >= 0 && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
+    }
+  }
+  schedulePaint(s.part);
+}
+
+/** Pinsel von der letzten Stelle bis hierher: Tupfer im Abstand eines halben Radius (keine Lücken bei schnellen Strichen). */
+function paintTo(h: Hit) {
+  const s = paintStroke!;
+  const R = Math.max(0.05, Number(paintSize.value) / 2);
+  const from = s.last;
+  s.last = h.raw;
+  if (!from) { paintDab(h.raw, h.tri); return; }
+  const d = Math.hypot(h.raw[0] - from[0], h.raw[1] - from[1], h.raw[2] - from[2]);
+  const steps = Math.min(40, Math.ceil(d / (R / 2)));
+  for (let i = 1; i <= steps; i++) {
+    const f = i / steps;
+    // Zwischenpunkte gehören meist zu Nachbardreiecken; die Suche beginnt am getroffenen Dreieck
+    paintDab([from[0] + f * (h.raw[0] - from[0]), from[1] + f * (h.raw[1] - from[1]), from[2] + f * (h.raw[2] - from[2])], h.tri);
+  }
+}
+
+/** Füllen: zusammenhängende Dreiecke, solange der Knick zum Nachbarn kleiner als der Winkel ist. */
+function paintFill(h: Hit) {
+  const s = paintStroke!;
+  const topo = topologyOf(s.part);
+  const cos = Math.cos((Math.max(0, Math.min(90, Number(paintAngle.value) || 30)) * Math.PI) / 180);
+  const code = solidPaint(s.state);
+  const stack = [h.tri];
+  const seen = new Set(stack);
+  while (stack.length) {
+    const t = stack.pop()!;
+    if ((s.codes[t] ?? '') !== code) { s.codes[t] = code; s.changed = true; }
+    for (let k = 0; k < 3; k++) {
+      const nb = topo.neighbors[3 * t + k];
+      if (nb < 0 || seen.has(nb)) continue;
+      const d = topo.normals[3 * t] * topo.normals[3 * nb] + topo.normals[3 * t + 1] * topo.normals[3 * nb + 1] + topo.normals[3 * t + 2] * topo.normals[3 * nb + 2];
+      if (d < cos) continue;
+      seen.add(nb);
+      stack.push(nb);
+    }
+  }
+  schedulePaint(s.part);
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (tool !== 'paint' || e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+  const h = pick(e);
+  // Neben dem Teil: Ansicht drehen wie sonst
+  if (!h) return;
+  if (!paintColor && !e.shiftKey) { toast('Wähle oben ein Filament – oder füge mit „+“ eine Farbe hinzu.'); return; }
+  e.stopImmediatePropagation();
+  const p = h.part;
+  const palette = [...(p.palette ?? [])];
+  const state = e.shiftKey ? 0 : paintStateFor(p, palette, paintColor);
+  const n = positionsOf(p).length / 9;
+  const codes = p.paint?.paint_color ? [...p.paint.paint_color] : new Array<string>(n).fill('');
+  paintStroke = { id: e.pointerId, part: p, codes, palette, state, last: null, changed: false };
+  if (paintMode === 'fill') {
+    paintFill(h);
+    endPaintStroke();
+    return;
+  }
+  renderer.domElement.setPointerCapture(e.pointerId);
+  paintTo(h);
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!paintStroke || e.pointerId !== paintStroke.id) return;
+  e.stopImmediatePropagation();
+  const h = pick(e);
+  updatePaintCursor(h, e.shiftKey);
+  if (h && h.part === paintStroke.part) paintTo(h);
+  else paintStroke.last = null;
+}, { capture: true });
+
+/** Strich fertig: Bemalung und Palette ins Teil (Rückgängig und Sitzung sehen es). */
+function endPaintStroke() {
+  const s = paintStroke;
+  paintStroke = null;
+  if (!s || !s.changed) return;
+  const p = s.part;
+  // Palette ohne unbenutzte Farben am Ende
+  const used = new Set<number>();
+  for (const c of s.codes) if (c) paintStates(c, used);
+  const palette = s.palette.slice(0, Math.max(0, ...used));
+  const painted = s.codes.some((c) => c);
+  p.paint = { ...p.paint, paint_color: s.codes };
+  if (!painted) delete p.paint.paint_color;
+  p.palette = palette.length ? palette : undefined;
+  p.paintRev = (p.paintRev ?? 0) + 1;
+  refreshPaint(p.mesh, p);
+  renderAll();
+  if (tool === 'paint') renderPaintBar();
+}
+const endPaint = (e: PointerEvent) => {
+  if (!paintStroke || e.pointerId !== paintStroke.id) return;
+  e.stopImmediatePropagation();
+  endPaintStroke();
+};
+renderer.domElement.addEventListener('pointerup', endPaint, { capture: true });
+renderer.domElement.addEventListener('pointercancel', endPaint, { capture: true });
+
+/** Pinselkreis auf der Oberfläche unter dem Zeiger (Füllen: kein Kreis). */
+function updatePaintCursor(h: Hit | null, erase: boolean) {
+  paintCursor.visible = !!h && tool === 'paint' && paintMode === 'brush';
+  if (!h || !paintCursor.visible) return;
+  const R = Math.max(0.05, Number(paintSize.value) / 2);
+  const n = new THREE.Vector3(...h.local.n).transformDirection(h.part.mesh.matrixWorld);
+  paintCursor.position.copy(h.world).addScaledVector(n, 0.02);
+  paintCursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+  paintCursor.scale.setScalar(R);
+  (paintCursor.material as THREE.MeshBasicMaterial).color.set(erase ? '#ffffff' : paintColor || '#ffffff');
+}
+
+// Alt + Mausrad: Pinselgröße (wie in Bambu Studio)
+renderer.domElement.addEventListener('wheel', (e) => {
+  if (tool !== 'paint' || !e.altKey) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const v = Number(paintSize.value) * (e.deltaY > 0 ? 1 / 1.15 : 1.15);
+  paintSize.value = String(Math.round(Math.min(Number(paintSize.max), Math.max(Number(paintSize.min), v)) * 2) / 2);
+  renderPaintBar();
+}, { capture: true, passive: false });
+
 // ---------------------------------------------------------------- Aktive Anzeigen (rechts)
 
 /**
@@ -7878,7 +8162,7 @@ void (async () => {
  * Passungsprüfung, Schnitt, Explosion) – mit Farblegende und ✕ zum Ausschalten.
  */
 const activeBar = document.getElementById('activeBar')!;
-const TOOL_LABEL: Record<'lay' | 'fit' | 'measure' | 'pocket', string> = { lay: 'Auf Fläche legen', fit: 'Passung', measure: 'Messen', pocket: 'Aussparung' };
+const TOOL_LABEL: Record<'lay' | 'fit' | 'measure' | 'pocket' | 'paint', string> = { lay: 'Auf Fläche legen', fit: 'Passung', measure: 'Messen', pocket: 'Aussparung', paint: 'Malen' };
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 interface ActiveItem { id: string; label: string; title: string; dots?: { color: string; label: string }[]; off: () => void }
 let activeList: ActiveItem[] = [];
@@ -7941,7 +8225,7 @@ activeBar.addEventListener('click', (e) => {
  * Leisten oben (Messen, Passung, Druckprüfung …) liegen sonst alle an derselben Stelle: sichtbare
  * untereinander stapeln und neben der Übersicht rechts enden lassen. Jedes Bild, nur bei Änderungen.
  */
-const TOP_BARS = ['gizmoBar', 'fitBar', 'measureBar', 'scaleBar', 'cutBar', 'splitBar', 'pocketBar', 'tolBar', 'anaBar', 'simpBar']
+const TOP_BARS = ['gizmoBar', 'fitBar', 'measureBar', 'paintBar', 'scaleBar', 'cutBar', 'splitBar', 'pocketBar', 'tolBar', 'anaBar', 'simpBar']
   .map((id) => document.getElementById(id)!);
 let barsSig = '';
 function layoutBars() {
