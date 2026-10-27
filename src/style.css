@@ -282,12 +282,15 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #measureText .mres.xyz { color: var(--muted); font-variant-numeric: tabular-nums; }
 #measureText .help { color: var(--muted); }
 /* Maße im Bild */
-#measureLabels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
-#measureLabels .mlabel {
+#measureLabels, #standLabels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+#measureLabels .mlabel, #standLabels .mlabel {
   position: absolute; left: 0; top: 0; white-space: nowrap; font: 600 12px/1.3 system-ui, sans-serif; font-variant-numeric: tabular-nums;
   padding: 2px 6px; border-radius: 5px; color: #1d2330; background: #ffcf66; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 #measureLabels .mlabel.perp { background: #cdb4ff; }
+#standLabels .mlabel.ok { background: #8fe0b4; }
+#standLabels .mlabel.tight { background: #ffd27a; }
+#standLabels .mlabel.tips { background: #ff9c9e; }
 #fitBar input[type='number'] { width: 76px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #fitBar .help { margin: 0; flex-basis: 100%; }
 #fitBar .help:empty { display: none; }
@@ -295,6 +298,12 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 .matopts input[type='number'] { width: 52px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #matResult { margin: 8px 0 4px; font-size: 12.5px; display: grid; gap: 3px; font-variant-numeric: tabular-nums; }
 #matResult:empty { display: none; }
+#standResult { margin: 8px 0 12px; font-size: 12.5px; display: grid; gap: 4px; }
+#standResult:empty { display: none; }
+#standResult .ok { color: #30a46c; }
+#standResult .tight { color: #c98a0b; }
+#standResult .tips { color: #e5484d; }
+#standResult .note { color: var(--muted); font-size: 11.5px; }
 #matResult .plate { color: var(--muted); }
 #matResult .note { color: var(--muted); font-size: 11.5px; }
 #checkResult:empty { display: none; }

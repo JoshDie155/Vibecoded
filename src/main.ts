@@ -13,7 +13,8 @@ import { type MFeature, type MeasureModel, centerOf, featureAt, measureBetween, 
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
 import { splitLoosePieces } from './math/components';
-import { type MassProps, type Material, type PrintEstimate, type PrintSettings, MATERIALS, massProps, printEstimate } from './math/mass';
+import { type MassProps, type Material, type PrintEstimate, type PrintSettings, MATERIALS, massProps, printEstimate, printedCentroid } from './math/mass';
+import { type P2, convexHull, stabilityOf } from './math/stability';
 import { candidatePairs, placePlanePair } from './math/suggest';
 import { contactScore } from './math/scan';
 import type { FreeMotion } from './math/motion';
@@ -443,6 +444,7 @@ renderer.setAnimationLoop(() => {
   undo();
   updateCube();
   placeMeasureLabels();
+  placeLabelList(standLabelAt);
 });
 
 /** Vier Pfeile: Teil frei bewegen */
@@ -3365,6 +3367,7 @@ function renderAll() {
   drawBed();
   renderStatus();
   renderMaterial();
+  if (standOn) renderStand();
   // Maße folgen bewegten oder geänderten Teilen
   if (tool === 'measure') renderMeasure();
   if (scaleTarget) renderScaleBar(true);
@@ -6457,6 +6460,128 @@ function renderMaterial() {
   matResult.innerHTML = rows.join('');
 }
 
+// ---------------------------------------------------------------- Standfestigkeit
+
+let standOn = false;
+const standGroup = new THREE.Group();
+scene.add(standGroup);
+const standLabels = document.createElement('div');
+standLabels.id = 'standLabels';
+view.appendChild(standLabels);
+let standLabelAt: { el: HTMLElement; at: THREE.Vector3 }[] = [];
+const standResult = document.getElementById('standResult')!;
+const standBtn = document.getElementById('standBtn')!;
+const STAND_COLORS = { ok: '#30a46c', tight: '#f5a524', tips: '#e5484d' };
+
+/** Tiefste Punkte eines Teils (Welt): alles bis 2 mm über seinem tiefsten Punkt, je Lage einmal gesucht. */
+const lowPoints = new WeakMap<THREE.BufferGeometry, { key: string; min: number; pts: Float32Array }>();
+function lowPointsOf(p: Part): { min: number; pts: Float32Array } {
+  const e = p.mesh.matrixWorld.elements;
+  const key = Array.from(e, (x) => x.toFixed(5)).join(',');
+  const known = lowPoints.get(p.geom);
+  if (known?.key === key) return known;
+  const pos = positionsOf(p);
+  let min = Infinity;
+  for (let i = 0; i < pos.length; i += 3) {
+    const z = e[2] * pos[i] + e[6] * pos[i + 1] + e[10] * pos[i + 2] + e[14];
+    if (z < min) min = z;
+  }
+  const out: number[] = [];
+  for (let i = 0; i < pos.length; i += 3) {
+    const z = e[2] * pos[i] + e[6] * pos[i + 1] + e[10] * pos[i + 2] + e[14];
+    if (z > min + 2) continue;
+    out.push(e[0] * pos[i] + e[4] * pos[i + 1] + e[8] * pos[i + 2] + e[12], e[1] * pos[i] + e[5] * pos[i + 1] + e[9] * pos[i + 2] + e[13], z);
+  }
+  const r = { key, min, pts: new Float32Array(out) };
+  lowPoints.set(p.geom, r);
+  return r;
+}
+
+/** Schwerpunkt (mit Wänden und Füllung wie bei „Filament & Kosten“), Standfläche und Kippwinkel je Baugruppe. */
+function standOf(members: Part[]) {
+  const s = printSettings();
+  let mass = 0;
+  const com = new THREE.Vector3();
+  for (const p of members) {
+    const { m, dims } = massOf(p);
+    const e = printEstimate(m.volume, m.area, settingsFor(p, s), dims);
+    com.addScaledVector(new THREE.Vector3(...printedCentroid(m, e)).applyMatrix4(p.mesh.matrixWorld), e.grams);
+    mass += e.grams;
+  }
+  if (mass > 0) com.multiplyScalar(1 / mass);
+  const lows = members.map(lowPointsOf);
+  const ground = Math.min(...lows.map((l) => l.min));
+  const box = unitBox(members);
+  // Was den Boden berührt: bis 0,1 mm darüber (bei großen Teilen etwas mehr)
+  const tol = 0.1 + 0.002 * (box.max.z - box.min.z);
+  const touch: P2[] = [];
+  for (const l of lows) for (let i = 0; i < l.pts.length; i += 3) if (l.pts[i + 2] <= ground + tol) touch.push([l.pts[i], l.pts[i + 1]]);
+  const hull = convexHull(touch);
+  return { com, ground, hull, mass, ...stabilityOf([com.x, com.y, com.z], hull, ground) };
+}
+
+function renderStand() {
+  disposeGroup(standGroup);
+  standLabels.replaceChildren();
+  standLabelAt = [];
+  if (!standOn) { standResult.innerHTML = ''; return; }
+  const rows: string[] = [];
+  for (const u of visibleUnits()) {
+    const st = standOf(u.members);
+    const deg = Math.round(st.tipDeg);
+    const kind = !st.inside || st.tipDeg < 5 ? 'tips' : st.tipDeg < 15 ? 'tight' : 'ok';
+    const color = STAND_COLORS[kind];
+    const size = Math.max(...u.box.getSize(new THREE.Vector3()).toArray(), 1);
+    const z = st.ground + 0.05;
+    // Standfläche auf dem Boden, Schwerpunkt mit Lot
+    if (st.hull.length >= 3) {
+      const shape = new THREE.Shape(st.hull.map(([x, y]) => new THREE.Vector2(x, y)));
+      // Durch das Teil hindurch sichtbar: sonst verdeckt es seine eigene Standfläche
+      const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.3, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
+      fill.position.z = z;
+      fill.renderOrder = 11;
+      standGroup.add(fill);
+    }
+    if (st.hull.length >= 2) {
+      const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(st.hull.map(([x, y]) => new THREE.Vector3(x, y, z))), new THREE.LineBasicMaterial({ color, depthTest: false }));
+      outline.renderOrder = 11;
+      standGroup.add(outline);
+    }
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.018 * size, 16, 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    dot.position.copy(st.com);
+    const foot = new THREE.Vector3(st.com.x, st.com.y, z);
+    const drop = new THREE.Line(new THREE.BufferGeometry().setFromPoints([st.com, foot]), new THREE.LineDashedMaterial({ color, dashSize: 0.03 * size, gapSize: 0.02 * size, depthTest: false }));
+    drop.computeLineDistances();
+    const footDot = new THREE.Mesh(new THREE.CircleGeometry(0.014 * size, 20), new THREE.MeshBasicMaterial({ color, depthTest: false, side: THREE.DoubleSide }));
+    footDot.position.copy(foot);
+    for (const o of [dot, drop, footDot]) o.renderOrder = 12;
+    standGroup.add(dot, drop, footDot);
+    const label = document.createElement('span');
+    label.className = `mlabel stand ${kind}`;
+    label.textContent = !st.inside ? 'kippt um' : `kippt ab ${deg}°`;
+    standLabels.appendChild(label);
+    standLabelAt.push({ el: label, at: st.com.clone() });
+    const name = `„${esc(u.name)}“`;
+    if (!st.inside) {
+      rows.push(`<div class="tips">✕ ${name} kippt um – der Schwerpunkt liegt ${mmText1(Math.max(0, -st.margin))} mm neben der Standfläche.</div>`);
+    } else if (kind === 'tips') {
+      rows.push(`<div class="tips">⚠ ${name} steht wackelig – kippt schon ab ${deg}° Neigung.</div>`);
+    } else if (kind === 'tight') {
+      rows.push(`<div class="tight">⚠ ${name} steht knapp – kippt ab ${deg}° Neigung.</div>`);
+    } else rows.push(`<div class="ok">✓ ${name} steht sicher – kippt erst ab ${deg}° Neigung.</div>`);
+  }
+  rows.push('<div class="note">So, wie die Baugruppen gerade stehen. Schwerpunkt mit Wänden und Füllung wie bei „Filament &amp; Kosten“; Punkt und Lot zeigen ihn, die Fläche am Boden ist die Standfläche.</div>');
+  standResult.innerHTML = rows.join('');
+}
+
+standBtn.addEventListener('click', () => {
+  standOn = !standOn && parts.length > 0;
+  if (!parts.length) toast('Lade zuerst ein Modell.');
+  standBtn.classList.toggle('ghost', !standOn);
+  standBtn.title = standOn ? 'Standfestigkeit ausblenden' : 'Steht das Modell sicher? Zeigt Schwerpunkt und Standfläche jeder Baugruppe – und ab welcher Neigung sie kippt (so, wie sie gerade steht).';
+  renderStand();
+});
+
 /** Hinweis, wenn Baugruppen nicht auf die Druckplatte passen. */
 function bedWarning(): string {
   const { outside, tooBig } = bedFit();
@@ -7007,9 +7132,13 @@ function measureLabel(text: string, at: Vec3, kind = '') {
 
 /** Beschriftungen an ihre Stelle im Bild (jedes Bild neu). */
 function placeMeasureLabels() {
-  if (!measureLabelAt.length) return;
+  placeLabelList(measureLabelAt);
+}
+
+function placeLabelList(list: { el: HTMLElement; at: THREE.Vector3 }[]) {
+  if (!list.length) return;
   const w = renderer.domElement.clientWidth;
-  for (const { el, at } of measureLabelAt) {
+  for (const { el, at } of list) {
     const p = at.clone().project(camera);
     const hidden = p.z > 1 || p.z < -1;
     el.style.display = hidden ? 'none' : '';

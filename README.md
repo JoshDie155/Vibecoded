@@ -88,6 +88,10 @@ und Mausaktionen.
    „Neu" beginnt von vorn, Esc nimmt ein Merkmal zurück und beendet ohne Auswahl das Messen.
    Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger
    (mit geschätztem Gewicht).
+   **Standfestigkeit**: zeigt für jede Baugruppe – so, wie sie gerade steht – den Schwerpunkt (mit Lot zum
+   Boden) und die Standfläche (alles, was den Boden berührt) und sagt, ab welcher Neigung sie kippt: grün ab
+   15°, gelb knapp, rot wackelig oder kippt um (Schwerpunkt neben der Standfläche). Der Schwerpunkt rechnet
+   mit Wänden und Füllung wie bei „Filament & Kosten“ – bei wenig Füllung tragen die Wände das Gewicht.
    **Filament & Kosten**: Material (PLA, PETG, ABS, ASA, TPU, PC, PA, PLA-CF, PETG-CF), Füllung, Wände und
    Preis je kg wählen – PartJoin schätzt Gramm, Meter Filament (1,75 mm) und Kosten aller sichtbaren Teile und
    je Platte. Gerechnet wird wie im Slicer: Wände, Boden und Deckel voll, das Innere mit der Füllung; Teile aus
