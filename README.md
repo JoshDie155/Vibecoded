@@ -180,6 +180,12 @@ Druck ausrichten") rechnet die Ansicht sofort neu.
 **Explosionsansicht** (oben „Explosion", Taste X): zieht jede Baugruppe auseinander, damit man sieht, wie die
 Teile zusammengehören – Regler unten rechts für den Abstand. Nur zum Ansehen: Lage, Export und Prüfungen
 bleiben unverändert, Markierungen und Anklicken ruhen, bis sie wieder zu ist.
+**Montageanleitung** (unter „Exportieren“): ein Blatt zum Ausdrucken oder als PDF („Drucken / PDF“, im
+Druckdialog „Als PDF speichern“) – ein Bild der sichtbaren Teile aus der Blickrichtung des 3D-Fensters, auf
+Wunsch auseinandergezogen, mit nummerierten Ballons und Hinweislinien; die **Stückliste** fasst gleiche Teile
+zusammen (z. B. „4× Dübel“) und nennt Maße, Filament und Gewicht; die **Schritte** kommen aus den
+Verbindungen in der Reihenfolge vom Basisteil aus („Kappe auf Sockel setzen – Bohrung ⌀ 12,3 mm auf Zapfen
+⌀ 12 mm“), dazu Dübel, Schnappstifte und zerteilte Stücke. Titel änderbar, das Bild auch als PNG.
 **Schnittansicht** (oben „Schnitt", Taste C): schneidet alles entlang X, Y oder Z auf – Lage per Regler unten
 rechts, „⇄ Seite" zeigt die andere Hälfte. Wo die Ebene durch Material geht, erscheint eine Schnittfläche in
 einem dunkleren Ton des Teils (auch bei aufeinanderliegenden Teilen sauber getrennt), so lassen sich
@@ -348,6 +354,9 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
 - **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
   TriangleSelector von Bambu/Prusa (`src/io/paint.ts`), Darstellung von Bemalung und Modifiern per
   Stencil-Puffer (`src/decor.ts`), **Vereinigung** mit manifold-3d (`src/io/union.ts`).
+- **Montageanleitung**: Bild per Render-Ziel wie das Vorschaubild, Anker per Strahl auf eine sichtbare Stelle
+  jedes Teils, Ballons ohne Überdeckung verteilt, gleiche Teile über Dreiecke, Volumen und Maße erkannt
+  (`src/math/sheet.ts`); gedruckt wird nur die Seite (`@media print`).
 - **Beschriftung**: Schrift „Droid Sans“ (Apache-2.0, aus den three.js-Beispielen, auf lateinische Zeichen
   gekürzt: `src/fonts/`) bzw. SVG über den SVGLoader von three.js zu Umrissen (`src/text.ts`); manifold-3d
   zieht sie hoch, unterteilt sie fein und legt jeden Punkt über ein Höhenfeld aus Strahlen auf die

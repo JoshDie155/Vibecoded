@@ -126,6 +126,9 @@
             <button data-export="stl">STL</button>
             <button data-export="obj">OBJ</button>
           </div>
+          <div class="row wrap">
+            <button id="sheetBtn" class="ghost" title="Bild der Teile mit Nummern (auf Wunsch auseinandergezogen, Blickrichtung wie im 3D-Fenster), Stückliste und Schritte – zum Ausdrucken oder als PDF speichern">Montageanleitung</button>
+          </div>
           <div class="exportopts">
             <label class="check small" title="Drucker, Prozess- und Filamentprofil im Bambu-Projekt (System-Profile von Bambu Studio, 0,4-mm-Düse, Bambu PLA Basic). Die Teilefarben werden die Filamentfarben.">
               Drucker <select id="bambuPrinter"></select>
@@ -388,6 +391,28 @@
     <script type="module" src="/src/main.ts"></script>
     <div id="ctxMenu" role="menu" hidden></div>
     <input type="color" id="ctxColor" tabindex="-1" aria-hidden="true" />
+    <dialog id="sheet" aria-labelledby="sheetHead">
+      <header>
+        <h2 id="sheetHead">Montageanleitung</h2>
+        <label class="check small" title="Baugruppen auseinandergezogen zeigen, wie in der Explosionsansicht"><input type="checkbox" id="sheetExplode" checked /> Explosionsdarstellung</label>
+        <span class="small muted">Blickrichtung wie im 3D-Fenster</span>
+        <span class="grow"></span>
+        <button id="sheetPrint" class="small" title="Drucken – im Druckdialog „Als PDF speichern“ wählen für eine PDF-Datei">Drucken / PDF</button>
+        <button id="sheetPng" class="ghost small" title="Nur das Bild als PNG speichern">Bild speichern</button>
+        <button id="sheetClose" class="icon" aria-label="Schließen" title="Schließen (Esc)">✕</button>
+      </header>
+      <div id="sheetPage" class="sheet-page">
+        <input type="text" id="sheetTitle" class="sheet-title" aria-label="Titel" spellcheck="false" />
+        <p class="sheet-meta" id="sheetMeta"></p>
+        <img id="sheetImg" alt="Teile mit Nummern" />
+        <h3>Stückliste</h3>
+        <table id="sheetParts"></table>
+        <h3>Zusammenbau</h3>
+        <ol id="sheetSteps"></ol>
+        <p class="sheet-foot">Erstellt mit PartJoin. Gewichte geschätzt (ohne Stützen, Brim und Spülturm).</p>
+      </div>
+    </dialog>
+    <div id="printArea"></div>
     <dialog id="help" aria-labelledby="helpTitle">
       <header>
         <h2 id="helpTitle">PartJoin – Anleitung &amp; Tastenkürzel</h2>
@@ -404,7 +429,7 @@
             <li><b>Beschriften</b> (W) – Text oder SVG-Logo anklicken und einprägen, erhaben oder vertieft, auf Wunsch in eigener Farbe; folgt Rundungen. „Nummern“ schreibt 1/7, 2/7 … auf die ausgewählten Teile.</li>
             <li><b>Prüfen</b> – „Passung prüfen“: grün liegt an, gelb Spalt, rot dringt ein. „Standfestigkeit“ zeigt Schwerpunkt und Standfläche und ab welcher Neigung ein Modell kippt. „Filament &amp; Kosten“ schätzt Gramm, Meter und Preis (gesamt und je Platte).</li>
             <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Auf Fläche legen“; für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
-            <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“.</li>
+            <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“. „Montageanleitung“ druckt Bild mit Nummern, Stückliste und Schritte (auch als PDF).</li>
           </ol>
           <h3>Teileliste</h3>
           <dl class="keys">

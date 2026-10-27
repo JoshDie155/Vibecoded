@@ -39,6 +39,7 @@ import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, type PocketSpec, pocketPrev
 import { type EmbossMode, type EmbossPlace, type EmbossResult, type EmbossSpec, bvhSurface, embossPreview } from './io/emboss';
 import { type FontName, type Outline, svgOutline, textOutline } from './text';
 import { labelSpot } from './math/labelspot';
+import { groupIdentical, layoutBalloons } from './math/sheet';
 import { brushPaint, carryPaint, decodePaint, paintStates, solidPaint, triangleDistance } from './io/paint';
 import { clearanceLabel } from './io/testpiece';
 import type { BoolOp } from './io/boolean';
@@ -8032,6 +8033,313 @@ function replaceGeometry(old: Part, positions: Float32Array, extras?: Partial<Pi
   for (const j of joints) mergedTargets.delete(j);
   return fresh;
 }
+
+// ---------------------------------------------------------------- Montageanleitung
+
+/**
+ * Montageanleitung zum Ausdrucken (oder als PDF): ein Bild der Teile – auf Wunsch auseinandergezogen wie in
+ * der Explosionsansicht, aus der Blickrichtung des 3D-Fensters – mit nummerierten Ballons, dazu die
+ * Stückliste (gleiche Teile zusammengefasst) und die Schritte aus den Verbindungen.
+ */
+const sheetDialog = document.getElementById('sheet') as HTMLDialogElement;
+const sheetExplode = document.getElementById('sheetExplode') as HTMLInputElement;
+const sheetTitle = document.getElementById('sheetTitle') as HTMLInputElement;
+const sheetImg = document.getElementById('sheetImg') as HTMLImageElement;
+let sheetCanvas: HTMLCanvasElement | null = null;
+
+/** Teilearten: gleiche Teile bekommen dieselbe Nummer. */
+function sheetTypes(shown: Part[]): Part[][] {
+  return groupIdentical(shown.map((p) => {
+    const { m, dims } = massOf(p);
+    return { tris: positionsOf(p).length / 9, volume: m.volume, dims };
+  })).map((g) => g.map((k) => shown[k]));
+}
+
+/**
+ * Bild der Teile (weißer Grund) mit Ballons. Die Teile werden nur für dieses Bild auseinandergezogen und
+ * gleich wieder zurückgesetzt; der Ankerpunkt jedes Ballons liegt auf einer sichtbaren Stelle des Teils.
+ */
+function sheetImage(shown: Part[], types: Part[][], exploded: boolean, W = 1400, H = 880): HTMLCanvasElement {
+  const noOf = new Map<Part, number>();
+  types.forEach((t, i) => t.forEach((p) => noOf.set(p, i + 1)));
+  // Weiter auseinander als in der Ansicht: Zapfen und Bohrungen sollen frei liegen
+  const offsets = exploded ? explodeOffsets(1.3) : new Map<Part, THREE.Vector3>();
+  const move = (sign: number) => {
+    for (const [p, d] of offsets) {
+      p.mesh.matrix.premultiply(new THREE.Matrix4().makeTranslation(sign * d.x, sign * d.y, sign * d.z));
+      p.mesh.matrixWorldNeedsUpdate = true;
+      p.mesh.updateMatrixWorld(true);
+    }
+  };
+  const S = 2;
+  const pixels = new Uint8Array(W * S * H * S * 4);
+  const anchors: { part: Part; x: number; y: number }[] = [];
+  const hidden: THREE.Object3D[] = [];
+  const clip = renderer.localClippingEnabled;
+  const clear = renderer.getClearColor(new THREE.Color());
+  const alpha = renderer.getClearAlpha();
+  const rt = new THREE.WebGLRenderTarget(W * S, H * S, { colorSpace: THREE.SRGBColorSpace, stencilBuffer: true });
+  const cam = new THREE.PerspectiveCamera(30, W / H, 0.1, 10);
+  move(1);
+  try {
+    const box = new THREE.Box3();
+    for (const p of shown) box.union(new THREE.Box3().setFromObject(p.mesh));
+    const c = box.getCenter(new THREE.Vector3());
+    const r = Math.max(1, box.getSize(new THREE.Vector3()).length() / 2);
+    cam.near = r / 50;
+    cam.far = r * 50;
+    // Blickrichtung und „oben“ wie im 3D-Fenster
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    cam.up.copy(new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion));
+    cam.position.copy(c).addScaledVector(dir, (r / Math.sin(THREE.MathUtils.degToRad(15))) * 1.02);
+    cam.lookAt(c);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    // Ausschnitt eng um die Teile, mit Rand für die Ballons
+    const lo = new THREE.Vector2(Infinity, Infinity), hi = new THREE.Vector2(-Infinity, -Infinity);
+    const v = new THREE.Vector3();
+    for (const p of shown) {
+      const pos = p.mesh.geometry.getAttribute('position');
+      const step = Math.max(1, Math.floor(pos.count / 20000));
+      for (let i = 0; i < pos.count; i += step) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(p.mesh.matrixWorld).project(cam);
+        lo.set(Math.min(lo.x, v.x), Math.min(lo.y, -v.y));
+        hi.set(Math.max(hi.x, v.x), Math.max(hi.y, -v.y));
+      }
+    }
+    const cw = ((hi.x - lo.x) / 2) * W, ch = ((hi.y - lo.y) / 2) * H;
+    const sw = Math.max(cw, (ch * W) / H, 1) / 0.74, sh = (sw * H) / W;
+    const cx = (((lo.x + hi.x) / 2 + 1) / 2) * W, cy = (((lo.y + hi.y) / 2 + 1) / 2) * H;
+    cam.setViewOffset(W, H, cx - sw / 2, cy - sh / 2, sw, sh);
+    cam.add(sun.clone());
+    scene.add(cam);
+    for (const o of scene.children) {
+      if (o === cam || (o as THREE.Light).isLight || parts.some((p) => p.mesh === o)) continue;
+      if (o.visible) { o.visible = false; hidden.push(o); }
+    }
+    for (const p of parts) if (p.mesh.visible && !shown.includes(p)) { p.mesh.visible = false; hidden.push(p.mesh); }
+    renderer.localClippingEnabled = false;
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0xffffff, 1);
+    renderer.clear();
+    renderer.render(scene, cam);
+    renderer.readRenderTargetPixels(rt, 0, 0, W * S, H * S, pixels);
+    // Anker: sichtbare Stelle möglichst nahe der Mitte des Teils im Bild
+    const ray = new THREE.Raycaster() as THREE.Raycaster & { firstHitOnly?: boolean };
+    ray.firstHitOnly = true;
+    const meshes = shown.map((p) => p.mesh);
+    for (const p of shown) {
+      const mid = partBox(p).getCenter(new THREE.Vector3()).project(cam);
+      const pos = p.mesh.geometry.getAttribute('position');
+      const step = Math.max(1, Math.floor(pos.count / 400));
+      const cands: THREE.Vector3[] = [];
+      for (let i = 0; i < pos.count; i += step) cands.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(p.mesh.matrixWorld).project(cam));
+      cands.sort((a, b) => Math.hypot(a.x - mid.x, a.y - mid.y) - Math.hypot(b.x - mid.x, b.y - mid.y));
+      let at = mid;
+      for (const q of cands.slice(0, 60)) {
+        // Etwas zur Mitte hin: nicht genau auf der Kante
+        const t = new THREE.Vector2(q.x + (mid.x - q.x) * 0.15, q.y + (mid.y - q.y) * 0.15);
+        ray.setFromCamera(t, cam);
+        const hit = ray.intersectObjects(meshes, false)[0];
+        if (hit?.object === p.mesh) { at = hit.point.clone().project(cam); break; }
+      }
+      anchors.push({ part: p, x: ((at.x + 1) / 2) * W, y: ((1 - at.y) / 2) * H });
+    }
+  } finally {
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(clear, alpha);
+    renderer.localClippingEnabled = clip;
+    for (const o of hidden) o.visible = true;
+    scene.remove(cam);
+    rt.dispose();
+    move(-1);
+  }
+  // Zeilen umdrehen, verkleinern
+  const big = document.createElement('canvas');
+  big.width = W * S;
+  big.height = H * S;
+  const img = new ImageData(W * S, H * S);
+  const row = W * S * 4;
+  for (let y = 0; y < H * S; y++) img.data.set(pixels.subarray((H * S - 1 - y) * row, (H * S - y) * row), y * row);
+  big.getContext('2d')!.putImageData(img, 0, 0);
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  const g = out.getContext('2d')!;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(big, 0, 0, W, H);
+  // Ballons: je Teil einer – bei mehr als drei gleichen nur einer mit „× Anzahl“
+  const R = 17;
+  const list = anchors.filter((a) => {
+    const t = types[noOf.get(a.part)! - 1];
+    return t.length <= 3 || t[0] === a.part;
+  });
+  const pts = layoutBalloons(list, { x: W / 2, y: H / 2 }, W, H, R);
+  g.lineWidth = 1.6;
+  g.strokeStyle = '#333';
+  g.fillStyle = '#333';
+  list.forEach((a, i) => {
+    g.beginPath();
+    g.moveTo(a.x, a.y);
+    g.lineTo(pts[i].x, pts[i].y);
+    g.stroke();
+    g.beginPath();
+    g.arc(a.x, a.y, 3, 0, 2 * Math.PI);
+    g.fill();
+  });
+  list.forEach((a, i) => {
+    const no = noOf.get(a.part)!;
+    const n = types[no - 1].length;
+    g.beginPath();
+    g.arc(pts[i].x, pts[i].y, R, 0, 2 * Math.PI);
+    g.fillStyle = '#fff';
+    g.fill();
+    g.lineWidth = 2.2;
+    g.strokeStyle = '#222';
+    g.stroke();
+    g.fillStyle = '#111';
+    g.font = `700 ${no > 99 ? 13 : 16}px system-ui, sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(String(no), pts[i].x, pts[i].y + 1);
+    if (n > 3) {
+      g.font = '600 13px system-ui, sans-serif';
+      g.textAlign = 'left';
+      const label = `× ${n}`;
+      const tw = g.measureText(label).width;
+      g.fillStyle = '#fff';
+      g.fillRect(pts[i].x + R + 2, pts[i].y - 9, tw + 6, 18);
+      g.fillStyle = '#111';
+      g.fillText(label, pts[i].x + R + 5, pts[i].y + 1);
+    }
+  });
+  return out;
+}
+
+/** Schritte aus den Verbindungen: vom Basisteil aus in der Reihenfolge, in der die Teile angesetzt werden. */
+function sheetSteps(shown: Part[], noOf: Map<Part, number>): string[] {
+  const tag = (p: Part) => `<span class="no">${noOf.get(p) ?? '?'}</span> ${esc(p.name)}`;
+  const steps: string[] = [];
+  const done = new Set<number>();
+  const used = joints.filter((j) => j.applied && j.fixedSide && j.a !== null && j.b !== null && j.status?.kind !== 'err');
+  for (const seed of [baseId, ...parts.map((p) => p.id)]) {
+    if (seed === null || done.has(seed)) continue;
+    done.add(seed);
+    const queue = [seed];
+    for (let q = 0; q < queue.length; q++) {
+      const cur = queue[q];
+      for (const j of used) {
+        const fixed = j.fixedSide === 'a' ? j.a : j.b;
+        const moving = (j.fixedSide === 'a' ? j.b : j.a)!;
+        if (fixed !== cur || done.has(moving)) continue;
+        done.add(moving);
+        queue.push(moving);
+        const pm = getPart(moving), pf = getPart(cur);
+        if (!pm || !pf || !shown.includes(pm) || !shown.includes(pf)) continue;
+        const fm = (j.fixedSide === 'a' ? j.fb : j.fa)[0];
+        const ff = (j.fixedSide === 'a' ? j.fa : j.fb)[0];
+        // Zapfen in eine Bohrung, Bohrung auf einen Zapfen, sonst Fläche an Fläche
+        const pin = (f: Feature | undefined, hole: boolean) => f?.kind === 'cylinder' && f.hole === hole;
+        const word = pin(fm, false) && pin(ff, true) ? 'in' : pin(fm, true) && pin(ff, false) ? 'auf' : 'an';
+        const how = fm && ff ? ` – ${describeFeature(fm)} ${word} ${describeFeature(ff)}` : ' – an den markierten Stellen';
+        steps.push(`${tag(pm)} ${word} ${tag(pf)} setzen${how}.`);
+      }
+    }
+  }
+  // Zerschnittene / zerteilte Teile: Dübel bzw. Schnappstifte und die Stücke
+  const kinds = [['Dübel', 'Dübel in die Bohrungen stecken (bei Bedarf mit etwas Leim)'], ['Schnappstift', 'Schnappstifte in die Bohrungen drücken, bis sie einrasten']] as const;
+  for (const [word, text] of kinds) {
+    const list = shown.filter((p) => new RegExp(` ${word} \\d+$`).test(p.name));
+    if (!list.length) continue;
+    const nos = [...new Set(list.map((p) => noOf.get(p)!))];
+    steps.push(`${text}: ${nos.map((n) => `<span class="no">${n}</span>`).join(' ')} (${list.length}×).`);
+  }
+  const pieces = shown.filter((p) => /\s\d+\/\d+$/.test(p.name) || /\((oben|unten)\)$/.test(p.name));
+  if (pieces.length > 1) steps.push(`Die Stücke ${pieces.map((p) => tag(p)).join(', ')} zusammenstecken – so, wie sie im Ganzen lagen.`);
+  return steps;
+}
+
+function renderSheet() {
+  const shown = parts.filter((p) => p.visible);
+  if (!shown.length) return;
+  const types = sheetTypes(shown);
+  const noOf = new Map<Part, number>();
+  types.forEach((t, i) => t.forEach((p) => noOf.set(p, i + 1)));
+  sheetCanvas = sheetImage(shown, types, sheetExplode.checked);
+  sheetImg.src = sheetCanvas.toDataURL('image/png');
+  const fil = filamentList();
+  const rows = types.map((t, i) => {
+    const p = t[0];
+    const s = partBox(p).getSize(new THREE.Vector3());
+    const e = estimateOf([p]);
+    const color = hexOf(p);
+    const slot = fil.indexOf(color) + 1;
+    const names = [...new Set(t.map((q) => q.name))];
+    return `<tr><td><span class="no">${i + 1}</span></td><td class="num">${t.length}×</td>`
+      + `<td>${esc(names[0])}${names.length > 1 ? ` <small>u. a. ${esc(names.slice(1, 3).join(', '))}${names.length > 3 ? ' …' : ''}</small>` : ''}</td>`
+      + `<td class="num">${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)}</td>`
+      + `<td><span class="dot" style="--c:${color}"></span> ${slot ? `Filament ${slot}` : ''}${p.paint?.paint_color?.some(Boolean) ? ' + Bemalung' : ''}</td>`
+      + `<td class="num">${gramText(e.grams * t.length)} g</td></tr>`;
+  });
+  const all = estimateOf(shown);
+  document.getElementById('sheetParts')!.innerHTML = `<thead><tr><th>Nr.</th><th class="num">Anzahl</th><th>Teil</th><th class="num">Maße (mm, wie gelegt)</th><th>Filament</th><th class="num">≈ Gewicht</th></tr></thead><tbody>${rows.join('')}</tbody>`;
+  document.getElementById('sheetMeta')!.textContent = [
+    new Date().toLocaleDateString('de-DE'),
+    `${shown.length} Teil${shown.length === 1 ? '' : 'e'} (${types.length} verschiedene)`,
+    `≈ ${gramText(all.grams)} g ${material().label}`,
+    currentPrinter().label,
+  ].join(' · ');
+  const steps = sheetSteps(shown, noOf);
+  document.getElementById('sheetSteps')!.innerHTML = steps.length
+    ? steps.map((s) => `<li>${s}</li>`).join('')
+    : '<li>Keine Verbindungen angelegt – die Lage der Teile zeigt das Bild.</li>';
+}
+
+function openSheet() {
+  if (!parts.some((p) => p.visible)) { toast('Keine sichtbaren Teile.'); return; }
+  if (!sheetTitle.value.trim()) sheetTitle.value = projectName();
+  sheetExplode.disabled = !explodeOffsets(0.8).size;
+  if (sheetExplode.disabled) sheetExplode.checked = false;
+  if (!sheetDialog.open) sheetDialog.showModal();
+  renderSheet();
+}
+
+/** Drucken: nur die Seite (der Titel als Text), danach wieder der Dialog. */
+function printSheet() {
+  const area = document.getElementById('printArea')!;
+  const page = document.getElementById('sheetPage')!.cloneNode(true) as HTMLElement;
+  page.removeAttribute('id');
+  const h = document.createElement('h1');
+  h.className = 'sheet-title';
+  h.textContent = sheetTitle.value;
+  page.querySelector('.sheet-title')!.replaceWith(h);
+  area.replaceChildren(page);
+  document.body.classList.add('print-sheet');
+  sheetDialog.close();
+  const done = () => {
+    window.removeEventListener('afterprint', done);
+    document.body.classList.remove('print-sheet');
+    area.replaceChildren();
+    if (!sheetDialog.open) sheetDialog.showModal();
+  };
+  window.addEventListener('afterprint', done);
+  const title = document.title;
+  document.title = sheetTitle.value || title;
+  window.print();
+  document.title = title;
+}
+
+document.getElementById('sheetBtn')!.addEventListener('click', openSheet);
+sheetExplode.addEventListener('change', renderSheet);
+document.getElementById('sheetPrint')!.addEventListener('click', printSheet);
+document.getElementById('sheetPng')!.addEventListener('click', () => {
+  const name = sheetTitle.value.replace(/[\\/:*?"<>|–—]+/g, ' ').replace(/\s+/g, ' ').trim() || projectName();
+  sheetCanvas?.toBlob((b) => { if (b) void download(b, `${name} Montage.png`); }, 'image/png');
+});
+document.getElementById('sheetClose')!.addEventListener('click', () => sheetDialog.close());
+sheetDialog.addEventListener('click', (e) => {
+  if (e.target === sheetDialog) sheetDialog.close();
+});
 
 // ---------------------------------------------------------------- Hilfe
 

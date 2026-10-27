@@ -103,7 +103,8 @@ export async function download(blob: Blob, name: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
-  document.body.appendChild(a);
+  // Hinter einem offenen Dialog ist die Seite „inert“ – dort würde der Dateiname nicht übernommen
+  (document.querySelector('dialog[open]') ?? document.body).appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
