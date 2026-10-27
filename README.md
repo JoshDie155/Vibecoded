@@ -185,7 +185,10 @@ Netz; Strg+Z macht es rückgängig.
 **Toleranz-Test** (links unter den Beispielen): erzeugt eine Platte mit Löchern in steigendem Spiel (0,1 bis
 0,4 mm, beschriftet) und einen Zapfen mit Griff – beides drucken, den Zapfen der Reihe nach in die Löcher
 stecken; das erste Loch, in das er ohne Gewalt ganz hineingeht, nennt das passende Spiel für deinen Drucker.
-Unter „Mein Spiel" gespeichert, nehmen Zerschneiden und Zerteilen es als Standard.
+Unter „Mein Spiel" gespeichert, gilt es für den gewählten Drucker und das Material unter „Filament & Kosten"
+(z. B. P2S mit PLA anders als H2C mit PETG): Zerschneiden, Zerteilen und Schwalbenschwanz nehmen es als
+Standard, die Passung bekommt einen Knopf „Mein Spiel" (Zapfen und Bohrungen um das doppelte Spiel, Flächen
+um das einfache). Ohne eigene Messung gilt 0,2 mm.
 **Aussparungen** (Rechtsklick › „Aussparung hier …" oder Taste E und auf die Stelle klicken): Tasche für einen
 Scheibenmagneten (5 × 2 bis 20 × 3 mm), Loch für einen Gewindeeinsatz zum Einschmelzen (M2–M5, übliche
 Maße – mit dem Datenblatt abgleichen), Schraubenloch mit Zylinder- oder Senkkopf (M2–M6), Sechskant-Tasche

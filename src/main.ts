@@ -3823,6 +3823,7 @@ function changePrinter(id: string) {
   if (parts.length) relayoutPlates(plateTotal, (i) => i, from);
   renderAll();
   if (splitTarget) renderSplit();
+  applyMyClearance();
 }
 bambuPrinter.addEventListener('change', () => changePrinter(bambuPrinter.value));
 
@@ -5696,8 +5697,23 @@ const tolDia = document.getElementById('tolDia') as HTMLInputElement;
 const tolList = document.getElementById('tolList') as HTMLInputElement;
 const tolMine = document.getElementById('tolMine') as HTMLInputElement;
 
-/** Gespeichertes eigenes Spiel (oder 0,2 mm). */
+const tolFor = document.getElementById('tolFor')!;
+/** Eigenes Spiel je Drucker und Material (z. B. „P2S|petg“), mit dem Testkörper ermittelt. */
+const CLEAR_KEY = 'partjoin.clearances';
+const clearKey = () => `${bambuPrinter.value}|${matPrefs.kind}`;
+function savedClearances(): Record<string, number> {
+  try {
+    const v = JSON.parse(localStorage.getItem(CLEAR_KEY) ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Spiel für Drucker und Material; sonst das allgemein gespeicherte (ältere Fassung), sonst 0,2 mm. */
 function myClearance(): number {
+  const own = savedClearances()[clearKey()];
+  if (typeof own === 'number' && own >= 0 && own < 2) return own;
   try {
     const v = Number(localStorage.getItem('partjoin.clearance'));
     return v > 0 && v < 2 ? v : 0.2;
@@ -5705,11 +5721,13 @@ function myClearance(): number {
     return 0.2;
   }
 }
+const clearanceFor = () => `${currentPrinter().label} · ${material().label}`;
 function applyMyClearance() {
   const c = String(myClearance());
   cutGap.value = c;
   splitGap.value = c;
   tolMine.value = clearanceLabel(myClearance());
+  tolFor.textContent = `für ${clearanceFor()}${savedClearances()[clearKey()] === undefined ? ' (noch nicht gemessen)' : ''}`;
 }
 
 const parseList = (s: string) => s.split(/[\s;]+/).map((x) => Number(x.replace(',', '.'))).filter((x) => x >= 0 && x < 2);
@@ -5756,11 +5774,10 @@ document.getElementById('tolClose')!.addEventListener('click', () => { tolBar.hi
 document.getElementById('tolSave')!.addEventListener('click', () => {
   const v = Number(tolMine.value.replace(',', '.'));
   if (!(v >= 0 && v < 2)) { toast('Bitte ein Spiel zwischen 0 und 2 mm eingeben.'); return; }
-  try { localStorage.setItem('partjoin.clearance', String(v)); } catch { /* ohne Speicher */ }
+  try { localStorage.setItem(CLEAR_KEY, JSON.stringify({ ...savedClearances(), [clearKey()]: v })); } catch { /* ohne Speicher */ }
   applyMyClearance();
-  toast(`Spiel ${clearanceLabel(v)} mm gespeichert – Zerschneiden und Zerteilen nehmen es jetzt vor.`);
+  toast(`Spiel ${clearanceLabel(v)} mm für ${clearanceFor()} gespeichert – Zerschneiden, Zerteilen und die Passung nehmen es jetzt vor.`, 6000);
 });
-applyMyClearance();
 
 // ---------------------------------------------------------------- Skalieren und Spiegeln
 
@@ -6389,6 +6406,8 @@ matKind.addEventListener('change', () => {
   matPrefs.kind = matKind.value;
   showMatPrefs();
   matChanged();
+  // Spiel des neuen Materials
+  applyMyClearance();
 });
 for (const el of [matInfill, matWalls, matPrice]) {
   el.addEventListener('input', matChanged);
@@ -7314,15 +7333,19 @@ function pickFit(h: Hit) {
     fitValue.value = d.toFixed(2);
     // Zapfen dünner, Bohrung weiter
     const sign = f.hole ? 1 : -1;
-    quick.innerHTML = [0.1, 0.2, 0.3].map((x) => `<button class="ghost small" data-fit="${(d + sign * x).toFixed(2)}">${sign > 0 ? '+' : '−'}${mm2(x).replace(/0$/, '')}</button>`).join('');
+    // Mein Spiel gilt je Seite: der Durchmesser ändert sich um das Doppelte
+    const mine = 2 * myClearance();
+    quick.innerHTML = `<button class="ghost small" data-fit="${(d + sign * mine).toFixed(2)}" title="Spiel für ${esc(clearanceFor())} (Toleranz-Test): ${mm2(myClearance())} mm je Seite">Mein Spiel ${sign > 0 ? '+' : '−'}${mm2(mine).replace(/0$/, '')}</button>`
+      + [0.1, 0.2, 0.3].map((x) => `<button class="ghost small" data-fit="${(d + sign * x).toFixed(2)}">${sign > 0 ? '+' : '−'}${mm2(x).replace(/0$/, '')}</button>`).join('');
     help.textContent = f.hole
       ? 'Die Bohrung wird weiter – für ein Gegenstück, das sich später hineinstecken lässt.'
       : 'Der Zapfen wird dünner – üblich sind 0,1–0,3 mm, damit getrennt gedruckte Teile ineinanderpassen.';
   } else {
     document.getElementById('fitTitle')!.textContent = `Ebene Fläche · ${h.part.name}`;
     document.getElementById('fitLabel')!.textContent = 'Zurücksetzen um';
-    fitValue.value = '0.20';
-    quick.innerHTML = [0.1, 0.2, 0.3].map((x) => `<button class="ghost small" data-fit="${x.toFixed(2)}">${mm2(x).replace(/0$/, '')}</button>`).join('');
+    fitValue.value = myClearance().toFixed(2);
+    quick.innerHTML = `<button class="ghost small" data-fit="${myClearance().toFixed(2)}" title="Spiel für ${esc(clearanceFor())} (Toleranz-Test)">Mein Spiel ${mm2(myClearance()).replace(/0$/, '')}</button>`
+      + [0.1, 0.2, 0.3].map((x) => `<button class="ghost small" data-fit="${x.toFixed(2)}">${mm2(x).replace(/0$/, '')}</button>`).join('');
     help.textContent = 'Die Fläche wandert ins Teil hinein und lässt so viel Spalt zum Gegenstück (negativ: nach außen).';
   }
   fitBar.hidden = false;
@@ -7659,6 +7682,9 @@ void (async () => {
 })();
 
 // Für automatisierte Tests / Debugging
+// Spiel für Drucker und Material in die Felder (erst hier: braucht Drucker- und Materialauswahl)
+applyMyClearance();
+
 Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
     parts, joints, solveAll, renderAll, camera, controls, setPickMode, openGizmo, connect, tc, gizmoAnchor, autosave, hasWorker,

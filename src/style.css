@@ -306,6 +306,7 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #standResult .note { color: var(--muted); font-size: 11.5px; }
 #matResult .plate { color: var(--muted); }
 #matResult .note { color: var(--muted); font-size: 11.5px; }
+#tolFor { color: var(--muted); }
 #checkResult:empty { display: none; }
 #checkResult .legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); }
 #checkResult .legend span::before {
