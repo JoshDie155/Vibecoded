@@ -237,6 +237,16 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #plateBar #plateList { display: contents; }
 #plateBar button.empty { opacity: 0.55; }
 #plateBar.off #plateList, #plateBar.off #plateAdd { display: none; }
+/* Eingeschaltete Anzeigen: unter der Platten-Leiste, rechtsbündig */
+#activeBar { position: absolute; right: 6px; z-index: 3; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 220px; }
+#activeBar .achip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 2px 2px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+#activeBar .dots { display: inline-flex; gap: 2px; }
+#activeBar .dots i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+#activeBar button { padding: 0 6px; font-size: 12px; line-height: 1.4; color: var(--muted); }
+#activeBar button:hover { color: var(--accent); }
 #status .note { color: var(--text); }
 /* Unter der Werkzeugleiste – auch wenn sie in zwei Zeilen umbricht (--bar-top setzt main.ts) */
 #gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #tolBar, #anaBar, #simpBar { top: var(--bar-top, 58px); font-size: 12.5px; }

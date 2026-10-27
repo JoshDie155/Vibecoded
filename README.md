@@ -86,6 +86,9 @@ und Mausaktionen.
    Ein Klick auf den Mittelpunkt eines gewählten Kreises nimmt die Mitte, Umschalt + Klick einen beliebigen
    Punkt; ein weiterer Klick ersetzt das zweite Merkmal, ein Klick auf ein gewähltes wählt es ab. Entf bzw.
    „Neu" beginnt von vorn, Esc nimmt ein Merkmal zurück und beendet ohne Auswahl das Messen.
+   **Was gerade an ist**, steht rechts unter den Druckplatten: Werkzeug, Maße, Überhänge & Wände,
+   Standfestigkeit, Passungsprüfung, Schnitt, Explosion – mit Farblegende und ✕ zum Ausschalten. Die Leisten
+   oben stapeln sich untereinander, wenn mehrere offen sind.
    **Maße** (oben „Maße", Taste D): Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile – als
    Bemaßung im Bild (X rot, Y grün, Z blau), immer an den Kanten zur Kamera; was fast in Blickrichtung liegt
    (z. B. die Höhe in der Draufsicht), fällt weg.

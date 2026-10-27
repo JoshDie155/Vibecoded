@@ -457,6 +457,8 @@ renderer.setAnimationLoop(() => {
   placeMeasureLabels();
   placeLabelList(standLabelAt);
   placeLabelList(dimLabelAt, true);
+  renderActive();
+  layoutBars();
 });
 
 /** Vier Pfeile: Teil frei bewegen */
@@ -7869,6 +7871,97 @@ void (async () => {
 })();
 
 // Für automatisierte Tests / Debugging
+// ---------------------------------------------------------------- Aktive Anzeigen (rechts)
+
+/**
+ * Übersicht am rechten Rand: was gerade eingeschaltet ist (Werkzeug, Maße, Überhänge, Standfestigkeit,
+ * Passungsprüfung, Schnitt, Explosion) – mit Farblegende und ✕ zum Ausschalten.
+ */
+const activeBar = document.getElementById('activeBar')!;
+const TOOL_LABEL: Record<'lay' | 'fit' | 'measure' | 'pocket', string> = { lay: 'Auf Fläche legen', fit: 'Passung', measure: 'Messen', pocket: 'Aussparung' };
+const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
+interface ActiveItem { id: string; label: string; title: string; dots?: { color: string; label: string }[]; off: () => void }
+let activeList: ActiveItem[] = [];
+let activeSig = '';
+
+function activeItems(): ActiveItem[] {
+  const out: ActiveItem[] = [];
+  if (tool) out.push({ id: 'tool', label: TOOL_LABEL[tool], title: 'Werkzeug beenden (Esc)', off: () => setTool(null) });
+  if (dimsOn) {
+    out.push({
+      id: 'dims', label: 'Maße', title: 'Maße ausblenden (D)', off: () => setDims(false),
+      dots: [{ color: DIM_COLORS.x, label: 'X' }, { color: DIM_COLORS.y, label: 'Y' }, { color: DIM_COLORS.z, label: 'Z' }],
+    });
+  }
+  if (anaOn) {
+    out.push({
+      id: 'ana', label: 'Überhänge & Wände', title: 'Druckprüfung ausblenden (U)', off: () => setAnalysis(false),
+      dots: [{ color: '#e5484d', label: 'hängt über' }, { color: '#9b5de5', label: 'zu dünn' }],
+    });
+  }
+  if (standOn) {
+    out.push({
+      id: 'stand', label: 'Standfestigkeit', title: 'Standfestigkeit ausblenden', off: () => standBtn.click(),
+      dots: [{ color: STAND_COLORS.ok, label: 'sicher' }, { color: STAND_COLORS.tight, label: 'knapp' }, { color: STAND_COLORS.tips, label: 'kippt' }],
+    });
+  }
+  if (checkOn) {
+    out.push({
+      id: 'check', label: 'Passung prüfen', title: 'Prüfung ausblenden', off: () => document.getElementById('checkBtn')!.click(),
+      dots: [{ color: hex(CHECK_COLORS.touch), label: 'liegt an' }, { color: hex(CHECK_COLORS.gap), label: 'Spalt' }, { color: hex(CHECK_COLORS.pen), label: 'dringt ein' }],
+    });
+  }
+  if (section) out.push({ id: 'section', label: `Schnitt ${'XYZ'[section.axis]}`, title: 'Schnittansicht beenden (C)', off: () => setSection(false) });
+  if (explode > 0 || explodeAnim?.to) out.push({ id: 'explode', label: 'Explosion', title: 'Explosionsansicht beenden (X)', off: () => setExplode(0) });
+  return out;
+}
+
+/** Jedes Bild: neu aufbauen, wenn sich etwas geändert hat; immer unter die Platten-Leiste. */
+function renderActive() {
+  const items = activeItems();
+  const sig = items.map((i) => `${i.id}:${i.label}`).join('|');
+  if (sig !== activeSig) {
+    activeSig = sig;
+    activeList = items;
+    activeBar.hidden = !items.length;
+    activeBar.innerHTML = items.map((i, k) => `<div class="achip">${i.dots ? `<span class="dots">${i.dots.map((d) => `<i style="background:${d.color}" title="${esc(d.label)}"></i>`).join('')}</span>` : ''}<span>${esc(i.label)}</span><button class="icon" data-active="${k}" title="${esc(i.title)}" aria-label="${esc(i.title)}">✕</button></div>`).join('');
+  }
+  if (!items.length) return;
+  const v = view.getBoundingClientRect();
+  const pb = plateBar.getBoundingClientRect();
+  const top = (pb.height ? pb.bottom : v.top + 122) - v.top + 8;
+  if (activeBar.style.top !== `${top}px`) activeBar.style.top = `${top}px`;
+}
+activeBar.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-active]');
+  if (b) activeList[Number(b.dataset.active)]?.off();
+});
+
+/**
+ * Leisten oben (Messen, Passung, Druckprüfung …) liegen sonst alle an derselben Stelle: sichtbare
+ * untereinander stapeln und neben der Übersicht rechts enden lassen. Jedes Bild, nur bei Änderungen.
+ */
+const TOP_BARS = ['gizmoBar', 'fitBar', 'measureBar', 'scaleBar', 'cutBar', 'splitBar', 'pocketBar', 'tolBar', 'anaBar', 'simpBar']
+  .map((id) => document.getElementById(id)!);
+let barsSig = '';
+function layoutBars() {
+  const shown = TOP_BARS.filter((b) => !b.hidden);
+  const a = activeBar.hidden ? null : activeBar.getBoundingClientRect();
+  const sig = `${shown.map((b) => `${b.id}:${b.offsetHeight}`).join(',')}|${a ? `${Math.round(a.left)},${Math.round(a.top)},${Math.round(a.bottom)}` : ''}|${view.style.getPropertyValue('--bar-top')}`;
+  if (sig === barsSig) return;
+  barsSig = sig;
+  const v = view.getBoundingClientRect();
+  let top = parseFloat(view.style.getPropertyValue('--bar-top')) || 58;
+  for (const b of TOP_BARS) if (b.hidden) { b.style.top = ''; b.style.maxWidth = ''; }
+  for (const b of shown) {
+    b.style.top = `${top}px`;
+    // Reicht die Leiste bis zur Übersicht rechts, endet sie davor
+    const overlaps = a && top < a.bottom - v.top && top + b.offsetHeight > a.top - v.top;
+    b.style.maxWidth = overlaps ? `${Math.max(240, a!.left - v.left - b.offsetLeft - 12)}px` : '';
+    top += b.offsetHeight + 6;
+  }
+}
+
 // Spiel für Drucker und Material in die Felder (erst hier: braucht Drucker- und Materialauswahl)
 applyMyClearance();
 
