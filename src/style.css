@@ -436,6 +436,7 @@ kbd {
 /* Kontextmenü */
 #ctxMenu {
   position: fixed; z-index: 50; min-width: 220px; max-width: 320px; padding: 4px;
+  max-height: calc(100vh - 8px); overflow-y: auto; overscroll-behavior: contain;
   background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 9px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 0.22); font-size: 13px;
 }
