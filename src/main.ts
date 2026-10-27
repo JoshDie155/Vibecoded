@@ -13,6 +13,7 @@ import { type MFeature, type MeasureModel, centerOf, featureAt, measureBetween, 
 import { checkRange, finishCheck, newAccumulator, typicalGap } from './math/check';
 import { findCandidateFaces } from './math/segment';
 import { splitLoosePieces } from './math/components';
+import { type MassProps, type Material, type PrintEstimate, type PrintSettings, MATERIALS, massProps, printEstimate } from './math/mass';
 import { candidatePairs, placePlanePair } from './math/suggest';
 import { contactScore } from './math/scan';
 import type { FreeMotion } from './math/motion';
@@ -978,7 +979,7 @@ function checkHealth(p: Part) {
     if (p.health || !parts.includes(p)) return;
     compute('meshHealth', { positions: positionsOf(p) }).then((h) => {
       p.health = h;
-      if (parts.includes(p) && !h.closed) { renderParts(); renderStatus(); }
+      if (parts.includes(p) && !h.closed) { renderParts(); renderStatus(); renderMaterial(); }
     }).catch(() => { /* ohne Prüfung */ });
   }, 50);
 }
@@ -3363,6 +3364,7 @@ function renderAll() {
   renderHint();
   drawBed();
   renderStatus();
+  renderMaterial();
   // Maße folgen bewegten oder geänderten Teilen
   if (tool === 'measure') renderMeasure();
   if (scaleTarget) renderScaleBar(true);
@@ -6333,11 +6335,126 @@ function renderStatus() {
   if (p) {
     const members = unitMembers(p);
     const s = sizeOf(members);
-    bits.push(`${members.length > 1 ? `Baugruppe „${esc(p.name)}“ (${members.length} Teile)` : `„${esc(p.name)}“`}: <b>${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm</b>`);
+    bits.push(`${members.length > 1 ? `Baugruppe „${esc(p.name)}“ (${members.length} Teile)` : `„${esc(p.name)}“`}: <b>${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm</b>, ≈ ${gramText(estimateOf(members).grams)} g ${esc(material().label)}`);
   }
   const open = parts.filter((q) => q.health && !q.health.closed);
   if (open.length) bits.push(`<span class="warn">⚠ ${open.length > 1 ? `${open.length} Netze sind` : `„${esc(open[0].name)}“ ist`} nicht geschlossen – Rechtsklick › „Netz reparieren“</span>`);
   statusEl.innerHTML = bits.join(' · ') + bedWarning() + nozzleNote();
+}
+
+// ---------------------------------------------------------------- Filament und Kosten
+
+const matKind = document.getElementById('matKind') as HTMLSelectElement;
+const matInfill = document.getElementById('matInfill') as HTMLInputElement;
+const matWalls = document.getElementById('matWalls') as HTMLInputElement;
+const matPrice = document.getElementById('matPrice') as HTMLInputElement;
+const matResult = document.getElementById('matResult')!;
+const MAT_KEY = 'partjoin.material';
+/** Vorgaben für die Schätzung (Bambu Studio: 2 Wände, 15 % Füllung); Preise je Material getrennt. */
+const matPrefs: { kind: string; infill: number; walls: number; prices: Record<string, number> } = { kind: 'pla', infill: 15, walls: 2, prices: {} };
+try {
+  Object.assign(matPrefs, JSON.parse(localStorage.getItem(MAT_KEY) ?? '{}'));
+} catch {
+  // ohne gespeicherte Vorgaben
+}
+if (!MATERIALS.some((m) => m.id === matPrefs.kind)) matPrefs.kind = 'pla';
+matKind.innerHTML = MATERIALS.map((m) => `<option value="${m.id}">${esc(m.label)}</option>`).join('');
+const material = (): Material => MATERIALS.find((m) => m.id === matPrefs.kind) ?? MATERIALS[0];
+const priceOf = (m: Material) => matPrefs.prices[m.id] ?? m.price;
+
+function showMatPrefs() {
+  matKind.value = matPrefs.kind;
+  matInfill.value = String(matPrefs.infill);
+  matWalls.value = String(matPrefs.walls);
+  matPrice.value = String(priceOf(material()));
+}
+showMatPrefs();
+
+function matChanged() {
+  const num = (el: HTMLInputElement, min: number, max: number, fallback: number) => {
+    const v = Number(el.value);
+    return el.value.trim() !== '' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+  };
+  matPrefs.infill = num(matInfill, 0, 100, matPrefs.infill);
+  matPrefs.walls = Math.round(num(matWalls, 1, 10, matPrefs.walls));
+  matPrefs.prices[matPrefs.kind] = num(matPrice, 0, 10000, priceOf(material()));
+  try { localStorage.setItem(MAT_KEY, JSON.stringify(matPrefs)); } catch { /* nicht speicherbar */ }
+  renderMaterial();
+  renderStatus();
+}
+matKind.addEventListener('change', () => {
+  matPrefs.kind = matKind.value;
+  showMatPrefs();
+  matChanged();
+});
+for (const el of [matInfill, matWalls, matPrice]) {
+  el.addEventListener('input', matChanged);
+  // Ungültiges beim Verlassen durch den gültigen Wert ersetzen
+  el.addEventListener('change', showMatPrefs);
+}
+
+/** Volumen, Oberfläche und Schwerpunkt je Netz (einmal gerechnet). */
+const massCache = new WeakMap<THREE.BufferGeometry, { m: MassProps; dims: Vec3 }>();
+function massOf(p: Part): { m: MassProps; dims: Vec3 } {
+  let c = massCache.get(p.geom);
+  if (!c) {
+    if (!p.geom.boundingBox) p.geom.computeBoundingBox();
+    const size = p.geom.boundingBox!.getSize(new THREE.Vector3());
+    c = { m: massProps(positionsOf(p)), dims: [size.x, size.y, size.z] };
+    massCache.set(p.geom, c);
+  }
+  return c;
+}
+
+const printSettings = (): PrintSettings => ({ density: material().density, infill: matPrefs.infill / 100, walls: matPrefs.walls, price: priceOf(material()) });
+
+/** Wände und Füllung eines Teils: eigene Einstellungen aus dem Bambu-Projekt, sonst die Vorgaben. */
+function settingsFor(p: Part, s: PrintSettings): PrintSettings {
+  const own = { ...p.objectSettings, ...p.settings };
+  const infill = parseFloat(own.sparse_infill_density ?? '');
+  const walls = parseInt(own.wall_loops ?? '', 10);
+  return { ...s, infill: Number.isFinite(infill) ? infill / 100 : s.infill, walls: walls > 0 ? walls : s.walls };
+}
+
+/** Summe über Teile (jedes Teil mit eigenen Wänden, wie im Slicer). */
+function estimateOf(list: Part[]): PrintEstimate & { open: boolean } {
+  const s = printSettings();
+  const sum = { plastic: 0, shell: 0, inner: 0, grams: 0, meters: 0, cost: 0, open: false };
+  for (const p of list) {
+    const { m, dims } = massOf(p);
+    const e = printEstimate(m.volume, m.area, settingsFor(p, s), dims);
+    sum.plastic += e.plastic;
+    sum.shell += e.shell;
+    sum.inner += e.inner;
+    sum.grams += e.grams;
+    sum.meters += e.meters;
+    sum.cost += e.cost;
+    if (p.health && !p.health.closed) sum.open = true;
+  }
+  return sum;
+}
+
+const gramText = (g: number) => (g < 10 ? g.toFixed(1).replace('.', ',') : Math.round(g).toLocaleString('de-DE'));
+const estimateText = (e: PrintEstimate) =>
+  `≈ <b>${gramText(e.grams)} g</b> · ${e.meters.toFixed(1).replace('.', ',')} m · ${e.cost.toFixed(2).replace('.', ',')} €`;
+
+function renderMaterial() {
+  const units = visibleUnits();
+  if (!units.length) { matResult.innerHTML = ''; return; }
+  const all = estimateOf(units.flatMap((u) => u.members));
+  const rows = [`<div>Sichtbare Teile: ${estimateText(all)}</div>`];
+  // Je Platte, wenn mehrere belegt sind
+  const byPlate = new Map<number, Part[]>();
+  for (const u of units) {
+    const i = plateOfBox(u.box).i;
+    byPlate.set(i, [...(byPlate.get(i) ?? []), ...u.members]);
+  }
+  if (byPlate.size > 1) {
+    for (const [i, list] of [...byPlate].sort((a, b) => a[0] - b[0])) rows.push(`<div class="plate">Platte ${i + 1}: ${estimateText(estimateOf(list))}</div>`);
+  }
+  const own = units.some((u) => u.members.some((p) => p.settings?.wall_loops || p.settings?.sparse_infill_density || p.objectSettings?.wall_loops || p.objectSettings?.sparse_infill_density));
+  rows.push(`<div class="note">${all.open ? '⚠ Ein Netz ist nicht geschlossen – dort ungenau. ' : ''}${own ? 'Teile mit eigenen Wänden oder eigener Füllung aus dem Bambu-Projekt rechnen damit. ' : ''}Schätzung ohne Stützen, Brim und Spülturm – genau rechnet der Slicer.</div>`);
+  matResult.innerHTML = rows.join('');
 }
 
 /** Hinweis, wenn Baugruppen nicht auf die Druckplatte passen. */

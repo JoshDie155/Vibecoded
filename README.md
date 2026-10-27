@@ -86,7 +86,13 @@ und Mausaktionen.
    Ein Klick auf den Mittelpunkt eines gewählten Kreises nimmt die Mitte, Umschalt + Klick einen beliebigen
    Punkt; ein weiterer Klick ersetzt das zweite Merkmal, ein Klick auf ein gewähltes wählt es ab. Entf bzw.
    „Neu" beginnt von vorn, Esc nimmt ein Merkmal zurück und beendet ohne Auswahl das Messen.
-   Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger.
+   Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger
+   (mit geschätztem Gewicht).
+   **Filament & Kosten**: Material (PLA, PETG, ABS, ASA, TPU, PC, PA, PLA-CF, PETG-CF), Füllung, Wände und
+   Preis je kg wählen – PartJoin schätzt Gramm, Meter Filament (1,75 mm) und Kosten aller sichtbaren Teile und
+   je Platte. Gerechnet wird wie im Slicer: Wände, Boden und Deckel voll, das Innere mit der Füllung; Teile aus
+   Bambu-Projekten mit eigenen Wänden oder eigener Füllung nutzen diese. Ohne Stützen, Brim und Spülturm –
+   genau rechnet der Slicer. Die Vorgaben bleiben im Browser gespeichert.
    **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers (mit 10-mm-Raster) liegt im Ursprung;
    rot, wenn eine Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte
    anordnen" (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf; passt nicht alles auf eine Platte,
