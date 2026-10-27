@@ -218,14 +218,18 @@ die Materialstärke dahinter und eine Warnung, wenn sie durchgehen würde. Danac
 „Zerteilen …" an (auch per Rechtsklick). PartJoin schlägt vor, wie viele gleich große Stücke je Achse nötig
 sind, damit jedes mit Rand für die Verbinder auf die Platte passt (auch um 90° gedreht); mit − / + lässt sich
 das ändern, die Schnittebenen sind rot vorgezeigt. Verbinder: Dübel (Standard – auch an senkrechten
-Schnitten gut druckbar), Zapfen oder ohne. Danach liegen die Stücke auseinandergerückt wie im Ganzen,
-höhere Lagen dahinter auf der Platte, die Dübel davor; „Auf der Platte anordnen" verteilt sie.
+Schnitten gut druckbar), Zapfen, Schwalbenschwanz, Schnapp (Schnappstifte, siehe Zerschneiden) oder ohne.
+Danach liegen die Stücke auseinandergerückt wie im Ganzen, höhere Lagen dahinter auf der Platte, die Dübel bzw.
+Schnappstifte davor; „Auf der Platte anordnen" verteilt sie.
 **Zerschneiden** (Rechtsklick › „Zerschneiden …"): teilt ein Teil an der Schnittebene in zwei – etwa wenn es
 nicht auf die Platte passt oder ohne Stützen druckbar werden soll. Die Ebene stellt man wie in der
 Schnittansicht ein (X/Y/Z, Regler, Seite); gezeigt wird nur dieses Teil aufgeschnitten. Verbinder: ohne
 (zum Kleben), **Zapfen** an der sichtbaren Hälfte mit passender Bohrung in der anderen, **Dübel**
 (Bohrungen in beiden Hälften, Dübel als eigene Teile) oder **Schwalbenschwanz** (Feder quer über den
-Querschnitt, 15° Flanken, die andere Hälfte wird seitlich aufgeschoben und hält ohne Kleber). Anzahl und ⌀ automatisch oder vorgegeben, Spiel
+Querschnitt, 15° Flanken, die andere Hälfte wird seitlich aufgeschoben und hält ohne Kleber) oder **Schnapp**
+(Bohrungen mit Hinterschnitt in beiden Hälften, geschlitzte Schnappstifte mit Widerhaken an beiden Enden als
+eigene Teile – sie liegen flach auf ihrer Abflachung, drucken so ohne Stützen und rasten beim Zusammenstecken
+ein; ab ⌀ 3 mm). Anzahl und ⌀ automatisch oder vorgegeben, Spiel
 einstellbar (Standard 0,2 mm). Die Verbinder sitzen nur dort, wo um die Bohrung genug Wand bleibt, und
 reichen nie bis auf die andere Seite durch; die Vorschau zeigt sie in der Schnittfläche. Danach liegen die
 Hälften mit der Schnittfläche nach unten nebeneinander (Zapfen nach oben), Dübel stehen daneben – alles mit

@@ -5106,7 +5106,7 @@ async function updateCutPreview() {
     m.position.copy(new THREE.Vector3(...c.center).applyMatrix4(W)).addScaledVector(n, (c.depthB - c.depthA) / 2);
     cutPreview.add(m);
   }
-  const kind = cutConnector === 'pin' ? 'Zapfen' : 'Dübel';
+  const kind = cutConnector === 'pin' ? 'Zapfen' : cutConnector === 'snap' ? 'Schnappstift' + (res.connectors.length > 1 ? 'e' : '') : 'Dübel';
   const first = res.connectors[0];
   cutHelp.textContent = cutConnector === 'dovetail'
     ? [
@@ -5120,6 +5120,7 @@ async function updateCutPreview() {
         ? `${res.connectors.length} ${kind} ⌀ ${mmc(first.diameter)} mm, Spiel ${mmc(opts.clearance)} mm, ${mmc(Math.min(...res.connectors.map((c) => Math.min(c.depthA, c.depthB))))}–${mmc(Math.max(...res.connectors.map((c) => Math.max(c.depthA, c.depthB))))} mm tief.`
         : 'Kein Platz für Verbinder.',
       cutConnector === 'pin' ? 'Die sichtbare Hälfte bekommt die Zapfen.' : '',
+      cutConnector === 'snap' ? 'Beide Hälften bekommen Bohrungen mit Hinterschnitt, die Stifte werden eigene Teile (flach liegend drucken) und rasten beim Zusammenstecken ein.' : '',
       ...res.notes,
     ].filter(Boolean).join(' ');
 }
@@ -5171,7 +5172,9 @@ async function applyCut() {
   removePart(p.id);
   const kept = addPart(`${p.name} (${halfName(k)})`, geo(ca.positions), { color, layout: W, extras: { ...extras, paint: ca.paint } });
   const other = addPart(`${p.name} (${halfName(k.clone().negate())})`, geo(cb.positions), { color, layout: W, extras: { ...extras, paint: cb.paint } });
-  const dowels = res.dowels.map((d, i) => addPart(`${p.name} Dübel ${i + 1}`, geo(d), { color, layout: W }));
+  const dowels = res.dowels.map((d, i) => addPart(`${p.name} ${cutConnector === 'snap' ? 'Schnappstift' : 'Dübel'} ${i + 1}`, geo(d), { color, layout: W }));
+  // Schnappstifte liegen auf ihrer Abflachung (Richtung in Weltkoordinaten)
+  const flat = res.dowelFlat && new THREE.Vector3(...res.dowelFlat).transformDirection(W);
   if (wasBase) baseId = kept.id;
   solveAll();
   // Zapfen und Feder stehen heraus: diese Hälfte mit der Schnittfläche nach oben
@@ -5184,7 +5187,7 @@ async function applyCut() {
     };
     turn(kept, pins ? k : k.clone().negate());
     turn(other, k);
-    for (const d of dowels) turn(d, k);
+    for (const d of dowels) turn(d, flat ?? k);
   }
   // Nebeneinander: die andere Hälfte rechts der sichtbaren, die Dübel dahinter
   solveAll();
@@ -5208,7 +5211,7 @@ async function applyCut() {
   const nc = res.connectors.length;
   const what = !nc ? '' : cutConnector === 'dovetail'
     ? ` mit ${nc > 1 ? `${nc} Schwalbenschwänzen` : 'Schwalbenschwanz'} (${mmc(res.connectors[0].diameter)} mm breit) – die obere Hälfte seitlich aufschieben`
-    : ` mit ${nc} ${cutConnector === 'pin' ? 'Zapfen' : nc > 1 ? 'Dübeln' : 'Dübel'} ⌀ ${mmc(res.connectors[0].diameter)} mm`;
+    : ` mit ${nc} ${cutConnector === 'pin' ? 'Zapfen' : cutConnector === 'snap' ? (nc > 1 ? 'Schnappstiften' : 'Schnappstift') : nc > 1 ? 'Dübeln' : 'Dübel'} ⌀ ${mmc(res.connectors[0].diameter)} mm${cutConnector === 'snap' ? ' – zum Zusammenstecken einrasten lassen' : ''}`;
   toast(`„${p.name}“ zerschnitten${what}.${lost.length ? ` ${lost.join(', ')}.` : ''}${res.notes.length ? ` ${res.notes.join(' ')}` : ''}`, 6000);
 }
 
@@ -5427,7 +5430,7 @@ const splitPreview = new THREE.Group();
 scene.add(splitPreview);
 
 /** Rand je Stück: Zapfen stehen bis zu 12 mm heraus. */
-const splitMargin = () => (splitConnector === 'pin' ? 15 : splitConnector === 'dovetail' ? 10 : 3);
+const splitMargin = () => (splitConnector === 'pin' ? 15 : splitConnector === 'dovetail' ? 10 : splitConnector === 'snap' ? 4 : 3);
 
 /** Passt das Teil (so, wie es liegt) auf die Platte – auch um 90° gedreht? */
 function fitsBed(size: THREE.Vector3, margin = 0): boolean {
@@ -5485,7 +5488,7 @@ function renderSplit() {
   (document.getElementById('splitApply') as HTMLButtonElement).disabled = total < 2;
   document.getElementById('splitHelp')!.innerHTML = `${total} Stück${total > 1 ? 'e' : ''}, je ${mmText1(piece.x)} × ${mmText1(piece.y)} × ${mmText1(piece.z)} mm`
     + (fits ? ' – jedes passt auf die Platte.' : ' – <span class="warn">so passen die Stücke noch nicht auf die Platte.</span>')
-    + (splitConnector === 'none' ? ' Ohne Verbinder (zum Kleben).' : splitConnector === 'pin' ? ' Zapfen zeigen nach +X/+Y/oben.' : splitConnector === 'dovetail' ? ' Schwalbenschwänze: die Stücke werden seitlich aufgeschoben.' : ' Dübel werden eigene Teile.');
+    + (splitConnector === 'none' ? ' Ohne Verbinder (zum Kleben).' : splitConnector === 'pin' ? ' Zapfen zeigen nach +X/+Y/oben.' : splitConnector === 'dovetail' ? ' Schwalbenschwänze: die Stücke werden seitlich aufgeschoben.' : splitConnector === 'snap' ? ' Schnappstifte werden eigene Teile (flach liegend) und rasten ein.' : ' Dübel werden eigene Teile.');
   // Schnittebenen als rote Rechtecke
   clearSplitPreview();
   const fill = new THREE.Color(0xe5484d);
@@ -5535,6 +5538,8 @@ async function applySplit() {
   const orig = positionsOf(p);
   let pieces: { positions: Float32Array; cell: number[]; source: Int32Array }[] = [{ positions: orig, cell: [0, 0, 0], source: new Int32Array(orig.length / 9).map((_, i) => i) }];
   const dowels: Float32Array[] = [];
+  /** Schnappstifte: Richtung zur Abflachung je Stift (Koordinaten des Teils). */
+  const flats: (Vec3 | undefined)[] = [];
   const notes = new Set<string>();
   splitBusy = true;
   let done = 0;
@@ -5557,6 +5562,7 @@ async function applySplit() {
         const chain = (src: Int32Array) => src.map((t) => (t >= 0 ? piece.source[t] : -1));
         next.push({ positions: r.a, cell: piece.cell, source: chain(r.aSource) }, { positions: r.b, cell: up, source: chain(r.bSource) });
         dowels.push(...r.dowels);
+        flats.push(...r.dowels.map(() => r.dowelFlat));
         done++;
       }
       pieces = next;
@@ -5602,12 +5608,14 @@ async function applySplit() {
     ));
   }
   solveAll();
-  // Dübel stehend in einer Reihe davor
+  // Dübel stehend in einer Reihe davor, Schnappstifte flach auf ihrer Abflachung
   let x = box.min.x;
   for (const [i, d] of dowels.entries()) {
-    const q = addPart(`${p.name} Dübel ${i + 1}`, geo(d), { color, layout: W });
+    const q = addPart(`${p.name} ${flats[i] ? 'Schnappstift' : 'Dübel'} ${i + 1}`, geo(d), { color, layout: W });
     const s = partBox(q).getSize(new THREE.Vector3());
-    const axis = s.x >= s.y && s.x >= s.z ? new THREE.Vector3(1, 0, 0) : s.y >= s.z ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    const f = flats[i];
+    const axis = f ? new THREE.Vector3(...f).transformDirection(W)
+      : s.x >= s.y && s.x >= s.z ? new THREE.Vector3(1, 0, 0) : s.y >= s.z ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
     const c = partBox(q).getCenter(new THREE.Vector3());
     turnUnit([q], layFlat([axis.x, axis.y, axis.z], [c.x, c.y, c.z]));
     const b = partBox(q);
@@ -5622,7 +5630,7 @@ async function applySplit() {
   solveAll();
   renderAll();
   fitView();
-  toast(`„${p.name}“ in ${pieces.length} Stücke zerteilt${dowels.length ? ` + ${dowels.length} Dübel` : ''}. „Auf der Platte anordnen“ (A) legt sie auf die Platte.${notes.size ? ` ${[...notes].join(' ')}` : ''}`, 8000);
+  toast(`„${p.name}“ in ${pieces.length} Stücke zerteilt${dowels.length ? ` + ${dowels.length} ${flats[0] ? 'Schnappstift' + (dowels.length > 1 ? 'e' : '') : 'Dübel'}` : ''}. „Auf der Platte anordnen“ (A) legt sie auf die Platte.${notes.size ? ` ${[...notes].join(' ')}` : ''}`, 8000);
 }
 
 splitBar.addEventListener('click', (e) => {

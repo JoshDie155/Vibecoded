@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { CutError, cutMesh, planConnectors, releaseCut } from '../src/io/cut';
+import { CutError, cutMesh, planConnectors, releaseCut, snapSizes } from '../src/io/cut';
 import { box, transformPositions } from './helpers/meshes';
 
 /** Volumen eines geschlossenen Netzes (Divergenzsatz). */
@@ -53,6 +53,34 @@ describe('Zerschneiden', () => {
     expect(volume(r.a)).toBeCloseTo(30 * 30 * 15 - ngon(2.65) * (depth + 0.15), 1);
     expect(volume(r.b)).toBeCloseTo(30 * 30 * 15 - ngon(2.65) * (depth + 0.15), 1);
     expect(volume(r.dowels[0])).toBeCloseTo(ngon(2.5) * (2 * depth - 0.6), 1);
+  });
+
+  it('Schnappstifte: Bohrungen mit Kammer in beiden Hälften, geschlitzter Stift mit Widerhaken und Abflachung', async () => {
+    const r = await cutMesh(box(30, 30, 30), { normal: [0, 0, 1], offset: 15, connector: 'snap', diameter: 6, clearance: 0.15 });
+    expect(r.connectors).toHaveLength(1);
+    expect(r.dowels).toHaveLength(1);
+    const { barb, slot, flat } = snapSizes(6);
+    const pin = r.dowels[0];
+    // Hälften geschlossen und ausgehöhlt: mehr weg als eine glatte Bohrung (Kammer am Grund)
+    const depth = r.connectors[0].depthB;
+    expect(volume(r.a)).toBeLessThan(30 * 30 * 15 - ngon(3.15) * (depth + 0.15) - 1);
+    expect(volume(r.b)).toBeLessThan(30 * 30 * 15 - ngon(3.15) * (depth + 0.15) - 1);
+    // Stift: steht mit den Widerhaken über die Bohrung hinaus, ist flach auf einer Seite, hat einen Schlitz
+    const ext = [0, 1, 2].map((k) => {
+      let lo = Infinity, hi = -Infinity;
+      for (let i = k; i < pin.length; i += 3) { lo = Math.min(lo, pin[i]); hi = Math.max(hi, pin[i]); }
+      return hi - lo;
+    });
+    const across = ext.slice(0, 2).sort((x, y) => x - y);
+    expect(across[0]).toBeCloseTo(2 * flat * 3, 1);
+    expect(across[1]).toBeGreaterThan(6 + 2 * barb - 0.05);
+    expect(across[1]).toBeGreaterThan(6.3 + 2 * 0.15);
+    expect(ext[2]).toBeCloseTo(2 * (depth - 0.3), 1);
+    // Weniger Volumen als ein voller abgeflachter Zylinder: der Schlitz fehlt
+    expect(volume(pin)).toBeLessThan(ngon(3) * ext[2] - slot * 2 * flat * 3 * 2);
+    // Flach liegen: Richtung der Abflachung in der Schnittebene
+    expect(r.dowelFlat).toBeDefined();
+    expect(Math.abs(r.dowelFlat![2])).toBeLessThan(1e-9);
   });
 
   it('lange Querschnitte bekommen zwei Verbinder, weit auseinander', async () => {

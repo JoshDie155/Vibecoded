@@ -1,7 +1,9 @@
 /**
  * Teile zerschneiden (boolesche Operationen mit manifold-3d): Ein geschlossener Körper wird an einer
  * Ebene in zwei Hälften geteilt – auf Wunsch mit Steckverbindern: ein Zapfen an der einen Hälfte und die
- * passende Bohrung in der anderen, oder Bohrungen in beiden für getrennt gedruckte Dübel.
+ * passende Bohrung in der anderen, Bohrungen in beiden für getrennt gedruckte Dübel, oder Schnappstifte:
+ * Bohrungen mit einer weiteren Kammer am Grund (Hinterschnitt) und geschlitzte Stifte mit Widerhaken an
+ * beiden Enden, die beim Zusammenstecken einrasten.
  *
  * Die Verbinder sitzen dort, wo der Querschnitt genug Material hat (Wandstärke um die Bohrung), und
  * reichen höchstens so tief, dass sie auf der anderen Seite nicht durchstoßen.
@@ -10,7 +12,7 @@ import type { CrossSection, Manifold, ManifoldToplevel, Mat4, SimplePolygon } fr
 import { type Vec3, cross, len, normalize } from '../math/align';
 import { loadManifold, originalIdOf, positionsOfSolid, solidOf, trackedPositions } from './union';
 
-export type Connector = 'none' | 'pin' | 'dowel' | 'dovetail';
+export type Connector = 'none' | 'pin' | 'dowel' | 'dovetail' | 'snap';
 
 export interface CutOptions {
   /** Schnittebene in den Koordinaten des Netzes: normal·x = offset. Hälfte B liegt in Richtung normal. */
@@ -44,8 +46,10 @@ export interface CutResult {
   /** Je Dreieck der Hälften: Dreieck des Ausgangsnetzes, aus dem es stammt (−1 = Schnittfläche, Verbinder). */
   aSource: Int32Array;
   bSource: Int32Array;
-  /** Getrennt gedruckte Dübel, an ihrer Stelle im Schnitt. */
+  /** Getrennt gedruckte Dübel bzw. Schnappstifte, an ihrer Stelle im Schnitt. */
   dowels: Float32Array[];
+  /** Schnappstifte: Richtung (Koordinaten des Netzes) zu ihrer flachen Seite – darauf liegend drucken. */
+  dowelFlat?: Vec3;
   connectors: Placed[];
   /** Hinweise, z. B. zu dünne Stellen ohne Verbinder. */
   notes: string[];
@@ -60,6 +64,15 @@ const WALL = 1.2;
 /** Zapfen und Dübel sind so viel kürzer als die Bohrung, damit sie nicht aufsitzen (mm). */
 const SHORTER = 0.3;
 const SEGMENTS = 40;
+
+/**
+ * Maße eines Schnappstifts mit Durchmesser dia: Widerhaken (so weit steht er über), Einführschräge davor,
+ * Schlitz (so breit, dass die Zungen um beide Widerhaken nachgeben können), Abflachung (Anteil des Radius).
+ */
+export function snapSizes(dia: number) {
+  const barb = Math.min(0.8, Math.max(0.4, 0.1 * dia));
+  return { barb, lead: 1.5 * barb, slot: Math.max(2 * barb + 0.3, 0.25 * dia), flat: 0.8 };
+}
 
 /** Ebene als z' = 0: Grundvektoren u, v in der Ebene (Rechtssystem mit n) und die Matrizen dazu. */
 function planeFrame(n: Vec3, d: number) {
@@ -198,7 +211,9 @@ function plan(solid: Manifold, positions: Float32Array, n: Vec3, d: number, opts
     while (dia > 2 && keep(comps[0].offset(-(dia / 2 + c + WALL), 'Round')).isEmpty()) dia -= 0.5;
   }
   const r = dia / 2;
-  const insets = comps.map((comp) => keep(comp.offset(-(r + c + WALL), 'Round')));
+  // Schnappstift: die Kammer am Grund ist um den Widerhaken weiter
+  const extra = opts.connector === 'snap' ? snapSizes(dia).barb : 0;
+  const insets = comps.map((comp) => keep(comp.offset(-(r + extra + c + WALL), 'Round')));
   // Wie viele Verbinder in welche Fläche
   let per = insets.map((inset) => {
     if (inset.isEmpty()) return 0;
@@ -220,16 +235,18 @@ function plan(solid: Manifold, positions: Float32Array, n: Vec3, d: number, opts
   // Tiefe je Seite: höchstens so tief, dass dahinter noch Wand bleibt – auch am Rand der Bohrung,
   // wo eine schräge Außenfläche näher sein kann als in der Mitte
   const depthAt = (x: number, y: number) => {
-    const rim = [frame.point(x, y, 0), ...Array.from({ length: 8 }, (_, k) => frame.point(x + (r + c) * Math.cos((k * Math.PI) / 4), y + (r + c) * Math.sin((k * Math.PI) / 4), 0))];
+    const rim = [frame.point(x, y, 0), ...Array.from({ length: 8 }, (_, k) => frame.point(x + (r + extra + c) * Math.cos((k * Math.PI) / 4), y + (r + extra + c) * Math.sin((k * Math.PI) / 4), 0))];
     const thick = (dir: Vec3) => Math.min(...rim.map((q) => rayDistance(positions, q, dir)));
     return [Math.min(deep, thick([-n[0], -n[1], -n[2]]) - WALL), Math.min(deep, thick(n) - WALL)];
   };
   const out: Plan['spots'] = [];
   let shallow = 0;
+  // Schnappstift: genug Tiefe für Widerhaken und federnde Zungen
+  const need = opts.connector === 'snap' ? Math.max(3, dia) : 2;
   insets.forEach((inset, i) => {
     if (!per[i]) return;
     for (const tries of spots(inset, per[i])) {
-      const hit = tries.map(([x, y]) => ({ x, y, d: depthAt(x, y) })).find((t) => t.d[0] >= 2 && t.d[1] >= 2);
+      const hit = tries.map(([x, y]) => ({ x, y, d: depthAt(x, y) })).find((t) => t.d[0] >= need && t.d[1] >= need);
       if (hit) out.push({ x: hit.x, y: hit.y, depthA: hit.d[0], depthB: hit.d[1] });
       else shallow++;
     }
@@ -373,6 +390,7 @@ export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: C
     const notes: string[] = [];
     const connectors: Placed[] = [];
     const dowels: Float32Array[] = [];
+    let dowelFlat: Vec3 | undefined;
     let A: Manifold = aSide;
     let B: Manifold = bSide;
     if (opts.connector === 'dovetail') {
@@ -394,9 +412,35 @@ export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: C
       const toolsA: Manifold[] = [];
       const toolsB: Manifold[] = [];
       const dowelTools: Manifold[] = [];
+      const snap = snapSizes(pl.dia);
+      /** Kegelstumpf entlang z von z0 bis z0 + h (Radius unten r0, oben r1). */
+      const cone = (h: number, r0: number, r1: number, z0: number, x: number, y: number) =>
+        keep(keep(wasm.Manifold.cylinder(h, r0, r1, SEGMENTS, false)).translate([x, y, z0]));
       for (const { x, y, depthA, depthB } of pl.spots) {
         connectors.push({ center: pl.frame.point(x, y, 0), diameter: pl.dia, depthA, depthB });
-        if (opts.connector === 'pin') {
+        if (opts.connector === 'snap') {
+          const { barb: e, lead, slot } = snap;
+          const La = depthA - SHORTER;
+          const Lb = depthB - SHORTER;
+          // Bohrung bis zum Grund, dort die weitere Kammer; die Schräge darüber hält den Widerhaken
+          toolsA.push(cyl(r + c, -(depthA + c), 0.5, x, y), cyl(r + c + e, -(depthA + c), -(La - lead), x, y), cone(e, r + c + e, r + c, -(La - lead), x, y));
+          toolsB.push(cyl(r + c, -0.5, depthB + c, x, y), cyl(r + c + e, Lb - lead, depthB + c, x, y), cone(e, r + c, r + c + e, Lb - lead - e, x, y));
+          // Stift: Schaft, Widerhaken mit Einführschräge an beiden Enden
+          let pinS = keep(wasm.Manifold.union([
+            cyl(r, -La, Lb, x, y),
+            cone(lead, r + e, r, Lb - lead, x, y), cone(e, r, r + e, Lb - lead - e, x, y),
+            cone(lead, r, r + e, -La, x, y), cone(e, r + e, r, -La + lead, x, y),
+          ]));
+          // Schlitze von beiden Enden: die Zungen federn quer dazu (in der Ebene der Abflachungen)
+          const slitA = Math.min(La - 1, Math.max(1.5 * pl.dia, 0.7 * La));
+          const slitB = Math.min(Lb - 1, Math.max(1.5 * pl.dia, 0.7 * Lb));
+          const w = 2 * (r + e) + 2;
+          const box = (sx: number, sy: number, z0: number, z1: number) => keep(keep(wasm.Manifold.cube([sx, sy, z1 - z0], false)).translate([x - sx / 2, y - sy / 2, z0]));
+          pinS = keep(pinS.subtract(keep(wasm.Manifold.union([box(w, slot, Lb - slitB, Lb + 1), box(w, slot, -La - 1, -La + slitA)]))));
+          // Zwei Abflachungen quer zum Schlitz: liegt flach auf dem Druckbett, die Zungen biegen sich in der Schicht
+          pinS = keep(pinS.intersect(box(2 * snap.flat * r, w, -La - 1, Lb + 1)));
+          dowelTools.push(pinS);
+        } else if (opts.connector === 'pin') {
           pinsA.push(cyl(r, -depthA, depthB - SHORTER, x, y));
           toolsB.push(cyl(r + c, -0.5, depthB + c, x, y));
         } else {
@@ -410,11 +454,17 @@ export function cutWith(wasm: ManifoldToplevel, positions: Float32Array, opts: C
       if (toolsA.length) A = keep(A.subtract(place(toolsA)));
       if (toolsB.length) B = keep(B.subtract(place(toolsB)));
       for (const t of dowelTools) dowels.push(positionsOfSolid(keep(t.transform(pl.frame.fromPlane))));
+      // Abflachung der Schnappstifte zeigt in Ebenenrichtung u (x der Ebene)
+      if (opts.connector === 'snap') {
+        const o = pl.frame.point(0, 0, 0);
+        const u = pl.frame.point(1, 0, 0);
+        dowelFlat = [u[0] - o[0], u[1] - o[1], u[2] - o[2]];
+      }
     }
     const id = originalIdOf(solid);
     const ta = trackedPositions(A, id);
     const tb = trackedPositions(B, id);
-    return { a: ta.positions, b: tb.positions, aSource: ta.source, bSource: tb.source, dowels, connectors, notes };
+    return { a: ta.positions, b: tb.positions, aSource: ta.source, bSource: tb.source, dowels, dowelFlat, connectors, notes };
   } finally {
     for (const x of live) x.delete();
   }
