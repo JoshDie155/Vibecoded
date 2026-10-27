@@ -252,6 +252,8 @@ scene.add(faceGroup);
 const checkGroup = new THREE.Group();
 scene.add(checkGroup);
 let checkOn = false;
+/** Außenmaße im Bild (Taste D) */
+let dimsOn = false;
 
 const cursor = new THREE.Mesh(
   new THREE.SphereGeometry(1, 16, 12),
@@ -445,6 +447,7 @@ renderer.setAnimationLoop(() => {
   updateCube();
   placeMeasureLabels();
   placeLabelList(standLabelAt);
+  placeLabelList(dimLabelAt, true);
 });
 
 /** Vier Pfeile: Teil frei bewegen */
@@ -3098,6 +3101,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (k === 'c') setSection(!section);
+  else if (k === 'd') setDims(!dimsOn);
   else if (k === 'u') setAnalysis(!anaOn);
   else if (k === 'x') setExplode(explode > 0 || explodeAnim?.to ? 0 : 0.8);
   else if (k === 'escape' && (explode > 0 || explodeAnim?.to)) setExplode(0);
@@ -3368,6 +3372,7 @@ function renderAll() {
   renderStatus();
   renderMaterial();
   if (standOn) renderStand();
+  if (dimsOn) renderDims();
   // Maße folgen bewegten oder geänderten Teilen
   if (tool === 'measure') renderMeasure();
   if (scaleTarget) renderScaleBar(true);
@@ -6021,6 +6026,8 @@ function renderSelection() {
     renderBoolSelect(list);
   }
   drawSelection();
+  // Maße der Auswahl (sonst aller Baugruppen)
+  if (dimsOn) renderDims();
 }
 
 /** Bilden die Teile schon genau eine Gruppe? */
@@ -7095,6 +7102,96 @@ function sameMeasure(a: MPick, b: MPick): boolean {
 /** Modellgröße eines Bildschirmpixels an einem Punkt. */
 const pxAt = (p: Vec3) => (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.position.distanceTo(new THREE.Vector3(...p))) / viewHeight;
 
+// ---------------------------------------------------------------- Maße im Bild
+
+const dimGroup = new THREE.Group();
+scene.add(dimGroup);
+const dimLabels = document.createElement('div');
+dimLabels.id = 'dimLabels';
+view.appendChild(dimLabels);
+let dimLabelAt: { el: HTMLElement; at: THREE.Vector3 }[] = [];
+const dimsBtn = document.getElementById('dimsTool')!;
+const DIM_COLORS = { x: '#e5484d', y: '#30a46c', z: '#3b82f6' };
+
+/** Bildschirmabstand zweier Weltpunkte (Pixel). */
+function screenDist(a: THREE.Vector3, b: THREE.Vector3): number {
+  const pa = a.clone().project(camera);
+  const pb = b.clone().project(camera);
+  return Math.hypot((pa.x - pb.x) * renderer.domElement.clientWidth, (pa.y - pb.y) * viewHeight) / 2;
+}
+
+/** Maßlinie a–b mit Hilfslinien von den Kanten des Teils (ea, eb) und Pfeilen an den Enden. */
+function dimLine(a: THREE.Vector3, b: THREE.Vector3, ea: THREE.Vector3, eb: THREE.Vector3, axis: 'x' | 'y' | 'z', value: number) {
+  // Fast in Blickrichtung: nicht lesbar, also weglassen (z. B. die Höhe in der Draufsicht)
+  const dir = b.clone().sub(a).normalize();
+  const view = a.clone().add(b).multiplyScalar(0.5).sub(camera.position).normalize();
+  if (screenDist(a, b) < 24 || Math.abs(dir.dot(view)) > 0.94) return;
+  const color = DIM_COLORS[axis];
+  // Hilfslinien etwas über die Maßlinie hinaus
+  const over = (e: THREE.Vector3, to: THREE.Vector3) => to.clone().add(to.clone().sub(e).normalize().multiplyScalar(4 * pxAt(v3(to))));
+  const lines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([a, b, ea, over(ea, a), eb, over(eb, b)]), new THREE.LineBasicMaterial({ color, depthTest: false }));
+  dimGroup.add(lines);
+  for (const [p, d] of [[a, dir.clone().negate()], [b, dir]] as const) {
+    const len = 9 * pxAt(v3(p));
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(len * 0.32, len, 10), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+    // Spitze auf dem Endpunkt
+    cone.position.copy(p).addScaledVector(d, -len / 2);
+    dimGroup.add(cone);
+  }
+  const el = document.createElement('span');
+  el.className = `mlabel d${axis}`;
+  el.textContent = `${axis.toUpperCase()} ${mmText1(value)} mm`;
+  dimLabels.appendChild(el);
+  dimLabelAt.push({ el, at: a.clone().add(b).multiplyScalar(0.5) });
+}
+
+/** Breite, Tiefe und Höhe eines Umrisses – an den Kanten, die zur Kamera zeigen. */
+function drawDims(b: THREE.Box3) {
+  const size = b.getSize(new THREE.Vector3());
+  const c = b.getCenter(new THREE.Vector3());
+  const cam = camera.position;
+  const gap = Math.max(1, 0.08 * Math.max(size.x, size.y, size.z));
+  const y = cam.y < c.y ? b.min.y : b.max.y;
+  const sy = y === b.min.y ? -1 : 1;
+  const x = cam.x > c.x ? b.max.x : b.min.x;
+  const sx = x === b.max.x ? 1 : -1;
+  const z = b.min.z;
+  const V = (px: number, py: number, pz: number) => new THREE.Vector3(px, py, pz);
+  dimLine(V(b.min.x, y + sy * gap, z), V(b.max.x, y + sy * gap, z), V(b.min.x, y, z), V(b.max.x, y, z), 'x', size.x);
+  dimLine(V(x + sx * gap, b.min.y, z), V(x + sx * gap, b.max.y, z), V(x, b.min.y, z), V(x, b.max.y, z), 'y', size.y);
+  const g = 0.7 * gap;
+  dimLine(V(x + sx * g, y + sy * g, b.min.z), V(x + sx * g, y + sy * g, b.max.z), V(x, y, b.min.z), V(x, y, b.max.z), 'z', size.z);
+}
+
+function renderDims() {
+  disposeGroup(dimGroup);
+  dimLabels.replaceChildren();
+  dimLabelAt = [];
+  if (!dimsOn) return;
+  const sel = selectedParts().filter((p) => p.visible);
+  const boxes = sel.length ? [unitBox(sel)] : visibleUnits().map((u) => u.box);
+  for (const b of boxes) if (!b.isEmpty()) drawDims(b);
+  dimGroup.traverse((o) => { o.renderOrder = 12; o.raycast = () => {}; });
+  placeLabelList(dimLabelAt, true);
+}
+
+function setDims(on: boolean) {
+  dimsOn = on && parts.length > 0;
+  dimsBtn.classList.toggle('on', dimsOn);
+  renderDims();
+}
+dimsBtn.addEventListener('click', () => setDims(!dimsOn));
+// Kamera bewegt: Maßlinien an die Seiten zur Kamera, Pfeile in Bildschirmgröße
+let dimsRedraw = 0;
+controls.addEventListener('change', () => {
+  if (!dimsOn || dimsRedraw) return;
+  dimsRedraw = requestAnimationFrame(() => {
+    dimsRedraw = 0;
+    renderDims();
+  });
+});
+
 /** Darstellung eines Merkmals (Welt): Punkt als Kugel, Kante als Stab, Kreis als Ring, Fläche getönt. */
 function measureObject(s: MPick, color: string, emphasis = 1): THREE.Object3D {
   const f = worldOf(s);
@@ -7154,14 +7251,15 @@ function placeMeasureLabels() {
   placeLabelList(measureLabelAt);
 }
 
-function placeLabelList(list: { el: HTMLElement; at: THREE.Vector3 }[]) {
+/** center: mitten auf den Punkt (Maßzahl auf der Maßlinie), sonst darüber. */
+function placeLabelList(list: { el: HTMLElement; at: THREE.Vector3 }[], center = false) {
   if (!list.length) return;
   const w = renderer.domElement.clientWidth;
   for (const { el, at } of list) {
     const p = at.clone().project(camera);
     const hidden = p.z > 1 || p.z < -1;
     el.style.display = hidden ? 'none' : '';
-    el.style.transform = `translate(${((p.x + 1) / 2) * w}px, ${((1 - p.y) / 2) * viewHeight}px) translate(-50%, -130%)`;
+    el.style.transform = `translate(${((p.x + 1) / 2) * w}px, ${((1 - p.y) / 2) * viewHeight}px) translate(-50%, ${center ? '-50%' : '-130%'})`;
   }
 }
 

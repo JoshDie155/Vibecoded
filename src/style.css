@@ -282,12 +282,15 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #measureText .mres.xyz { color: var(--muted); font-variant-numeric: tabular-nums; }
 #measureText .help { color: var(--muted); }
 /* Maße im Bild */
-#measureLabels, #standLabels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
-#measureLabels .mlabel, #standLabels .mlabel {
+#measureLabels, #standLabels, #dimLabels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+#measureLabels .mlabel, #standLabels .mlabel, #dimLabels .mlabel {
   position: absolute; left: 0; top: 0; white-space: nowrap; font: 600 12px/1.3 system-ui, sans-serif; font-variant-numeric: tabular-nums;
   padding: 2px 6px; border-radius: 5px; color: #1d2330; background: #ffcf66; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 #measureLabels .mlabel.perp { background: #cdb4ff; }
+#dimLabels .mlabel.dx { background: #ffb3b5; }
+#dimLabels .mlabel.dy { background: #9fe3bd; }
+#dimLabels .mlabel.dz { background: #b3cdff; }
 #standLabels .mlabel.ok { background: #8fe0b4; }
 #standLabels .mlabel.tight { background: #ffd27a; }
 #standLabels .mlabel.tips { background: #ff9c9e; }

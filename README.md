@@ -86,6 +86,9 @@ und Mausaktionen.
    Ein Klick auf den Mittelpunkt eines gewählten Kreises nimmt die Mitte, Umschalt + Klick einen beliebigen
    Punkt; ein weiterer Klick ersetzt das zweite Merkmal, ein Klick auf ein gewähltes wählt es ab. Entf bzw.
    „Neu" beginnt von vorn, Esc nimmt ein Merkmal zurück und beendet ohne Auswahl das Messen.
+   **Maße** (oben „Maße", Taste D): Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile – als
+   Bemaßung im Bild (X rot, Y grün, Z blau), immer an den Kanten zur Kamera; was fast in Blickrichtung liegt
+   (z. B. die Höhe in der Draufsicht), fällt weg.
    Die **Statuszeile** unten zeigt Teile, Dreiecke, Verbindungen und die Maße der Baugruppe unter dem Zeiger
    (mit geschätztem Gewicht).
    **Standfestigkeit**: zeigt für jede Baugruppe – so, wie sie gerade steht – den Schwerpunkt (mit Lot zum
