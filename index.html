@@ -150,6 +150,10 @@
             <button data-pick="point" title="Punkte markieren, z. B. Ecken (Taste P)">Punkte</button>
             <button data-pick="brush" title="Fläche selbst bemalen: mit gedrückter Maustaste über das Teil streichen, beim Loslassen wird daraus eine Fläche (Taste B)">Pinsel</button>
           </span>
+          <span class="seg" role="group" aria-label="Rückgängig und Wiederholen">
+            <button id="undoBtn" title="Rückgängig (Strg/⌘+Z)" aria-label="Rückgängig">↶</button>
+            <button id="redoBtn" title="Wiederholen (Strg/⌘+Umschalt+Z)" aria-label="Wiederholen">↷</button>
+          </span>
           <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
           <button id="measureTool" class="ghost small" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)">Messen</button>
@@ -187,6 +191,7 @@
             <button data-pmode="brush" class="on" title="Mit gedrückter Maustaste über das Teil streichen">Pinsel</button>
             <button data-pmode="fill" title="Zusammenhängende Fläche bis zu einem Knick füllen">Füllen</button>
           </span>
+          <button id="paintErase" class="ghost small" aria-pressed="false" title="Radieren statt malen – wie Umschalt gedrückt halten (für Touch)">Radierer</button>
           <label class="small" id="paintSizeWrap" title="Durchmesser des Pinsels (Alt + Mausrad)">Größe <input type="range" id="paintSize" min="0.5" max="30" step="0.5" value="4" /> <span id="paintSizeVal"></span></label>
           <label class="small" id="paintAngleWrap" hidden title="Füllen hört an Knicken auf, die größer sind">bis Knick <input type="number" id="paintAngle" value="30" min="1" max="90" step="5" /> °</label>
           <span id="paintInfo" class="small"></span>
@@ -482,6 +487,7 @@
             <dt>Mitte/rechts ziehen</dt><dd>Ansicht verschieben, ebenfalls über den Rand hinaus</dd>
             <dt>Mausrad</dt><dd>zoomen, dorthin, wo der Zeiger steht</dd>
             <dt>Ansichtswürfel</dt><dd>oben rechts: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht dorthin, Ziehen dreht sie, ⌂ = Schrägansicht</dd>
+            <dt>Touch</dt><dd>ein Finger dreht, zwei Finger zoomen und schieben, antippen wählt; lange drücken öffnet das Menü (wie Rechtsklick, auch in der Teileliste); ↶ ↷ oben: Rückgängig/Wiederholen; beim Malen „Radierer“</dd>
             <dt><kbd>Strg/⌘</kbd> + ziehen</dt><dd>Teil (mit allem, was daran hängt) über die Platte schieben</dd>
             <dt>Pinsel</dt><dd>Maustaste halten und über die Kontaktstelle streichen</dd>
           </dl>

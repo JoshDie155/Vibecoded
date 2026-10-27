@@ -638,7 +638,7 @@ function undo() {
   }
   redoStack.push(snapshot());
   restoreSnapshot(s);
-  toast('Rückgängig gemacht · Strg/⌘+Umschalt+Z stellt es wieder her', 2200);
+  toast('Rückgängig gemacht · ↷ oder Strg/⌘+Umschalt+Z stellt es wieder her', 2200);
 }
 
 function redo() {
@@ -653,6 +653,8 @@ function redo() {
 // Jede Bedienung beginnt mit Maus oder Tastatur im Fenster, in der Seitenleiste oder mit dem Ablegen von Dateien.
 // Die Erfassung läuft vor allen anderen Handlern (auch vor dem Malen und dem Strg+Ziehen).
 const isUndoKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && ['z', 'y'].includes(e.key.toLowerCase());
+document.getElementById('undoBtn')!.addEventListener('click', () => undo());
+document.getElementById('redoBtn')!.addEventListener('click', () => redo());
 for (const id of ['view', 'panel']) {
   const el = document.getElementById(id)!;
   el.addEventListener('pointerdown', () => beginAction(), { capture: true });
@@ -2551,6 +2553,19 @@ const mmText = (x: number) => x.toFixed(x < 0.1 ? 3 : 2).replace('.', ',');
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 let downPos: { x: number; y: number } | null = null;
+/**
+ * Finger auf dem Bild (Touch, Stift): mit zwei Fingern wird gezoomt oder geschoben – das ist kein Antippen.
+ * Gezählt wird vor allen anderen Handlern.
+ */
+const touches = new Set<number>();
+let multiTouch = false;
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse') return;
+  if (!touches.size) multiTouch = false;
+  touches.add(e.pointerId);
+  if (touches.size > 1) multiTouch = true;
+}, { capture: true });
+for (const type of ['pointerup', 'pointercancel'] as const) window.addEventListener(type, (e) => { touches.delete(e.pointerId); }, { capture: true });
 
 function setNdc(e: PointerEvent | MouseEvent) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -2892,7 +2907,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (tool === 'paint') {
     cursor.visible = false;
     updateHover(null);
-    updatePaintCursor(h, e.shiftKey);
+    updatePaintCursor(h, e.shiftKey || paintErase);
     renderer.domElement.style.cursor = h ? (paintMode === 'fill' ? 'cell' : 'none') : 'default';
     return;
   }
@@ -2934,7 +2949,8 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
   downPos = null;
   if (suppressClick) { suppressClick = false; return; }
-  if (moved > 5) return; // war eine Kamerabewegung
+  if (moved > (e.pointerType === 'mouse' ? 5 : 12)) return; // war eine Kamerabewegung
+  if (e.pointerType !== 'mouse' && multiTouch) return; // zwei Finger: Zoomen/Schieben
 
   const h = pick(e);
   if (tool === 'measure') {
@@ -6745,6 +6761,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const moved = Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y);
   rightDown = null;
   if (moved > 5) return; // war ein Verschieben der Ansicht
+  contextAt(e);
+});
+
+/** Was ein Rechtsklick an dieser Stelle öffnet: Menü des Teils oder der Ansicht (Punkte werden entfernt). */
+function contextAt(e: PointerEvent) {
   const marker = markerAt(e);
   // Punkte sind klein: direkt entfernen (wie bisher); gewählte Flächen bedecken oft das ganze Teil – Menü
   if (marker?.kind === 'point') {
@@ -6755,7 +6776,51 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const h = pick(e);
   if (h) partMenu(h.part, h, e.clientX, e.clientY, marker);
   else viewMenu(e.clientX, e.clientY);
+}
+
+/**
+ * Touch: lange drücken (ohne zu ziehen) wirkt wie ein Rechtsklick – Tablets haben keinen. Werkzeuge, die den
+ * Finger selbst nehmen (Malen, Pinsel), lassen es nicht bis hierher kommen.
+ */
+const LONG_PRESS_MS = 550;
+function onLongPress(el: HTMLElement, start: (e: PointerEvent) => boolean, fire: (e: PointerEvent) => void) {
+  let press: { id: number; x: number; y: number; timer: number } | null = null;
+  const cancel = () => {
+    if (press) clearTimeout(press.timer);
+    press = null;
+  };
+  el.addEventListener('pointerdown', (e) => {
+    cancel();
+    if (e.pointerType === 'mouse' || e.button !== 0 || touches.size > 1 || !start(e)) return;
+    press = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: window.setTimeout(() => { press = null; fire(e); }, LONG_PRESS_MS) };
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (press && e.pointerId === press.id && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) cancel();
+  }, { capture: true });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave'] as const) el.addEventListener(type, (e) => { if (press && e.pointerId === press.id) cancel(); }, { capture: true });
+  el.addEventListener('pointerdown', (e) => { if (press && e.pointerId !== press.id) cancel(); }, { capture: true });
+}
+// Nicht, wenn der Finger einen Griff des Gizmos hält
+onLongPress(renderer.domElement, () => !multiTouch && !(tc.object && tc.axis), (e) => {
+  if (touches.size > 1) return;
+  suppressClick = true;
+  contextAt(e);
 });
+let listLongPressed = false;
+onLongPress(partsEl, (e) => !!(e.target as HTMLElement).closest('li[data-part]') && !(e.target as HTMLElement).closest('input, button'), (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-part]');
+  const p = li && getPart(Number(li.dataset.part));
+  if (!p) return;
+  listLongPressed = true;
+  partMenu(p, null, e.clientX, e.clientY);
+});
+// Der Klick nach dem langen Drücken wählt die Zeile nicht aus
+partsEl.addEventListener('click', (e) => {
+  if (!listLongPressed) return;
+  listLongPressed = false;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}, { capture: true });
 partsEl.addEventListener('contextmenu', (e) => {
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-part]');
   const p = li && getPart(Number(li.dataset.part));
@@ -8611,6 +8676,8 @@ const PAINT_PRESETS = ['#ffffff', '#000000', '#c12e1f', '#0a2989', '#f4ee2a', '#
 const paintExtra: string[] = [];
 let paintColor = '';
 let paintMode: 'brush' | 'fill' = 'brush';
+/** Radieren ohne Umschalttaste (Touch). */
+let paintErase = false;
 const paintCursor = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
 paintCursor.renderOrder = 13;
 paintCursor.visible = false;
@@ -8669,6 +8736,11 @@ paintBar.querySelectorAll<HTMLElement>('[data-pmode]').forEach((b) => b.addEvent
   renderHint();
 }));
 paintSize.addEventListener('input', () => renderPaintBar());
+document.getElementById('paintErase')!.addEventListener('click', (e) => {
+  paintErase = !paintErase;
+  (e.currentTarget as HTMLElement).classList.toggle('on', paintErase);
+  (e.currentTarget as HTMLElement).setAttribute('aria-pressed', String(paintErase));
+});
 document.getElementById('paintClose')!.addEventListener('click', () => setTool(null));
 paintBtn.addEventListener('click', () => setTool(tool === 'paint' ? null : 'paint'));
 
@@ -8773,11 +8845,12 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const h = pick(e);
   // Neben dem Teil: Ansicht drehen wie sonst
   if (!h) return;
-  if (!paintColor && !e.shiftKey) { toast('Wähle oben ein Filament – oder füge mit „+“ eine Farbe hinzu.'); return; }
+  const erase = e.shiftKey || paintErase;
+  if (!paintColor && !erase) { toast('Wähle oben ein Filament – oder füge mit „+“ eine Farbe hinzu.'); return; }
   e.stopImmediatePropagation();
   const p = h.part;
   const palette = [...(p.palette ?? [])];
-  const state = e.shiftKey ? 0 : paintStateFor(p, palette, paintColor);
+  const state = erase ? 0 : paintStateFor(p, palette, paintColor);
   const n = positionsOf(p).length / 9;
   const codes = p.paint?.paint_color ? [...p.paint.paint_color] : new Array<string>(n).fill('');
   paintStroke = { id: e.pointerId, part: p, codes, palette, state, last: null, changed: false };
@@ -8793,7 +8866,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (!paintStroke || e.pointerId !== paintStroke.id) return;
   e.stopImmediatePropagation();
   const h = pick(e);
-  updatePaintCursor(h, e.shiftKey);
+  updatePaintCursor(h, e.shiftKey || paintErase);
   if (h && h.part === paintStroke.part) paintTo(h);
   else paintStroke.last = null;
 }, { capture: true });

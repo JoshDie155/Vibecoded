@@ -172,6 +172,12 @@ rechte verschiebt sie – stößt der Zeiger dabei an den Fensterrand, geht es u
 wird bis zum Loslassen festgehalten; lässt der Browser das nicht zu, etwa in einer eingebetteten Vorschau,
 dreht die Ansicht weiter, solange der Zeiger am Rand bleibt), Mausrad zoomt zum Mauszeiger · Strg/⌘ + Ziehen schiebt ein Teil (mit allem, was
 daran hängt) über die Bauplatte. Nach „Verbinden" bleibt die Ansicht, wie sie ist.
+**Tablet / Touch**: ein Finger dreht die Ansicht, zwei Finger zoomen und schieben, Antippen wählt aus (wie ein
+Linksklick, mit etwas Spielraum für den Finger; nach einer Geste mit zwei Fingern wird nichts gewählt). **Lange
+drücken** öffnet das Menü wie ein Rechtsklick – im 3D-Fenster und in der Teileliste; darüber gehen auch
+Skalieren, Aussparungen, Beschriften, Bewegen usw. Oben im 3D-Fenster stehen **↶ ↷** für Rückgängig und
+Wiederholen, beim Malen ersetzt „Radierer“ die Umschalttaste. Knöpfe, Felder und Menüs werden mit dem Finger
+größer; ein Tablet im Hochformat zeigt das 3D-Fenster oben und die Seitenleiste darunter.
 **Überhänge & Wände** (Abschnitt 3 oder Taste U): färbt Flächen rot, die zu flach nach unten zeigen und
 Stützen brauchen (ab einstellbarem Winkel von der Senkrechten, Standard 45° – auf der Platte liegende und
 innere Flächen zählen nicht), und lila, wo eine Wand dünner ist als eingestellt (Standard 0,8 mm = zwei

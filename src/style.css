@@ -102,7 +102,8 @@ body {
 }
 #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
-@media (max-width: 760px) {
+/* Schmal oder Tablet hochkant: 3D-Fenster oben, Seitenleiste darunter */
+@media (max-width: 760px), (max-width: 1024px) and (orientation: portrait) and (pointer: coarse) {
   #app { flex-direction: column-reverse; height: auto; min-height: 100%; }
   #panel { width: 100%; border-right: none; border-top: 1px solid var(--line); }
   #resizer { display: none; }
@@ -517,4 +518,23 @@ kbd {
   #printArea .sheet-page { padding: 0; }
   #printArea img { break-inside: avoid; }
   #printArea tr, #printArea li { break-inside: avoid; }
+}
+
+/* Touch: langes Drücken öffnet das Menü – dabei weder Text markieren noch das Systemmenü zeigen */
+#view, .parts li { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+button, select, label, input[type='checkbox'], input[type='range'] { touch-action: manipulation; }
+#undoBtn, #redoBtn { font-size: 15px; line-height: 1; padding: 3px 10px; }
+#paintErase.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+/* Finger statt Maus: größere Knöpfe, Felder und Listenzeilen */
+@media (pointer: coarse) {
+  button, select { min-height: 36px; }
+  button.small, .small button, #toolbar .seg button { min-height: 36px; padding-left: 12px; padding-right: 12px; }
+  #undoBtn, #redoBtn { min-width: 44px; font-size: 18px; }
+  input[type='number'], input[type='text'], textarea { min-height: 34px; font-size: 16px; }
+  input[type='checkbox'] { width: 20px; height: 20px; }
+  input[type='range'] { height: 30px; }
+  .parts li { min-height: 42px; }
+  #ctxMenu button { padding: 10px 12px; font-size: 15px; }
+  #ctxMenu { max-width: min(360px, calc(100vw - 16px)); }
+  .swatch, #paintSwatches .swatch { min-width: 34px; min-height: 34px; }
 }
