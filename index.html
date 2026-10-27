@@ -151,6 +151,7 @@
           <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
           <button id="measureTool" class="ghost small" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)">Messen</button>
           <button id="paintTool" class="ghost small" title="Farben malen wie in Bambu Studio: Filament wählen und über das Teil streichen oder Flächen füllen – für mehrfarbigen Druck mit AMS oder H2C (Taste N)">Malen</button>
+          <button id="textTool" class="ghost small" title="Beschriften: Text oder Logo an der Klickstelle erhaben aufsetzen oder vertieft einlassen – folgt Rundungen (Taste W). Mehrere Teile durchnummerieren: Rechtsklick › „Nummerieren …“">Beschriften</button>
           <button id="dimsTool" class="ghost small" title="Außenmaße im Bild: Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile (Taste D)">Maße</button>
           <button id="explodeTool" class="ghost small" title="Explosionsansicht: Baugruppen auseinandergezogen zeigen – nur zum Ansehen (Taste X)">Explosion</button>
           <button id="sectionTool" class="ghost small" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)">Schnitt</button>
@@ -270,6 +271,35 @@
           <button id="pocketClose" class="ghost small">Fertig</button>
           <p class="help" id="pocketHelp"></p>
         </div>
+        <div id="textBar" hidden>
+          <strong id="textTitle">Beschriften</strong>
+          <span class="seg" role="group" aria-label="Text oder Logo">
+            <button data-tsrc="text" class="on" title="Text in einer eingebauten Schrift">Text</button>
+            <button data-tsrc="logo" title="Logo aus einer SVG-Datei (gefüllte Flächen)">Logo</button>
+            <button data-tsrc="number" title="Mehrere Teile durchnummerieren (1/7, 2/7 …) – automatisch auf der größten Fläche unten oder oben">Nummern</button>
+          </span>
+          <textarea id="textValue" data-tfor="text" rows="1" spellcheck="false" aria-label="Text" title="Zeilenumbruch mit Umschalt + Enter">PartJoin</textarea>
+          <select id="textFont" data-tfor="text number" aria-label="Schrift"><option value="bold">Fett</option><option value="regular">Normal</option></select>
+          <button id="textLogoPick" data-tfor="logo" class="ghost small" title="SVG-Datei wählen – gefüllte Flächen werden zur Form">SVG laden …</button>
+          <input type="file" id="textLogoFile" accept=".svg,image/svg+xml" hidden />
+          <label class="small" data-tfor="number" title="{n}: Nummer, {N}: Anzahl der Teile">Muster <input type="text" id="textPattern" value="{n}/{N}" /></label>
+          <label class="small" data-tfor="number" title="Erste Nummer">ab <input type="number" id="textStart" value="1" min="0" step="1" /></label>
+          <span class="seg" role="group" aria-label="Seite" data-tfor="number">
+            <button data-tside="bottom" class="on" title="Auf die größte Fläche unten (liegt auf der Platte) – nach dem Zusammenbau meist unsichtbar">Unten</button>
+            <button data-tside="top" title="Auf die größte Fläche oben">Oben</button>
+          </span>
+          <label class="small" title="Höhe der Großbuchstaben bzw. des Logos (Nummern: höchstens so groß, sonst passend zur Fläche)"><span id="textSizeLabel">Größe</span> <input type="number" id="textSize" value="8" min="1" max="300" step="0.5" /> mm</label>
+          <span class="seg" role="group" aria-label="Relief">
+            <button data-tmode="raised" class="on" title="Steht aus der Fläche heraus">Erhaben</button>
+            <button data-tmode="engraved" title="In die Fläche eingelassen">Vertieft</button>
+          </span>
+          <label class="small"><span id="textDepthLabel">Höhe</span> <input type="number" id="textDepth" value="0.6" min="0.1" max="20" step="0.1" /> mm</label>
+          <label class="small" data-tfor="text logo" title="In der Fläche drehen (gegen den Uhrzeigersinn)">Drehung <input type="number" id="textRotate" value="0" step="15" /> °</label>
+          <label class="small" title="Eigenes Filament für die Beschriftung (wird als Bemalung exportiert, z. B. für AMS oder H2C)">Farbe <select id="textColor"></select></label>
+          <button id="textApply" class="small">Einprägen</button>
+          <button id="textClose" class="ghost small">Fertig</button>
+          <p class="help" id="textHelp"></p>
+        </div>
         <div id="splitBar" hidden>
           <strong id="splitTitle"></strong>
           <span class="row counts">
@@ -371,6 +401,7 @@
             <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder links „Alles automatisch verbinden“.</li>
             <li><b>Nachjustieren</b> – „Von Hand anpassen“ dreht und schiebt in den Richtungen, die die Verbindung offen lässt; „Um 180° drehen“ wechselt zwischen gleich guten Lagen; „Einsinken“ schiebt Teile minimal ineinander, damit der Slicer sie verschmilzt.</li>
             <li><b>Malen</b> (N) – mehrfarbig für AMS/H2C: Filament wählen, mit dem Pinsel streichen oder Flächen füllen; Umschalt radiert. Kommt als Bemalung ins Bambu-Projekt.</li>
+            <li><b>Beschriften</b> (W) – Text oder SVG-Logo anklicken und einprägen, erhaben oder vertieft, auf Wunsch in eigener Farbe; folgt Rundungen. „Nummern“ schreibt 1/7, 2/7 … auf die ausgewählten Teile.</li>
             <li><b>Prüfen</b> – „Passung prüfen“: grün liegt an, gelb Spalt, rot dringt ein. „Standfestigkeit“ zeigt Schwerpunkt und Standfläche und ab welcher Neigung ein Modell kippt. „Filament &amp; Kosten“ schätzt Gramm, Meter und Preis (gesamt und je Platte).</li>
             <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Auf Fläche legen“; für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
             <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“.</li>
@@ -395,6 +426,7 @@
             <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
             <dt><kbd>M</kbd></dt><dd>Messen wie in Bambu Studio: Kante (Länge), Kreis (Durchmesser), Fläche; zwei Merkmale: Abstand, Winkel. Umschalt + Klick: beliebiger Punkt, <kbd>Entf</kbd> neu, <kbd>Esc</kbd> ein Merkmal zurück</dd>
             <dt><kbd>N</kbd></dt><dd>Farben malen: Pinsel oder Füllen, Umschalt radiert, Alt + Mausrad Pinselgröße</dd>
+            <dt><kbd>W</kbd></dt><dd>Beschriften: Text oder Logo erhaben bzw. vertieft an der Klickstelle, Teile durchnummerieren</dd>
             <dt><kbd>D</kbd></dt><dd>Maße im Bild: Breite, Tiefe, Höhe jeder Baugruppe oder der Auswahl</dd>
             <dt><kbd>C</kbd></dt><dd>Schnittansicht ein/aus (Regler unten rechts)</dd>
             <dt><kbd>X</kbd></dt><dd>Explosionsansicht ein/aus – Baugruppen auseinandergezogen ansehen</dd>

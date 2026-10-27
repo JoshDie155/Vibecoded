@@ -13,6 +13,7 @@ import { gunzipSync } from 'fflate';
 import { type MeshHealth, type RepairResult, meshHealth, repairMesh } from '../math/repair';
 import { type CutOptions, type CutResult, cutMesh, planConnectors, releaseCut } from '../io/cut';
 import { type PocketPlace, type PocketResult, type PocketSpec, addPocket } from '../io/pocket';
+import { type EmbossPlace, type EmbossResult, type EmbossSpec, embossMesh } from '../io/emboss';
 import { type BoolInput, type BoolOp, type BoolResult, booleanParts } from '../io/boolean';
 import { type UnionInput, type UnionResult, unionParts } from '../io/union';
 import { type ToleranceOptions, makeToleranceTest } from '../io/testpiece';
@@ -84,6 +85,11 @@ export const TASKS = {
   },
   async addPocket(a: { positions: Float32Array; place: PocketPlace; spec: PocketSpec; wasm: string }): Promise<TaskResult<PocketResult>> {
     const r = await addPocket(a.positions, a.place, a.spec, a.wasm);
+    return { result: r, transfer: buffers([r.positions, r.source]) };
+  },
+  /** Beschriftung (Text, Logo) erhaben oder vertieft einprägen. */
+  async emboss(a: { positions: Float32Array; place: EmbossPlace; spec: EmbossSpec; wasm: string }): Promise<TaskResult<EmbossResult>> {
+    const r = await embossMesh(a.positions, a.place, a.spec, a.wasm);
     return { result: r, transfer: buffers([r.positions, r.source]) };
   },
   async booleanParts(a: { target: BoolInput; others: BoolInput[]; op: BoolOp; wasm: string }): Promise<TaskResult<BoolResult>> {

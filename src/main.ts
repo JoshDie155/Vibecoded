@@ -36,6 +36,9 @@ import type { MeshHealth } from './math/repair';
 import { planSplit, splitPlanes } from './math/split';
 import { overhangs, pickTriangles, thinWalls } from './math/printcheck';
 import { COUNTERSUNK_HEAD, PRESETS, type PocketKind, type PocketSpec, pocketPreview } from './io/pocket';
+import { type EmbossMode, type EmbossPlace, type EmbossResult, type EmbossSpec, bvhSurface, embossPreview } from './io/emboss';
+import { type FontName, type Outline, svgOutline, textOutline } from './text';
+import { labelSpot } from './math/labelspot';
 import { brushPaint, carryPaint, decodePaint, paintStates, solidPaint, triangleDistance } from './io/paint';
 import { clearanceLabel } from './io/testpiece';
 import type { BoolOp } from './io/boolean';
@@ -177,7 +180,7 @@ let activeJointId: number | null = null;
 let nextPartId = 1;
 let nextJointId = 1;
 /** Werkzeug im 3D-Fenster (siehe setTool) und die im Passungs-Werkzeug gewählte Fläche. */
-let tool: 'lay' | 'fit' | 'measure' | 'pocket' | 'paint' | null = null;
+let tool: 'lay' | 'fit' | 'measure' | 'pocket' | 'paint' | 'text' | null = null;
 /**
  * Gewählte Fläche der Passung. wall: ganze Wand einer Bohrung bzw. eines Zapfens (Weltkoordinaten) – auch
  * Stücke in angrenzenden Teilen, z. B. wenn ein Schnitt durch die Bohrung geht.
@@ -189,6 +192,9 @@ let fitTarget: {
 } | null = null;
 /** Ort der Aussparung (Werkzeug „Aussparung“, Koordinaten des Teils). */
 let pocketPlace: { partId: number; point: Vec3; normal: Vec3 } | null = null;
+/** Beschriften: Text, Logo oder Nummern – und die angeklickte Stelle (Koordinaten des Teils). */
+let textSrc: 'text' | 'logo' | 'number' = 'text';
+let textPlace: { partId: number; place: EmbossPlace } | null = null;
 /** Abschnitt mit den ausgeblendeten Teilen eingeklappt. */
 let hiddenFolded = false;
 /** Ausgewählte Teile (Mehrfachauswahl) und die zuletzt angeklickte Zeile für Umschalt+Klick. */
@@ -2949,6 +2955,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     pickPocket(h);
     return;
   }
+  if (tool === 'text') {
+    pickText(h);
+    return;
+  }
   // Umschalt+Klick: Teil zur Auswahl hinzufügen (oder herausnehmen) und in der Liste zeigen
   if (e.shiftKey) {
     toggleSelected(h.part.id);
@@ -3133,6 +3143,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'm') setTool(tool === 'measure' ? null : 'measure');
   else if (k === 'e') setTool(tool === 'pocket' ? null : 'pocket');
   else if (k === 'n') setTool(tool === 'paint' ? null : 'paint');
+  else if (k === 'w') setTool(tool === 'text' ? null : 'text');
   else if (k === 'a') void arrangeOnBed();
   else if (/^[0-6]$/.test(k)) viewFrom(VIEW_KEYS[k]);
   else if (k === 'c') setSection(!section);
@@ -3169,6 +3180,8 @@ window.addEventListener('keydown', (e) => {
 
 
 function renderParts() {
+  // Nummerieren: die Auswahl bestimmt, welche Teile eine Nummer bekommen
+  if (tool === 'text' && textSrc === 'number') scheduleTextPreview();
   const row = (p: Part) => `<li data-part="${p.id}"${p.visible && !selected.has(p.id) ? '' : ` class="${[p.visible ? '' : 'off', selected.has(p.id) ? 'sel' : ''].join(' ').trim()}"`}>
         <input type="color" class="swatch" data-act="color" data-id="${p.id}" value="#${p.color.getHexString()}" title="Farbe (wird beim mehrfarbigen 3MF-Export übernommen)" />
         <input type="checkbox" data-act="vis" data-id="${p.id}" ${p.visible ? 'checked' : ''} title="Sichtbar" />
@@ -3344,6 +3357,11 @@ function renderHint() {
   else if (tool === 'pocket') el.textContent = pocketPlace
     ? 'Art und Größe oben wählen, dann „Einsetzen“ – oder eine andere Stelle anklicken. Esc beendet.'
     : 'Klicke die Stelle an, an der die Aussparung sitzen soll (auf runden Flächen rastet sie in der Mitte ein). Esc beendet.';
+  else if (tool === 'text') el.textContent = textSrc === 'number'
+    ? `Nummern für ${textTargets().length} Teil${textTargets().length === 1 ? '' : 'e'} – Teile anklicken nimmt sie dazu oder heraus. „Einprägen“ schreibt sie, Esc beendet.`
+    : textPlace
+      ? 'Text, Größe und Relief oben einstellen, dann „Einprägen“ – oder eine andere Stelle anklicken. Esc beendet.'
+      : 'Klicke die Stelle an, an der die Beschriftung sitzen soll – sie folgt der Oberfläche. Esc beendet.';
   else if (tool === 'measure') el.textContent = measureSel.length === 1
     ? 'Zweites Merkmal anklicken für Abstand und Winkel – erneut anklicken wählt ab. Kreise: die Mitte ist anklickbar. Entf: neu, Esc: zurück.'
     : measureSel.length === 2
@@ -4096,6 +4114,7 @@ const layBtn = document.getElementById('layFlat')!;
 const fitBtn = document.getElementById('fitTool')!;
 const measureBtn = document.getElementById('measureTool')!;
 const paintBtn = document.getElementById('paintTool')!;
+const textBtn = document.getElementById('textTool')!;
 const paintBar = document.getElementById('paintBar')!;
 function setTool(t: typeof tool) {
   tool = t && parts.length > 0 ? t : null;
@@ -4109,6 +4128,9 @@ function setTool(t: typeof tool) {
   if (tool !== 'measure') clearMeasure();
   else renderMeasure();
   if (tool !== 'pocket') closePocket();
+  textBtn.classList.toggle('on', tool === 'text');
+  if (tool !== 'text') closeText();
+  else openText();
   if (!tool) updateHover(null);
   renderHint();
 }
@@ -5414,6 +5436,358 @@ pocketPreset.innerHTML = PRESETS.magnet.map((pr, i) => `<option value="${i}">${p
 pocketPreset.value = '2';
 applyPreset();
 
+// ---------------------------------------------------------------- Beschriften
+
+/**
+ * Beschriftung (Taste W): Text oder SVG-Logo an der angeklickten Stelle erhaben aufsetzen oder vertieft
+ * einlassen – die Form folgt der Oberfläche. „Nummern“ prägt 1/7, 2/7 … in die ausgewählten Teile, je auf
+ * die größte Fläche unten (liegt auf der Platte) oder oben. Auf Wunsch in eigenem Filament (als Bemalung).
+ */
+let textMode: EmbossMode = 'raised';
+let textSide: 'bottom' | 'top' = 'bottom';
+let textLogo: { name: string; outline: Outline; skipped: number } | null = null;
+let textBusy = false;
+const textBar = document.getElementById('textBar')!;
+const textValue = document.getElementById('textValue') as HTMLTextAreaElement;
+const textFont = document.getElementById('textFont') as HTMLSelectElement;
+const textSize = document.getElementById('textSize') as HTMLInputElement;
+const textDepth = document.getElementById('textDepth') as HTMLInputElement;
+const textRotate = document.getElementById('textRotate') as HTMLInputElement;
+const textColor = document.getElementById('textColor') as HTMLSelectElement;
+const textPattern = document.getElementById('textPattern') as HTMLInputElement;
+const textStart = document.getElementById('textStart') as HTMLInputElement;
+const textLogoFile = document.getElementById('textLogoFile') as HTMLInputElement;
+const textApplyBtn = document.getElementById('textApply') as HTMLButtonElement;
+const textHelp = document.getElementById('textHelp')!;
+const textGroup = new THREE.Group();
+scene.add(textGroup);
+let textTimer = 0;
+let textSeq = 0;
+
+/** Eine Beschriftung, bereit zum Einprägen (Ort und Form in Koordinaten des Teils). */
+interface TextJob { part: Part; place: EmbossPlace; spec: EmbossSpec; label: string; outline: Outline }
+
+/**
+ * Teile für die Nummern: die ausgewählten, sonst alle sichtbaren – in der Reihenfolge der Liste. Dübel und
+ * Schnappstifte sind untereinander gleich und bleiben ohne Nummer (außer es sind nur solche gewählt).
+ */
+function textTargets(): Part[] {
+  const sel = parts.filter((p) => p.visible && selected.has(p.id));
+  const list = sel.length ? sel : parts.filter((p) => p.visible);
+  const pieces = list.filter((p) => !/ (Dübel|Schnappstift) \d+$/.test(p.name));
+  return pieces.length ? pieces : list;
+}
+
+const numIn = (el: HTMLInputElement, lo: number, hi: number, dflt: number) => {
+  const v = Number(el.value);
+  return Number.isFinite(v) && el.value.trim() !== '' ? Math.min(hi, Math.max(lo, v)) : dflt;
+};
+/** Unten nur vertieft – erhaben läge das Teil nicht mehr flach auf der Platte. */
+const textModeNow = (): EmbossMode => (textSrc === 'number' && textSide === 'bottom' ? 'engraved' : textMode);
+const scaledOutline = (o: Outline, k: number): Outline => ({ polys: o.polys.map((p) => p.map(([x, y]) => [x * k, y * k] as [number, number])), width: o.width * k, height: o.height * k });
+
+/** „Oben“ für die Schrift: an senkrechten Flächen die Welt-Höhe, an waagerechten die Bildschirm-Höhe (lesbar aus der Ansicht). */
+function textUpFor(p: Part, n: Vec3): Vec3 {
+  p.mesh.updateMatrixWorld();
+  const M = p.mesh.matrixWorld;
+  const nW = new THREE.Vector3(...n).transformDirection(M);
+  const upW = Math.abs(nW.z) > 0.7 ? new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion) : new THREE.Vector3(0, 0, 1);
+  const u = upW.transformDirection(M.clone().invert());
+  return [u.x, u.y, u.z];
+}
+
+function pickText(h: Hit) {
+  if (textSrc === 'number') {
+    toggleSelected(h.part.id);
+    scheduleTextPreview();
+    renderHint();
+    return;
+  }
+  const topo = topologyOf(h.part);
+  const f = detectFeature(topo, h.tri, FEATURE_OPTS);
+  const normal: Vec3 = f.kind === 'plane' ? f.normal : [...topo.normals.subarray(3 * h.tri, 3 * h.tri + 3)] as Vec3;
+  textPlace = { partId: h.part.id, place: { point: h.raw, normal, up: textUpFor(h.part, normal) } };
+  renderText();
+  renderHint();
+}
+
+function openText() {
+  textBar.hidden = false;
+  renderText();
+}
+
+function closeText() {
+  if (!textPlace && document.getElementById('textBar')!.hidden) return;
+  textPlace = null;
+  textBar.hidden = true;
+  clearTextPreview();
+}
+
+function clearTextPreview() {
+  for (const g of [...textGroup.children]) {
+    textGroup.remove(g);
+    for (const o of g.children) {
+      (o as THREE.Mesh).geometry.dispose();
+      ((o as THREE.Mesh).material as THREE.Material).dispose();
+    }
+  }
+}
+
+function setTextSource(s: typeof textSrc) {
+  textSrc = s;
+  if (s !== 'number') clearTextPreview();
+  renderText();
+  renderHint();
+}
+
+function renderTextColors() {
+  const list = filamentList();
+  const cur = textColor.value;
+  textColor.innerHTML = '<option value="">wie das Teil</option>'
+    + list.map((c, i) => `<option value="${c}">Filament ${i + 1} (${c})</option>`).join('')
+    + '<option value="+">Neue Farbe …</option>';
+  textColor.value = list.includes(cur) ? cur : '';
+}
+
+function renderText() {
+  textBar.querySelectorAll<HTMLElement>('[data-tsrc]').forEach((b) => b.classList.toggle('on', b.dataset.tsrc === textSrc));
+  const mode = textModeNow();
+  textBar.querySelectorAll<HTMLButtonElement>('[data-tmode]').forEach((b) => {
+    b.classList.toggle('on', b.dataset.tmode === mode);
+    b.disabled = textSrc === 'number' && textSide === 'bottom' && b.dataset.tmode === 'raised';
+  });
+  textBar.querySelectorAll<HTMLElement>('[data-tside]').forEach((b) => b.classList.toggle('on', b.dataset.tside === textSide));
+  for (const el of textBar.querySelectorAll<HTMLElement>('[data-tfor]')) el.hidden = !el.dataset.tfor!.split(' ').includes(textSrc);
+  document.getElementById('textDepthLabel')!.textContent = mode === 'raised' ? 'Höhe' : 'Tiefe';
+  document.getElementById('textSizeLabel')!.textContent = textSrc === 'number' ? 'bis' : 'Größe';
+  const picker = document.getElementById('textLogoPick')!;
+  picker.textContent = textLogo ? `${textLogo.name} ✓` : 'SVG laden …';
+  const p = textPlace && getPart(textPlace.partId);
+  document.getElementById('textTitle')!.textContent = textSrc === 'number' ? 'Nummerieren' : p ? `Beschriften: „${p.name}“` : 'Beschriften';
+  textApplyBtn.textContent = textSrc === 'number' ? 'Nummern einprägen' : 'Einprägen';
+  renderTextColors();
+  scheduleTextPreview();
+}
+
+/** Was „Einprägen“ jetzt täte – und welche Teile (beim Nummerieren) keinen Platz haben. */
+function textJobs(): { jobs: TextJob[]; skipped: Part[] } {
+  const font = textFont.value as FontName;
+  const size = numIn(textSize, 1, 300, 8);
+  const depth = numIn(textDepth, 0.1, 20, 0.6);
+  const mode = textModeNow();
+  if (textSrc !== 'number') {
+    const p = textPlace && getPart(textPlace.partId);
+    if (!p || !textPlace) return { jobs: [], skipped: [] };
+    const outline = textSrc === 'logo'
+      ? textLogo && scaledOutline(textLogo.outline, size)
+      : textOutline(textValue.value, size, font);
+    if (!outline || !outline.polys.length) return { jobs: [], skipped: [] };
+    const label = textSrc === 'logo' ? textLogo!.name : textValue.value.trim();
+    return { jobs: [{ part: p, place: textPlace.place, spec: { polys: outline.polys, mode, depth, rotate: Number(textRotate.value) || 0 }, label, outline }], skipped: [] };
+  }
+  const targets = textTargets();
+  const start = Math.round(numIn(textStart, 0, 1e6, 1));
+  const pattern = textPattern.value.trim() || '{n}';
+  const fmt = (n: number, N: number) => pattern.replaceAll('{n}', String(n)).replaceAll('{N}', String(N));
+  // Platz für die breiteste Nummer suchen; Teile ohne Platz zählen nicht mit
+  const last = start + targets.length - 1;
+  const unit = textOutline(fmt(last, last), 1, font);
+  if (!unit.polys.length) return { jobs: [], skipped: [] };
+  const found = targets.map((p) => ({ p, spot: labelSpot(worldPositions([p]), textSide, { w: unit.width, h: unit.height }, size) }));
+  const ok = found.filter((x) => x.spot);
+  const N = start + ok.length - 1;
+  const jobs = ok.map(({ p, spot }, i): TextJob => {
+    const label = fmt(start + i, N);
+    const outline = textOutline(label, spot!.height, font);
+    const inv = p.mesh.matrixWorld.clone().invert();
+    const pt = new THREE.Vector3(...spot!.point).applyMatrix4(inv);
+    const n = new THREE.Vector3(...spot!.normal).transformDirection(inv);
+    const up = new THREE.Vector3(...spot!.up).transformDirection(inv);
+    return { part: p, label, outline, place: { point: [pt.x, pt.y, pt.z], normal: [n.x, n.y, n.z], up: [up.x, up.y, up.z] }, spec: { polys: outline.polys, mode, depth } };
+  });
+  return { jobs, skipped: found.filter((x) => !x.spot).map((x) => x.p) };
+}
+
+function scheduleTextPreview() {
+  clearTimeout(textTimer);
+  textTimer = window.setTimeout(() => void updateTextPreview(), 120);
+}
+
+async function updateTextPreview() {
+  const seq = ++textSeq;
+  if (tool !== 'text') return;
+  const { jobs, skipped } = textJobs();
+  const shapes: { part: Part; tool: Float32Array }[] = [];
+  let info: { relief: number; missing: number } | null = null;
+  let error = '';
+  for (const j of jobs) {
+    try {
+      const r = await embossPreview(bvhSurface(j.part.geom.boundsTree as MeshBVH), j.place, j.spec, manifoldWasm);
+      shapes.push({ part: j.part, tool: r.tool });
+      info = r;
+    } catch (err) {
+      error = (err as Error).message;
+    }
+    if (seq !== textSeq) return;
+  }
+  clearTextPreview();
+  for (const s of shapes) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(s.tool, 3));
+    g.computeVertexNormals();
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: textColor.value && textColor.value !== '+' ? textColor.value : accentColor, transparent: true, opacity: 0.6, depthTest: false }));
+    m.renderOrder = 8;
+    m.raycast = () => {};
+    const holder = new THREE.Group();
+    holder.matrixAutoUpdate = false;
+    s.part.mesh.updateMatrixWorld();
+    holder.matrix.copy(s.part.mesh.matrixWorld);
+    holder.add(m);
+    textGroup.add(holder);
+  }
+  const mm = mmText1;
+  const mode = textModeNow();
+  const out: string[] = [];
+  if (textSrc === 'number') {
+    const n = jobs.length + skipped.length;
+    out.push(n ? `${jobs.length} von ${n} Teil${n === 1 ? '' : 'en'} bekommen eine Nummer (${jobs.map((j) => esc(j.label)).slice(0, 8).join(', ')}${jobs.length > 8 ? ' …' : ''}), ${textSide === 'bottom' ? 'unten vertieft' : `oben ${mode === 'raised' ? 'erhaben' : 'vertieft'}`}, so groß wie die Fläche erlaubt.` : 'Keine sichtbaren Teile.');
+    if (skipped.length) out.push(`<span class="warn">Kein Platz auf: ${skipped.slice(0, 6).map((p) => `„${esc(p.name)}“`).join(', ')}${skipped.length > 6 ? ' …' : ''}</span> (zu kleine Fläche – andere Seite oder kleineres Muster probieren).`);
+  } else if (!textPlace) {
+    out.push(textSrc === 'logo' && !textLogo ? 'Erst „SVG laden …“ – gefüllte Flächen werden zur Form –, dann die Stelle anklicken.' : 'Die Stelle auf dem Teil anklicken.');
+  } else if (jobs.length) {
+    const o = jobs[0].outline;
+    out.push(`${mm(o.width)} × ${mm(o.height)} mm, ${mode === 'raised' ? `${mm(numIn(textDepth, 0.1, 20, 0.6))} mm erhaben` : `${mm(numIn(textDepth, 0.1, 20, 0.6))} mm tief`}.`);
+    if (info && info.relief > 0.05) out.push(`Folgt der Wölbung (${mm(info.relief)} mm Höhenunterschied).`);
+    if (info && info.missing > 0.02) out.push('<span class="warn">Ragt über eine Kante oder Stufe hinaus – dort läuft sie eben weiter.</span>');
+    if (textSrc === 'text' && numIn(textSize, 1, 300, 8) < 4) out.push('Unter 4 mm Schrifthöhe werden Buchstaben mit 0,4-mm-Düse unscharf – fett hilft.');
+    if (textSrc === 'logo' && textLogo?.skipped) out.push(`${textLogo.skipped} Linie${textLogo.skipped === 1 ? '' : 'n'} ohne Füllung übersprungen.`);
+  } else if (textSrc === 'text') out.push('Text eingeben.');
+  if (error) out.push(`<span class="warn">${esc(error)}</span>`);
+  if (textColor.value) out.push('Die Farbe kommt als Bemalung ins Bambu-Projekt.');
+  textHelp.innerHTML = out.join(' ');
+}
+
+/** Ergebnis ins Teil übernehmen: Bemalung mitnehmen, auf Wunsch die neuen Flächen einfärben. */
+function commitEmboss(p: Part, r: EmbossResult): Part {
+  let positions = r.positions;
+  let paint = p.paint;
+  let palette = p.palette;
+  if (paint) {
+    const c = carryPaint(positionsOf(p), paint, positions, r.source);
+    ({ paint, positions } = c);
+    if (c.lost) r.notes.push(`Feine Bemalung an ${c.lost} Dreiecken zu je einer Farbe vereinfacht.`);
+  }
+  const color = textColor.value;
+  if (color && color !== '+' && color !== hexOf(p)) {
+    const pal = [...(palette ?? [])];
+    const code = solidPaint(paintStateFor(p, pal, color));
+    const codes = paint?.paint_color ? [...paint.paint_color] : new Array<string>(r.source.length).fill('');
+    for (let t = 0; t < r.source.length; t++) if (r.source[t] < 0) codes[t] = code;
+    paint = { ...paint, paint_color: codes };
+    palette = pal;
+  }
+  carryFeatures(p.id, successors(r.source));
+  return replaceGeometry(p, positions, { paint, palette, modifiers: p.modifiers });
+}
+
+async function applyText() {
+  if (textBusy) return;
+  const { jobs } = textJobs();
+  if (!jobs.length) {
+    toast(textSrc === 'number' ? 'Auf keinem Teil ist Platz für die Nummer.' : textSrc === 'logo' && !textLogo ? 'Erst ein SVG-Logo laden.' : !textPlace ? 'Klicke zuerst die Stelle an.' : 'Kein Text zum Einprägen.');
+    return;
+  }
+  textBusy = true;
+  textApplyBtn.disabled = true;
+  const notes: string[] = [];
+  let done = 0;
+  try {
+    for (const j of jobs) {
+      const who = jobs.length > 1 ? `„${j.part.name}“: ` : '';
+      let r: EmbossResult;
+      try {
+        r = await compute('emboss', { positions: positionsOf(j.part), place: j.place, spec: j.spec, wasm: manifoldUrl });
+      } catch (err) {
+        notes.push(who + (userError(err, 'EmbossError') ? (err as Error).message : `Beschriften nicht möglich: ${(err as Error).message}`));
+        continue;
+      }
+      if (getPart(j.part.id) !== j.part) continue;
+      commitEmboss(j.part, r);
+      notes.push(...r.notes.map((n) => who + n));
+      done++;
+    }
+  } finally {
+    textBusy = false;
+    textApplyBtn.disabled = false;
+  }
+  if (done) {
+    solveAll();
+    renderAll();
+  }
+  clearTextPreview();
+  if (textSrc !== 'number' && done) textPlace = null;
+  // Nummern sind fertig – sonst zeigte die Vorschau gleich die nächsten auf denselben Teilen
+  if (textSrc === 'number' && done) setTool(null);
+  const what = textSrc === 'number' ? `${done} Teil${done === 1 ? '' : 'e'} nummeriert.` : textSrc === 'logo' ? 'Logo eingeprägt.' : 'Beschriftung eingeprägt.';
+  toast(done ? `${what}${notes.length ? ` ${notes.join(' ')}` : ''}${textSrc === 'number' ? '' : ' Nächste Stelle anklicken oder Esc.'}` : notes.join(' ') || 'Nichts eingeprägt.', 7000);
+  if (tool === 'text') renderText();
+  renderHint();
+}
+
+textBar.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-tsrc], [data-tmode], [data-tside]');
+  if (!b || b.disabled) return;
+  if (b.dataset.tsrc) {
+    setTextSource(b.dataset.tsrc as typeof textSrc);
+    if (textSrc === 'logo' && !textLogo) textLogoFile.click();
+    return;
+  }
+  if (b.dataset.tmode) textMode = b.dataset.tmode as EmbossMode;
+  if (b.dataset.tside) textSide = b.dataset.tside as typeof textSide;
+  renderText();
+});
+for (const el of [textValue, textSize, textDepth, textRotate, textPattern, textStart]) el.addEventListener('input', scheduleTextPreview);
+textFont.addEventListener('change', scheduleTextPreview);
+textColor.addEventListener('change', () => {
+  if (textColor.value !== '+') { scheduleTextPreview(); return; }
+  // Neue Farbe: über den Farbwähler, danach steht sie auch beim Malen bereit
+  const pick = document.createElement('input');
+  pick.type = 'color';
+  pick.value = '#c12e1f';
+  pick.addEventListener('change', () => {
+    const c = pick.value.toLowerCase();
+    if (!paintExtra.includes(c)) paintExtra.push(c);
+    renderTextColors();
+    textColor.value = c;
+    scheduleTextPreview();
+  });
+  textColor.value = '';
+  pick.click();
+});
+textValue.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    void applyText();
+  }
+});
+document.getElementById('textLogoPick')!.addEventListener('click', () => textLogoFile.click());
+textLogoFile.addEventListener('change', async () => {
+  const f = textLogoFile.files?.[0];
+  textLogoFile.value = '';
+  if (!f) return;
+  try {
+    const o = await svgOutline(await f.text(), 1);
+    if (!o.polys.length) { toast('In der SVG-Datei sind keine gefüllten Flächen.', 5000); return; }
+    textLogo = { name: f.name, outline: o, skipped: o.skipped };
+    setTextSource('logo');
+  } catch (err) {
+    toast(`SVG nicht lesbar: ${(err as Error).message}`, 5000);
+  }
+});
+textApplyBtn.addEventListener('click', () => void applyText());
+document.getElementById('textClose')!.addEventListener('click', () => setTool(null));
+textBtn.addEventListener('click', () => setTool(tool === 'text' ? null : 'text'));
+
 // ---------------------------------------------------------------- Auf Druckplattengröße zerteilen
 
 /**
@@ -6293,6 +6667,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
       { label: 'Mit dieser Fläche auf die Platte legen', run: () => layOnFace(h), title: 'Dreht die Baugruppe so, dass die angeklickte ebene Fläche unten liegt.' },
       { label: 'Passung an dieser Stelle …', run: () => { setTool('fit'); pickFit(h); }, title: 'Zapfen dünner, Bohrung weiter oder Fläche versetzen.' },
       { label: 'Aussparung hier …', run: () => { setTool('pocket'); pickPocket(h); }, title: 'Magnet, Gewindeeinsatz, Schraube, Mutter oder Bohrung an dieser Stelle (Taste E)' },
+      { label: 'Hier beschriften …', run: () => { setTextSource(textSrc === 'number' ? 'text' : textSrc); setTool('text'); pickText(h); }, title: 'Text oder Logo erhaben oder vertieft an dieser Stelle (Taste W)' },
     );
   }
   entries.push(
@@ -6330,6 +6705,7 @@ function selectionMenu(x: number, y: number) {
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ sel: list.map((q) => q.id) }) },
     { label: 'Netze reparieren', run: () => void repairParts(list) },
     { label: 'Netze vereinfachen …', run: () => openSimplify(list) },
+    { label: 'Nummerieren …', run: () => { setTextSource('number'); setTool('text'); }, title: '1/7, 2/7 … auf die ausgewählten Teile prägen – je auf die größte Fläche unten oder oben (Taste W)' },
     'sep',
     ...boolEntries(list),
     'sep',
@@ -7633,7 +8009,7 @@ function applyFit() {
  * Teil mit neuer Form (gleiche Dreiecke, andere Eckpunkte): ein neues Teil-Objekt mit derselben Id an
  * seiner Stelle. Das alte bleibt für „Rückgängig" erhalten; Verbindungen bleiben, wo sie sind.
  */
-function replaceGeometry(old: Part, positions: Float32Array, extras?: Pick<Part, 'paint' | 'modifiers'>): Part {
+function replaceGeometry(old: Part, positions: Float32Array, extras?: Partial<Pick<Part, 'paint' | 'palette' | 'modifiers'>>): Part {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   g.computeVertexNormals();
@@ -8170,7 +8546,7 @@ renderer.domElement.addEventListener('wheel', (e) => {
  * Passungsprüfung, Schnitt, Explosion) – mit Farblegende und ✕ zum Ausschalten.
  */
 const activeBar = document.getElementById('activeBar')!;
-const TOOL_LABEL: Record<'lay' | 'fit' | 'measure' | 'pocket' | 'paint', string> = { lay: 'Auf Fläche legen', fit: 'Passung', measure: 'Messen', pocket: 'Aussparung', paint: 'Malen' };
+const TOOL_LABEL: Record<'lay' | 'fit' | 'measure' | 'pocket' | 'paint' | 'text', string> = { lay: 'Auf Fläche legen', fit: 'Passung', measure: 'Messen', pocket: 'Aussparung', paint: 'Malen', text: 'Beschriften' };
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 interface ActiveItem { id: string; label: string; title: string; dots?: { color: string; label: string }[]; off: () => void }
 let activeList: ActiveItem[] = [];
@@ -8233,7 +8609,7 @@ activeBar.addEventListener('click', (e) => {
  * Leisten oben (Messen, Passung, Druckprüfung …) liegen sonst alle an derselben Stelle: sichtbare
  * untereinander stapeln und neben der Übersicht rechts enden lassen. Jedes Bild, nur bei Änderungen.
  */
-const TOP_BARS = ['gizmoBar', 'fitBar', 'measureBar', 'paintBar', 'scaleBar', 'cutBar', 'splitBar', 'pocketBar', 'tolBar', 'anaBar', 'simpBar']
+const TOP_BARS = ['gizmoBar', 'fitBar', 'measureBar', 'paintBar', 'scaleBar', 'cutBar', 'splitBar', 'pocketBar', 'textBar', 'tolBar', 'anaBar', 'simpBar']
   .map((id) => document.getElementById(id)!);
 let barsSig = '';
 function layoutBars() {

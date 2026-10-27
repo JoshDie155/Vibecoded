@@ -214,6 +214,18 @@ für eine Mutter (mit Schraubenloch) oder eine freie Bohrung – alle Maße änd
 steht senkrecht auf der Fläche; auf runden ebenen Flächen sitzt sie in der Mitte. Eine Vorschau zeigt sie, dazu
 die Materialstärke dahinter und eine Warnung, wenn sie durchgehen würde. Danach die nächste Stelle anklicken
 – z. B. vier Magnete in die Ecken. Gewählte Flächen und Bemalung bleiben erhalten.
+**Beschriften** (Knopf „Beschriften“ oder Taste W, Rechtsklick › „Hier beschriften …“): Text oder ein Logo aus
+einer SVG-Datei (gefüllte Flächen) an der angeklickten Stelle **erhaben** aufsetzen oder **vertieft**
+einlassen – Größe (Höhe der Großbuchstaben), Höhe bzw. Tiefe, Drehung und Schrift (fett/normal, mit Umlauten)
+einstellbar, mehrzeilig mit Umschalt + Enter. Die Form folgt der Oberfläche, auch auf Zylindern und
+Wölbungen; an senkrechten Flächen steht sie aufrecht, an waagerechten liest sie sich aus der aktuellen
+Ansicht. Eine Vorschau zeigt sie vorher, mit Hinweis, wenn sie über den Rand ragt oder die Wand dahinter zu
+dünn wird. Auf Wunsch bekommt sie ein eigenes Filament (als Bemalung im Bambu-Projekt – etwa für AMS oder
+H2C). **Nummerieren** (Rechtsklick auf mehrere ausgewählte Teile › „Nummerieren …“, oder „Nummern“ in der
+Leiste): prägt 1/7, 2/7 … (Muster und Startnummer frei) in die ausgewählten Teile – je auf die größte Fläche
+unten (vertieft, liegt auf der Platte und ist nach dem Zusammenbau meist unsichtbar) oder oben, so groß wie
+die Fläche erlaubt (höchstens die eingestellte Größe), an Bohrungen vorbei. Dübel und Schnappstifte bleiben
+ohne Nummer. Alles mit Strg/⌘+Z in einem Schritt zurücknehmbar.
 **Auf Druckplattengröße zerteilen**: Ist ein Teil zu groß für den gewählten Drucker, bietet die Statuszeile
 „Zerteilen …" an (auch per Rechtsklick). PartJoin schlägt vor, wie viele gleich große Stücke je Achse nötig
 sind, damit jedes mit Rand für die Verbinder auf die Platte passt (auch um 90° gedreht); mit − / + lässt sich
@@ -336,6 +348,11 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
 - **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
   TriangleSelector von Bambu/Prusa (`src/io/paint.ts`), Darstellung von Bemalung und Modifiern per
   Stencil-Puffer (`src/decor.ts`), **Vereinigung** mit manifold-3d (`src/io/union.ts`).
+- **Beschriftung**: Schrift „Droid Sans“ (Apache-2.0, aus den three.js-Beispielen, auf lateinische Zeichen
+  gekürzt: `src/fonts/`) bzw. SVG über den SVGLoader von three.js zu Umrissen (`src/text.ts`); manifold-3d
+  zieht sie hoch, unterteilt sie fein und legt jeden Punkt über ein Höhenfeld aus Strahlen auf die
+  Oberfläche (`src/io/emboss.ts`). Platz für Nummern: Raster der größten Fläche, Abstandsfeld, größtes
+  passendes Rechteck entlang der Hauptachse (`src/math/labelspot.ts`).
 
 ## Entwicklung
 
