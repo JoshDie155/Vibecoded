@@ -378,3 +378,20 @@ npm test               # Unit-Tests der Mathematik
 npm run build          # Build nach dist/
 npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/index.html
 ```
+
+## Lizenz
+
+PartJoin steht unter der [MIT-Lizenz](LICENSE) – © 2026 Joshua Diekamp. Nutzen, ändern und weitergeben ist
+erlaubt, auch kommerziell, solange der Urheberhinweis und der Lizenztext dabeibleiben.
+
+Eingebaute Bibliotheken und Daten behalten ihre eigenen Lizenzen (auch in der Standalone-Datei und auf der
+Website enthalten):
+
+| Bestandteil | Lizenz |
+| --- | --- |
+| three.js | MIT |
+| three-mesh-bvh | MIT |
+| fflate | MIT |
+| manifold-3d | Apache-2.0 |
+| occt-import-js / OpenCascade | LGPL-2.1 (Lizenztexte in `node_modules/occt-import-js/dist/`) |
+| Schrift Droid Sans (`src/fonts/`, aus den three.js-Beispielen) | Apache-2.0 |

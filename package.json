@@ -1,5 +1,6 @@
 {
   "name": "partjoin",
+  "license": "MIT",
   "version": "0.1.0",
   "private": true,
   "description": "Mehrere 3D-Modelle über markierte Punkte automatisch passgenau zusammenfügen",
