@@ -7,15 +7,75 @@
     <meta name="description" content="Mehrere 3D-Modelle über markierte Punkte automatisch passgenau zusammenfügen." />
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <symbol id="i-logo" viewBox="0 0 32 32"><path d="M16 3 28 9.5v13L16 29 4 22.5v-13z" fill="#2f6fde"/><path d="M16 3 28 9.5 16 16 4 9.5z" fill="#6f9cf0"/><path d="M16 16v13L4 22.5v-13z" fill="#2457b8"/><path d="M20.5 13.5l2.2-5.2M23.6 15.4l4-3.2M24 19l4.6-.6" stroke="#f08a24" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+        <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+        <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+        <symbol id="i-view" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+        <symbol id="i-ruler" viewBox="0 0 24 24"><rect x="2.5" y="8" width="19" height="8" rx="1.5"/><path d="M6.5 8v3M10.5 8v4M14.5 8v3M18.5 8v4"/></symbol>
+        <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3c3.2 4.2 6 7.2 6 10.4a6 6 0 0 1-12 0C6 10.2 8.8 7.2 12 3z"/><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5"/></symbol>
+        <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6V4.5h14V6M12 4.5V20M9 20h6"/></symbol>
+        <symbol id="i-dims" viewBox="0 0 24 24"><path d="M3 6v12M21 6v12M6 12h12M9 9l-3 3 3 3M15 9l3 3-3 3"/></symbol>
+        <symbol id="i-explode" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+        <symbol id="i-section" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M2 12h20" stroke-dasharray="2.5 2.5"/></symbol>
+        <symbol id="i-fit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3"/></symbol>
+        <symbol id="i-lay" viewBox="0 0 24 24"><path d="M3 20h18"/><rect x="6.5" y="11" width="11" height="7" rx="1"/><path d="M12 2.5v5.5M9.5 5.5 12 8l2.5-2.5"/></symbol>
+        <symbol id="i-move" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></symbol>
+        <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.6V14M12 17.2v.3"/></symbol>
+        <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></symbol>
+        <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 21v-6h8v6"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="i-face" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4z" fill="currentColor" fill-opacity=".25"/><path d="M4 8v8l8 4 8-4V8M12 12v8"/></symbol>
+        <symbol id="i-edge" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8" opacity=".35"/><path d="M12 12v8" stroke-width="3"/></symbol>
+        <symbol id="i-point" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8" opacity=".35"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></symbol>
+        <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M15 4l5 5L9 20H4v-5z"/><path d="M13 6l5 5"/></symbol>
+      </defs>
+    </svg>
+    <header id="topbar">
+      <div class="brand"><svg class="logo" aria-hidden="true"><use href="#i-logo"/></svg><span>D<b>3D</b>Forge</span></div>
+      <div id="toolbar" role="toolbar" aria-label="Werkzeuge">
+        <span class="tgroup" role="group" aria-label="Auswahlmodus">
+          <button data-pick="face" class="tbtn on" title="Flächen auswählen (Taste F)"><svg class="ic" aria-hidden="true"><use href="#i-face"/></svg><span>Flächen</span></button>
+          <button data-pick="edge" class="tbtn" title="Gerade Kanten auswählen (Taste K)"><svg class="ic" aria-hidden="true"><use href="#i-edge"/></svg><span>Kanten</span></button>
+          <button data-pick="point" class="tbtn" title="Punkte markieren, z. B. Ecken (Taste P)"><svg class="ic" aria-hidden="true"><use href="#i-point"/></svg><span>Punkte</span></button>
+          <button data-pick="brush" class="tbtn" title="Fläche selbst bemalen: mit gedrückter Maustaste über das Teil streichen, beim Loslassen wird daraus eine Fläche (Taste B)"><svg class="ic" aria-hidden="true"><use href="#i-pencil"/></svg><span>Pinsel</span></button>
+        </span>
+        <span class="tsep"></span>
+        <span class="tgroup" role="group" aria-label="Ansehen und Messen">
+              <button id="fit" class="tbtn" title="Ansicht auf alle Teile anpassen"><svg class="ic" aria-hidden="true"><use href="#i-view"/></svg><span>Ansicht</span></button>
+              <button id="measureTool" class="tbtn" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)"><svg class="ic" aria-hidden="true"><use href="#i-ruler"/></svg><span>Messen</span></button>
+              <button id="dimsTool" class="tbtn" title="Außenmaße im Bild: Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile (Taste D)"><svg class="ic" aria-hidden="true"><use href="#i-dims"/></svg><span>Maße</span></button>
+              <button id="sectionTool" class="tbtn" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)"><svg class="ic" aria-hidden="true"><use href="#i-section"/></svg><span>Schnitt</span></button>
+              <button id="explodeTool" class="tbtn" title="Explosionsansicht: Baugruppen auseinandergezogen zeigen – nur zum Ansehen (Taste X)"><svg class="ic" aria-hidden="true"><use href="#i-explode"/></svg><span>Explosion</span></button>
+        </span>
+        <span class="tsep"></span>
+        <span class="tgroup" role="group" aria-label="Bearbeiten">
+              <button id="paintTool" class="tbtn" title="Farben malen wie in Bambu Studio: Filament wählen und über das Teil streichen oder Flächen füllen – für mehrfarbigen Druck mit AMS oder H2C (Taste N)"><svg class="ic" aria-hidden="true"><use href="#i-drop"/></svg><span>Malen</span></button>
+              <button id="textTool" class="tbtn" title="Beschriften: Text oder Logo an der Klickstelle erhaben aufsetzen oder vertieft einlassen – folgt Rundungen (Taste W). Mehrere Teile durchnummerieren: Rechtsklick › „Nummerieren …“"><svg class="ic" aria-hidden="true"><use href="#i-text"/></svg><span>Beschriften</span></button>
+              <button id="fitTool" class="tbtn" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)"><svg class="ic" aria-hidden="true"><use href="#i-fit"/></svg><span>Passung</span></button>
+              <button id="layFlat" class="tbtn" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)"><svg class="ic" aria-hidden="true"><use href="#i-lay"/></svg><span>Hinlegen</span></button>
+              <button id="moveAll" class="tbtn" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen."><svg class="ic" aria-hidden="true"><use href="#i-move"/></svg><span>Bewegen</span></button>
+        </span>
+        <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
+      </div>
+      <div class="tright">
+        <button id="undoBtn" class="tbtn icon-only" title="Rückgängig (Strg/⌘+Z)" aria-label="Rückgängig"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg></button>
+        <button id="redoBtn" class="tbtn icon-only" title="Wiederholen (Strg/⌘+Umschalt+Z)" aria-label="Wiederholen"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg></button>
+        <button id="helpBtn" class="tbtn icon-only" title="Anleitung und Tastenkürzel (Taste ?)" aria-label="Hilfe"><svg class="ic" aria-hidden="true"><use href="#i-help"/></svg></button>
+        <button id="exportBtn" class="primary" title="Zu den Export-Möglichkeiten (3MF für Bambu Studio / OrcaSlicer / PrusaSlicer, STL, OBJ, Montageanleitung)"><svg class="ic" aria-hidden="true"><use href="#i-export"/></svg><span>Exportieren</span></button>
+      </div>
+    </header>
     <div id="app">
       <aside id="panel">
-        <header>
-          <h1>D3DForge</h1>
-          <p class="sub">3D-Druckteile passgenau verbinden, zerteilen, beschriften und druckfertig machen – alles im Browser.</p>
-        </header>
-
-        <section>
-          <h2><span class="step">1</span> Modelle laden</h2>
+        <nav class="ptabs" role="tablist" aria-label="Seitenleiste">
+          <button role="tab" data-tab="parts" class="on" aria-selected="true">Teile</button>
+          <button role="tab" data-tab="connect" aria-selected="false">Verbinden</button>
+          <button role="tab" data-tab="print" aria-selected="false">Drucken</button>
+        </nav>
+        <div id="pages">
+        <section class="page" data-page="parts" role="tabpanel" aria-label="Teile">
           <div id="restoreBar" class="restore" hidden>
             <span id="restoreText"></span>
             <span class="row">
@@ -23,16 +83,16 @@
               <button id="restoreNo" class="ghost small">Verwerfen</button>
             </span>
           </div>
-          <div class="row wrap projectbar">
-            <button id="projOpen" class="ghost small" title="D3DForge-Projekt (.d3dforge, auch ältere .partjoin) öffnen. Es ersetzt die aktuelle Arbeit – Strg+Z holt sie zurück.">Projekt öffnen</button>
-            <button id="projSave" class="ghost small" title="Alle Teile mit Lage, Farben, Aufschriften und Verbindungen in einer Datei speichern (Strg+S)">Projekt speichern</button>
+          <div class="loadrow">
+            <label class="drop" id="drop">
+              <input type="file" id="file" multiple />
+              <svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg><strong>Modelle laden</strong> <span class="or">oder ziehen</span>
+            </label>
+            <button id="projOpen" class="ghost iconbtn" aria-label="Projekt öffnen" title="D3DForge-Projekt (.d3dforge, auch ältere .partjoin) öffnen. Es ersetzt die aktuelle Arbeit – Strg+Z holt sie zurück."><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg></button>
+            <button id="projSave" class="ghost iconbtn" aria-label="Projekt speichern" title="Alle Teile mit Lage, Farben, Aufschriften und Verbindungen in einer Datei speichern (Strg+S)"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg></button>
             <input type="file" id="projFile" accept=".d3dforge,.partjoin" hidden />
           </div>
-          <label class="drop" id="drop">
-            <input type="file" id="file" multiple />
-            <strong>Dateien hierher ziehen</strong> oder klicken
-            <small>STL · OBJ (+MTL) · 3MF · STEP · IGES · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK · D3DForge-Projekt</small>
-          </label>
+          <p class="formats">STL · OBJ (+MTL) · 3MF · STEP · IGES · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK · D3DForge-Projekt</p>
           <div class="loadopts">
             <label class="check small" title="Viele mehrteilige Downloads liegen in den Dateien schon richtig zueinander. Dann werden die Teile genau so geladen.">
               <input type="checkbox" id="keepPos" /> Lage aus der Datei übernehmen
@@ -77,6 +137,7 @@
             </div>
           </div>
           <ul id="parts" class="parts"></ul>
+          <h3 class="subhead">Beispiele &amp; Kalibrieren</h3>
           <div class="row wrap">
             <button id="demo" class="ghost small">Beispiel: Haus</button>
             <button id="demoRound" class="ghost small">Beispiel: runder Zapfen</button>
@@ -84,8 +145,7 @@
           </div>
         </section>
 
-        <section>
-          <h2><span class="step">2</span> Verbindungen</h2>
+        <section class="page" data-page="connect" role="tabpanel" aria-label="Verbinden">
           <p class="help">
             <b>Flächen:</b> die Kontaktflächen anklicken (eben, Kreisfläche, Zapfen/Bohrung) – D3DForge setzt sie wie im CAD aufeinander.
             Flächen dürfen auch auf Nachbarteilen liegen, die schon fest mit dem Teil verbunden sind.
@@ -99,13 +159,13 @@
           </div>
         </section>
 
-        <section>
-          <h2><span class="step">3</span> Prüfen &amp; exportieren</h2>
+        <section class="page" data-page="print" role="tabpanel" aria-label="Drucken">
+          <h3 class="subhead first">Prüfen &amp; vorbereiten</h3>
           <div class="row wrap">
             <button id="checkBtn" class="ghost" title="Zeigt, wo sich die Teile berühren, wo ein Spalt bleibt und wo sie ineinander eindringen.">Passung prüfen</button>
             <button id="standBtn" class="ghost" title="Steht das Modell sicher? Zeigt Schwerpunkt und Standfläche jeder Baugruppe – und ab welcher Neigung sie kippt (so, wie sie gerade steht).">Standfestigkeit</button>
             <button id="anaBtn" class="ghost" title="Zeigt Überhänge, die Stützen brauchen (rot), und zu dünne Wände (lila) – für die Lage, wie sie gerade ist (Taste U)">Überhänge &amp; Wände</button>
-            <button id="autoOrient" class="ghost" title="Legt jede Baugruppe mit ihrer größten ebenen Auflage auf die Druckplatte – steht stabil und braucht meist weniger Stützen. Von Hand: oben „Auf Fläche legen“.">Für den Druck ausrichten</button>
+            <button id="autoOrient" class="ghost" title="Legt jede Baugruppe mit ihrer größten ebenen Auflage auf die Druckplatte – steht stabil und braucht meist weniger Stützen. Von Hand: oben „Hinlegen“.">Für den Druck ausrichten</button>
             <button id="arrange" class="ghost" title="Legt alle sichtbaren Baugruppen platzsparend nebeneinander auf die Druckplatte des gewählten Druckers (Taste A). Was nicht mehr passt, liegt rechts daneben.">Auf der Platte anordnen</button>
           </div>
           <div id="checkResult"></div>
@@ -118,7 +178,7 @@
             <label class="check small">Preis <input type="number" id="matPrice" min="0" step="1" /> €/kg</label>
           </div>
           <div id="matResult"></div>
-          <h3 class="subhead">Exportieren</h3>
+          <h3 class="subhead" id="exportHead">Exportieren</h3>
           <div class="row wrap exports">
             <button data-export="3mf-bambu" title="Projektformat von Bambu Studio und OrcaSlicer: ein Objekt aus mehreren Teilen, Teile gleicher Farbe bekommen dasselbe Filament in dieser Farbe.">3MF für Bambu Studio / OrcaSlicer</button>
             <button data-export="3mf-color" title="Format von PrusaSlicer: ein Objekt aus mehreren Teilen mit eigenem Extruder je Farbe.">3MF für PrusaSlicer</button>
@@ -139,34 +199,11 @@
           </div>
           <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. Die mehrfarbigen 3MF-Varianten behalten Teile und Farben: Jede Farbe bekommt eine eigene Filament-/Extrudernummer. Für Bambu Studio wird jede Baugruppe ein eigenes Objekt. Bambu Studio übernimmt die Teilefarben direkt als Filamentfarben (Profil: Bambu PLA Basic, im Slicer änderbar); in PrusaSlicer ordnest du jedem Extruder das passende Filament zu.</p>
         </section>
+        </div>
       </aside>
       <div id="resizer" role="separator" aria-orientation="vertical" title="Breite der Seitenleiste ändern (Doppelklick: zurücksetzen)"></div>
 
       <main id="view">
-        <div id="toolbar">
-          <span class="seg" role="group" aria-label="Auswahlmodus">
-            <button data-pick="face" class="on" title="Flächen auswählen (Taste F)">Flächen</button>
-            <button data-pick="edge" title="Gerade Kanten auswählen (Taste K)">Kanten</button>
-            <button data-pick="point" title="Punkte markieren, z. B. Ecken (Taste P)">Punkte</button>
-            <button data-pick="brush" title="Fläche selbst bemalen: mit gedrückter Maustaste über das Teil streichen, beim Loslassen wird daraus eine Fläche (Taste B)">Pinsel</button>
-          </span>
-          <span class="seg" role="group" aria-label="Rückgängig und Wiederholen">
-            <button id="undoBtn" title="Rückgängig (Strg/⌘+Z)" aria-label="Rückgängig">↶</button>
-            <button id="redoBtn" title="Wiederholen (Strg/⌘+Umschalt+Z)" aria-label="Wiederholen">↷</button>
-          </span>
-          <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
-          <button id="fit" class="ghost small" title="Ansicht auf alle Teile anpassen">Ansicht anpassen</button>
-          <button id="measureTool" class="ghost small" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)">Messen</button>
-          <button id="paintTool" class="ghost small" title="Farben malen wie in Bambu Studio: Filament wählen und über das Teil streichen oder Flächen füllen – für mehrfarbigen Druck mit AMS oder H2C (Taste N)">Malen</button>
-          <button id="textTool" class="ghost small" title="Beschriften: Text oder Logo an der Klickstelle erhaben aufsetzen oder vertieft einlassen – folgt Rundungen (Taste W). Mehrere Teile durchnummerieren: Rechtsklick › „Nummerieren …“">Beschriften</button>
-          <button id="dimsTool" class="ghost small" title="Außenmaße im Bild: Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile (Taste D)">Maße</button>
-          <button id="explodeTool" class="ghost small" title="Explosionsansicht: Baugruppen auseinandergezogen zeigen – nur zum Ansehen (Taste X)">Explosion</button>
-          <button id="sectionTool" class="ghost small" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)">Schnitt</button>
-          <button id="fitTool" class="ghost small" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)">Passung</button>
-          <button id="layFlat" class="ghost small" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)">Auf Fläche legen</button>
-          <button id="helpBtn" class="ghost small help-btn" title="Anleitung und Tastenkürzel (Taste ?)" aria-label="Hilfe">?</button>
-          <button id="moveAll" class="ghost small" title="Das ganze zusammengesetzte Modell (Basisteil und alles, was daran hängt) verschieben oder drehen. Schneller: Strg/⌘ gedrückt halten und ein Teil über die Platte ziehen.">Gesamtes Modell bewegen</button>
-        </div>
         <div id="tip" hidden></div>
         <div id="status"></div>
         <div id="viewCube" title="Ansicht wählen: Fläche, Kante oder Ecke anklicken – ziehen dreht die Ansicht (Tasten 0–6)">
@@ -178,34 +215,6 @@
           <button id="platesShow" class="ghost small" title="Druckplatten ein- oder ausblenden (Umriss, Raster, Düsenbereiche)">Platten</button>
           <span id="plateList"></span>
           <button id="plateAdd" class="ghost small" title="Platte hinzufügen – wie in Bambu Studio im Raster; die Teile wandern mit ihrer Platte" aria-label="Platte hinzufügen">+</button>
-        </div>
-        <div id="measureBar" hidden>
-          <strong>Messen</strong>
-          <button id="measureReset" class="ghost small" title="Auswahl löschen und neu beginnen (Entf)">Neu</button>
-          <div id="measureText"></div>
-        </div>
-        <div id="paintBar" hidden>
-          <strong>Malen</strong>
-          <span id="paintSwatches" class="row"></span>
-          <span class="seg" role="group" aria-label="Malwerkzeug">
-            <button data-pmode="brush" class="on" title="Mit gedrückter Maustaste über das Teil streichen">Pinsel</button>
-            <button data-pmode="fill" title="Zusammenhängende Fläche bis zu einem Knick füllen">Füllen</button>
-          </span>
-          <button id="paintErase" class="ghost small" aria-pressed="false" title="Radieren statt malen – wie Umschalt gedrückt halten (für Touch)">Radierer</button>
-          <label class="small" id="paintSizeWrap" title="Durchmesser des Pinsels (Alt + Mausrad)">Größe <input type="range" id="paintSize" min="0.5" max="30" step="0.5" value="4" /> <span id="paintSizeVal"></span></label>
-          <label class="small" id="paintAngleWrap" hidden title="Füllen hört an Knicken auf, die größer sind">bis Knick <input type="number" id="paintAngle" value="30" min="1" max="90" step="5" /> °</label>
-          <span id="paintInfo" class="small"></span>
-          <button id="paintClose" class="ghost small">Fertig</button>
-          <p class="help">Linke Maustaste malt mit dem gewählten Filament, mit Umschalt radiert sie (zurück zum Filament des Teils). Die Nummern sind die Filamente im Bambu-Export, in derselben Reihenfolge. Ziehen neben dem Teil dreht die Ansicht.</p>
-        </div>
-        <div id="fitBar" hidden>
-          <strong id="fitTitle"></strong>
-          <label class="small"><span id="fitLabel"></span> <input type="number" id="fitValue" step="0.05" /> mm</label>
-          <span class="row" id="fitQuick"></span>
-          <label class="check small" id="fitAlsoWrap" hidden><input type="checkbox" id="fitAlso" checked /> <span id="fitAlsoText"></span></label>
-          <button id="fitApply" class="small">Übernehmen</button>
-          <button id="fitCancel" class="ghost small">Abbrechen</button>
-          <p class="help" id="fitHelp"></p>
         </div>
         <div id="explodeBar" hidden>
           <strong>Explosion</strong>
@@ -225,169 +234,199 @@
           <button id="sectionFlip" class="ghost small" title="Die andere Hälfte zeigen">⇄ Seite</button>
           <button id="sectionClose" class="icon" title="Schnitt beenden (C)" aria-label="Schnitt beenden">✕</button>
         </div>
-        <div id="cutBar" hidden>
-          <strong id="cutTitle"></strong>
-          <span class="seg" role="group" aria-label="Verbinder">
-            <button data-conn="none" title="Nur schneiden – z. B. zum Kleben">Ohne</button>
-            <button data-conn="pin" title="Zapfen an der sichtbaren Hälfte, Bohrung in der anderen">Zapfen</button>
-            <button data-conn="dowel" title="Bohrungen in beiden Hälften und getrennt gedruckte Dübel">Dübel</button>
-            <button data-conn="dovetail" title="Schwalbenschwanz: Feder an der sichtbaren Hälfte, die andere wird seitlich aufgeschoben – hält ohne Kleber">Schwalbenschwanz</button>
-            <button data-conn="snap" title="Schnappstifte: Bohrungen mit Hinterschnitt in beiden Hälften und getrennt gedruckte, geschlitzte Stifte mit Widerhaken – rasten beim Zusammenstecken ein, ohne Kleber. Stifte flach liegend drucken.">Schnapp</button>
-          </span>
-          <label class="small conn-opt">Anzahl <select id="cutCount"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
-          <label class="small conn-opt"><span id="cutDiaLabel">⌀</span> <input type="number" id="cutDia" min="2" max="40" step="0.5" placeholder="Auto" /> mm</label>
-          <label class="small conn-opt" title="Spiel zwischen Zapfen bzw. Dübel und Bohrung (je Seite)">Spiel <input type="number" id="cutGap" min="0" max="1" step="0.05" value="0.2" /> mm</label>
-          <label class="check small"><input type="checkbox" id="cutFlat" checked /> Schnittflächen auf die Platte</label>
-          <button id="cutApply" class="small">Zerschneiden</button>
-          <button id="cutCancel" class="ghost small">Abbrechen</button>
-          <p class="help" id="cutHelp">Lage der Schnittebene unten rechts einstellen.</p>
-        </div>
-        <div id="anaBar" hidden>
-          <strong>Druckprüfung</strong>
-          <label class="check small"><input type="checkbox" id="anaOver" checked /> Überhänge ab <input type="number" id="anaAngle" value="45" min="1" max="89" step="5" />°</label>
-          <label class="check small"><input type="checkbox" id="anaThin" checked /> Wände dünner als <input type="number" id="anaMin" value="0.8" min="0.1" max="10" step="0.1" /> mm</label>
-          <span id="anaInfo" class="small"></span>
-          <button id="anaClose" class="ghost small">Schließen</button>
-          <p class="help">Rot: hängt über (Winkel von der Senkrechten, wie im Slicer) – drehen („Auf Fläche legen“, „Für den Druck ausrichten“) oder Stützen. Lila: dünner als erlaubt – bei 0,4-mm-Düse sind 0,8 mm zwei Bahnen.</p>
-        </div>
-        <div id="tolBar" hidden>
-          <strong>Toleranz-Test</strong>
-          <label class="small">Zapfen ⌀ <input type="text" id="tolDia" value="10" inputmode="decimal" /> mm</label>
-          <label class="small" title="Spiel je Seite, je Loch ein Wert">Spiel je Loch <input type="text" id="tolList" value="0,1 0,15 0,2 0,25 0,3 0,4" /> mm</label>
-          <button id="tolMake" class="small">Erzeugen</button>
-          <span class="row mine">Mein Spiel <input type="text" id="tolMine" inputmode="decimal" /> mm <span id="tolFor" class="muted"></span> <button id="tolSave" class="ghost small" title="Für den gewählten Drucker und das gewählte Material (unter „Filament &amp; Kosten“) speichern – Zerschneiden, Zerteilen und die Passung nehmen es dann vor">Speichern</button></span>
-          <button id="tolClose" class="ghost small">Schließen</button>
-          <p class="help">Platte und Zapfen drucken (wie sie liegen), dann den Zapfen der Reihe nach in die Löcher stecken. Das erste Loch, in das er ohne Gewalt ganz hineingeht, nennt dein Spiel für Steckverbindungen. Stramm sitzend: ein Loch davor.</p>
-        </div>
-        <div id="pocketBar" hidden>
-          <strong id="pocketTitle"></strong>
-          <span class="seg" role="group" aria-label="Art der Aussparung">
-            <button data-pkind="magnet" class="on" title="Runde Tasche für einen Scheibenmagneten">Magnet</button>
-            <button data-pkind="insert" title="Loch für einen Gewindeeinsatz zum Einschmelzen">Einsatz</button>
-            <button data-pkind="screw" title="Schraubenloch mit versenktem Kopf">Schraube</button>
-            <button data-pkind="nut" title="Sechskant-Tasche für eine Mutter">Mutter</button>
-            <button data-pkind="hole" title="Runde Bohrung mit freiem Maß">Bohrung</button>
-          </span>
-          <select id="pocketPreset" aria-label="Größe"></select>
-          <label class="small"><span id="pocketDiaLabel">⌀</span> <input type="number" id="pocketDia" min="0.5" step="0.1" /> mm</label>
-          <label class="small"><span id="pocketDepthLabel">Tiefe</span> <input type="number" id="pocketDepth" min="0.2" step="0.1" /> mm</label>
-          <label class="small" data-for="screw">Kopf ⌀ <input type="number" id="pocketHead" min="1" step="0.1" /> mm</label>
-          <label class="check small" data-for="screw"><input type="checkbox" id="pocketSunk" /> Senkkopf</label>
-          <label class="check small" data-for="hole screw nut"><input type="checkbox" id="pocketThrough" /> <span id="pocketThroughLabel">ganz durch</span></label>
-          <label class="small" title="Spiel je Seite">Spiel <input type="number" id="pocketGap" min="0" max="1" step="0.05" /> mm</label>
-          <button id="pocketApply" class="small">Einsetzen</button>
-          <button id="pocketClose" class="ghost small">Fertig</button>
-          <p class="help" id="pocketHelp"></p>
-        </div>
-        <div id="textBar" hidden>
-          <strong id="textTitle">Beschriften</strong>
-          <span class="seg" role="group" aria-label="Text oder Logo">
-            <button data-tsrc="text" class="on" title="Text in einer eingebauten Schrift">Text</button>
-            <button data-tsrc="logo" title="Logo aus einer SVG-Datei (gefüllte Flächen)">Logo</button>
-            <button data-tsrc="number" title="Mehrere Teile durchnummerieren (1/7, 2/7 …) – automatisch auf der größten Fläche unten oder oben">Nummern</button>
-          </span>
-          <textarea id="textValue" data-tfor="text" rows="1" spellcheck="false" aria-label="Text" title="Zeilenumbruch mit Umschalt + Enter">D3DForge</textarea>
-          <select id="textFont" data-tfor="text number" aria-label="Schrift"><option value="bold">Fett</option><option value="regular">Normal</option></select>
-          <button id="textLogoPick" data-tfor="logo" class="ghost small" title="SVG-Datei wählen – gefüllte Flächen werden zur Form">SVG laden …</button>
-          <input type="file" id="textLogoFile" accept=".svg,image/svg+xml" hidden />
-          <label class="small" data-tfor="number" title="{n}: Nummer, {N}: Anzahl der Teile">Muster <input type="text" id="textPattern" value="{n}/{N}" /></label>
-          <label class="small" data-tfor="number" title="Erste Nummer">ab <input type="number" id="textStart" value="1" min="0" step="1" /></label>
-          <span class="seg" role="group" aria-label="Seite" data-tfor="number">
-            <button data-tside="bottom" class="on" title="Auf die größte Fläche unten (liegt auf der Platte) – nach dem Zusammenbau meist unsichtbar">Unten</button>
-            <button data-tside="top" title="Auf die größte Fläche oben">Oben</button>
-          </span>
-          <label class="small" title="Höhe der Großbuchstaben bzw. des Logos (Nummern: höchstens so groß, sonst passend zur Fläche)"><span id="textSizeLabel">Größe</span> <input type="number" id="textSize" value="8" min="1" max="300" step="0.5" /> mm</label>
-          <span class="seg" role="group" aria-label="Relief">
-            <button data-tmode="raised" class="on" title="Steht aus der Fläche heraus">Erhaben</button>
-            <button data-tmode="engraved" title="In die Fläche eingelassen">Vertieft</button>
-          </span>
-          <label class="small"><span id="textDepthLabel">Höhe</span> <input type="number" id="textDepth" value="0.6" min="0.1" max="20" step="0.1" /> mm</label>
-          <label class="small" data-tfor="text logo" title="In der Fläche drehen (gegen den Uhrzeigersinn)">Drehung <input type="number" id="textRotate" value="0" step="15" /> °</label>
-          <label class="small" title="Eigenes Filament für die Beschriftung (wird als Bemalung exportiert, z. B. für AMS oder H2C)">Farbe <select id="textColor"></select></label>
-          <button id="textApply" class="small">Einprägen</button>
-          <button id="textClose" class="ghost small">Fertig</button>
-          <p class="help" id="textHelp"></p>
-        </div>
-        <div id="splitBar" hidden>
-          <strong id="splitTitle"></strong>
-          <span class="row counts">
-            <span>X <button class="ghost small" data-split-dec="0" aria-label="weniger Stücke entlang X">−</button><b data-split-count="0"></b><button class="ghost small" data-split-inc="0" aria-label="mehr Stücke entlang X">+</button></span>
-            <span>Y <button class="ghost small" data-split-dec="1" aria-label="weniger Stücke entlang Y">−</button><b data-split-count="1"></b><button class="ghost small" data-split-inc="1" aria-label="mehr Stücke entlang Y">+</button></span>
-            <span>Z <button class="ghost small" data-split-dec="2" aria-label="weniger Stücke entlang Z">−</button><b data-split-count="2"></b><button class="ghost small" data-split-inc="2" aria-label="mehr Stücke entlang Z">+</button></span>
-          </span>
-          <span class="seg" role="group" aria-label="Verbinder">
-            <button data-sconn="none" title="Nur schneiden – zum Kleben">Ohne</button>
-            <button data-sconn="pin" title="Zapfen an der einen, Bohrung an der anderen Seite">Zapfen</button>
-            <button data-sconn="dowel" title="Bohrungen in beiden Stücken, Dübel als eigene Teile – auch an senkrechten Schnitten gut druckbar">Dübel</button>
-            <button data-sconn="dovetail" title="Schwalbenschwanz: Stücke werden seitlich aufgeschoben – hält ohne Kleber">Schwalbenschwanz</button>
-            <button data-sconn="snap" title="Schnappstifte: rasten beim Zusammenstecken ein, ohne Kleber – Stifte werden eigene Teile, flach liegend">Schnapp</button>
-          </span>
-          <label class="small" title="Spiel zwischen Dübel bzw. Zapfen und Bohrung (je Seite)">Spiel <input type="number" id="splitGap" min="0" max="1" step="0.05" value="0.2" /> mm</label>
-          <button id="splitApply" class="small">Zerteilen</button>
-          <button id="splitCancel" class="ghost small">Abbrechen</button>
-          <p class="help" id="splitHelp"></p>
-        </div>
-        <div id="simpBar" hidden>
-          <strong id="simpTitle"></strong>
-          <label class="small" title="So weit darf die vereinfachte Oberfläche höchstens vom Original abweichen">Abweichung höchstens <select id="simpTol"></select></label>
-          <button id="simpApply" class="small">Vereinfachen</button>
-          <button id="simpCancel" class="ghost small">Abbrechen</button>
-          <p class="help" id="simpHelp"></p>
-        </div>
-        <div id="scaleBar" hidden>
-          <strong id="scaleTitle"></strong>
-          <span class="seg" id="scaleWhich" role="group" aria-label="Was skaliert wird">
-            <button data-which="unit" title="Alle Teile, die zusammen auf der Platte stehen">Baugruppe</button>
-            <button data-which="part" title="Nur dieses Teil – verbundene Teile passen sich an">Nur dieses Teil</button>
-          </span>
-          <label class="small">Größe <input type="number" id="scalePct" step="1" min="0.1" /> %</label>
-          <span class="small dims"><input type="number" id="scaleX" step="0.1" min="0.01" title="Breite (X) in mm" /> × <input type="number" id="scaleY" step="0.1" min="0.01" title="Tiefe (Y) in mm" /> × <input type="number" id="scaleZ" step="0.1" min="0.01" title="Höhe (Z) in mm" /> mm</span>
-          <span class="row" id="scaleQuick">
-            <button class="ghost small" data-k="0.5">50 %</button>
-            <button class="ghost small" data-k="2">200 %</button>
-            <button class="ghost small" data-k="25.4" title="Das Modell wurde in Zoll angelegt und ist deshalb 25,4-mal zu klein">Zoll → mm</button>
-            <button class="ghost small" data-k="10" title="Das Modell wurde in Zentimetern angelegt">cm → mm</button>
-          </span>
-          <button id="scaleApply" class="small">Skalieren</button>
-          <span class="row mirror">Spiegeln:
-            <button class="ghost small" data-mirror="0" title="An der Mitte spiegeln: links ↔ rechts">X</button>
-            <button class="ghost small" data-mirror="1" title="An der Mitte spiegeln: vorne ↔ hinten">Y</button>
-            <button class="ghost small" data-mirror="2" title="An der Mitte spiegeln: oben ↔ unten">Z</button>
-          </span>
-          <button id="scaleClose" class="ghost small">Schließen</button>
-          <p class="help" id="scaleHelp"></p>
-        </div>
-        <div id="gizmoBar" hidden>
-          <strong data-g="title"></strong>
-          <span class="seg" role="group" aria-label="Gizmo-Modus">
-            <button data-g-mode="translate" title="Verschieben (Taste G)">Verschieben</button>
-            <button data-g-mode="rotate" title="Drehen (Taste R)">Drehen</button>
-          </span>
-          <label class="check small" data-g="free" title="Nur in den Richtungen bewegen, die die Verbindung offen lässt (z. B. Drehen um die Zapfenachse)."><input type="checkbox" id="gizmoFree" checked /> Nur freie Richtungen</label>
-          <label class="check small">Raster
-            <select id="gizmoSnap">
-              <option value="0">aus</option>
-              <option value="1">1°</option>
-              <option value="5">5°</option>
-              <option value="15">15°</option>
-              <option value="45">45°</option>
-              <option value="90">90°</option>
-            </select>
-          </label>
-          <span class="row gnum" data-g="num">
-            <span title="Mitte der Baugruppe (X, Y) und Unterkante (Z) in mm – Wert eingeben und Enter">Lage</span>
-            <label>X <input type="number" step="0.5" data-gpos="0" /></label>
-            <label>Y <input type="number" step="0.5" data-gpos="1" /></label>
-            <label>Z <input type="number" step="0.5" data-gpos="2" /></label>
-            <span class="gsep"></span>
-            <label>Drehen <input type="number" step="5" id="gRotDeg" value="90" /> ° um</label>
-            <button class="ghost small" data-grot="0" title="Um die X-Achse drehen (durch die Mitte)">X</button>
-            <button class="ghost small" data-grot="1" title="Um die Y-Achse drehen (durch die Mitte)">Y</button>
-            <button class="ghost small" data-grot="2" title="Um die Z-Achse drehen (durch die Mitte)">Z</button>
-          </span>
-          <button class="ghost small" data-g="reset" title="Handkorrektur verwerfen">Zurücksetzen</button>
-          <button class="small" data-g="done">Fertig</button>
-          <span id="gizmoHint" class="help"></span>
+        <div id="dock" aria-label="Werkzeug">
+          <div id="measureBar" hidden>
+            <strong>Messen</strong>
+            <button id="measureReset" class="ghost small" title="Auswahl löschen und neu beginnen (Entf)">Neu</button>
+            <div id="measureText"></div>
+          </div>
+          <div id="paintBar" hidden>
+            <strong>Malen</strong>
+            <span id="paintSwatches" class="row"></span>
+            <span class="seg" role="group" aria-label="Malwerkzeug">
+              <button data-pmode="brush" class="on" title="Mit gedrückter Maustaste über das Teil streichen">Pinsel</button>
+              <button data-pmode="fill" title="Zusammenhängende Fläche bis zu einem Knick füllen">Füllen</button>
+            </span>
+            <button id="paintErase" class="ghost small" aria-pressed="false" title="Radieren statt malen – wie Umschalt gedrückt halten (für Touch)">Radierer</button>
+            <label class="small" id="paintSizeWrap" title="Durchmesser des Pinsels (Alt + Mausrad)">Größe <input type="range" id="paintSize" min="0.5" max="30" step="0.5" value="4" /> <span id="paintSizeVal"></span></label>
+            <label class="small" id="paintAngleWrap" hidden title="Füllen hört an Knicken auf, die größer sind">bis Knick <input type="number" id="paintAngle" value="30" min="1" max="90" step="5" /> °</label>
+            <span id="paintInfo" class="small"></span>
+            <button id="paintClose" class="ghost small">Fertig</button>
+            <p class="help">Linke Maustaste malt mit dem gewählten Filament, mit Umschalt radiert sie (zurück zum Filament des Teils). Die Nummern sind die Filamente im Bambu-Export, in derselben Reihenfolge. Ziehen neben dem Teil dreht die Ansicht.</p>
+          </div>
+          <div id="fitBar" hidden>
+            <strong id="fitTitle"></strong>
+            <label class="small"><span id="fitLabel"></span> <input type="number" id="fitValue" step="0.05" /> mm</label>
+            <span class="row" id="fitQuick"></span>
+            <label class="check small" id="fitAlsoWrap" hidden><input type="checkbox" id="fitAlso" checked /> <span id="fitAlsoText"></span></label>
+            <button id="fitApply" class="small">Übernehmen</button>
+            <button id="fitCancel" class="ghost small">Abbrechen</button>
+            <p class="help" id="fitHelp"></p>
+          </div>
+          <div id="cutBar" hidden>
+            <strong id="cutTitle"></strong>
+            <span class="seg" role="group" aria-label="Verbinder">
+              <button data-conn="none" title="Nur schneiden – z. B. zum Kleben">Ohne</button>
+              <button data-conn="pin" title="Zapfen an der sichtbaren Hälfte, Bohrung in der anderen">Zapfen</button>
+              <button data-conn="dowel" title="Bohrungen in beiden Hälften und getrennt gedruckte Dübel">Dübel</button>
+              <button data-conn="dovetail" title="Schwalbenschwanz: Feder an der sichtbaren Hälfte, die andere wird seitlich aufgeschoben – hält ohne Kleber">Schwalbenschwanz</button>
+              <button data-conn="snap" title="Schnappstifte: Bohrungen mit Hinterschnitt in beiden Hälften und getrennt gedruckte, geschlitzte Stifte mit Widerhaken – rasten beim Zusammenstecken ein, ohne Kleber. Stifte flach liegend drucken.">Schnapp</button>
+            </span>
+            <label class="small conn-opt">Anzahl <select id="cutCount"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+            <label class="small conn-opt"><span id="cutDiaLabel">⌀</span> <input type="number" id="cutDia" min="2" max="40" step="0.5" placeholder="Auto" /> mm</label>
+            <label class="small conn-opt" title="Spiel zwischen Zapfen bzw. Dübel und Bohrung (je Seite)">Spiel <input type="number" id="cutGap" min="0" max="1" step="0.05" value="0.2" /> mm</label>
+            <label class="check small"><input type="checkbox" id="cutFlat" checked /> Schnittflächen auf die Platte</label>
+            <button id="cutApply" class="small">Zerschneiden</button>
+            <button id="cutCancel" class="ghost small">Abbrechen</button>
+            <p class="help" id="cutHelp">Lage der Schnittebene unten rechts einstellen.</p>
+          </div>
+          <div id="anaBar" hidden>
+            <strong>Druckprüfung</strong>
+            <label class="check small"><input type="checkbox" id="anaOver" checked /> Überhänge ab <input type="number" id="anaAngle" value="45" min="1" max="89" step="5" />°</label>
+            <label class="check small"><input type="checkbox" id="anaThin" checked /> Wände dünner als <input type="number" id="anaMin" value="0.8" min="0.1" max="10" step="0.1" /> mm</label>
+            <span id="anaInfo" class="small"></span>
+            <button id="anaClose" class="ghost small">Schließen</button>
+            <p class="help">Rot: hängt über (Winkel von der Senkrechten, wie im Slicer) – drehen („Hinlegen“, „Für den Druck ausrichten“) oder Stützen. Lila: dünner als erlaubt – bei 0,4-mm-Düse sind 0,8 mm zwei Bahnen.</p>
+          </div>
+          <div id="tolBar" hidden>
+            <strong>Toleranz-Test</strong>
+            <label class="small">Zapfen ⌀ <input type="text" id="tolDia" value="10" inputmode="decimal" /> mm</label>
+            <label class="small" title="Spiel je Seite, je Loch ein Wert">Spiel je Loch <input type="text" id="tolList" value="0,1 0,15 0,2 0,25 0,3 0,4" /> mm</label>
+            <button id="tolMake" class="small">Erzeugen</button>
+            <span class="row mine">Mein Spiel <input type="text" id="tolMine" inputmode="decimal" /> mm <span id="tolFor" class="muted"></span> <button id="tolSave" class="ghost small" title="Für den gewählten Drucker und das gewählte Material (unter „Filament &amp; Kosten“) speichern – Zerschneiden, Zerteilen und die Passung nehmen es dann vor">Speichern</button></span>
+            <button id="tolClose" class="ghost small">Schließen</button>
+            <p class="help">Platte und Zapfen drucken (wie sie liegen), dann den Zapfen der Reihe nach in die Löcher stecken. Das erste Loch, in das er ohne Gewalt ganz hineingeht, nennt dein Spiel für Steckverbindungen. Stramm sitzend: ein Loch davor.</p>
+          </div>
+          <div id="pocketBar" hidden>
+            <strong id="pocketTitle"></strong>
+            <span class="seg" role="group" aria-label="Art der Aussparung">
+              <button data-pkind="magnet" class="on" title="Runde Tasche für einen Scheibenmagneten">Magnet</button>
+              <button data-pkind="insert" title="Loch für einen Gewindeeinsatz zum Einschmelzen">Einsatz</button>
+              <button data-pkind="screw" title="Schraubenloch mit versenktem Kopf">Schraube</button>
+              <button data-pkind="nut" title="Sechskant-Tasche für eine Mutter">Mutter</button>
+              <button data-pkind="hole" title="Runde Bohrung mit freiem Maß">Bohrung</button>
+            </span>
+            <select id="pocketPreset" aria-label="Größe"></select>
+            <label class="small"><span id="pocketDiaLabel">⌀</span> <input type="number" id="pocketDia" min="0.5" step="0.1" /> mm</label>
+            <label class="small"><span id="pocketDepthLabel">Tiefe</span> <input type="number" id="pocketDepth" min="0.2" step="0.1" /> mm</label>
+            <label class="small" data-for="screw">Kopf ⌀ <input type="number" id="pocketHead" min="1" step="0.1" /> mm</label>
+            <label class="check small" data-for="screw"><input type="checkbox" id="pocketSunk" /> Senkkopf</label>
+            <label class="check small" data-for="hole screw nut"><input type="checkbox" id="pocketThrough" /> <span id="pocketThroughLabel">ganz durch</span></label>
+            <label class="small" title="Spiel je Seite">Spiel <input type="number" id="pocketGap" min="0" max="1" step="0.05" /> mm</label>
+            <button id="pocketApply" class="small">Einsetzen</button>
+            <button id="pocketClose" class="ghost small">Fertig</button>
+            <p class="help" id="pocketHelp"></p>
+          </div>
+          <div id="textBar" hidden>
+            <strong id="textTitle">Beschriften</strong>
+            <span class="seg" role="group" aria-label="Text oder Logo">
+              <button data-tsrc="text" class="on" title="Text in einer eingebauten Schrift">Text</button>
+              <button data-tsrc="logo" title="Logo aus einer SVG-Datei (gefüllte Flächen)">Logo</button>
+              <button data-tsrc="number" title="Mehrere Teile durchnummerieren (1/7, 2/7 …) – automatisch auf der größten Fläche unten oder oben">Nummern</button>
+            </span>
+            <textarea id="textValue" data-tfor="text" rows="1" spellcheck="false" aria-label="Text" title="Zeilenumbruch mit Umschalt + Enter">D3DForge</textarea>
+            <select id="textFont" data-tfor="text number" aria-label="Schrift"><option value="bold">Fett</option><option value="regular">Normal</option></select>
+            <button id="textLogoPick" data-tfor="logo" class="ghost small" title="SVG-Datei wählen – gefüllte Flächen werden zur Form">SVG laden …</button>
+            <input type="file" id="textLogoFile" accept=".svg,image/svg+xml" hidden />
+            <label class="small" data-tfor="number" title="{n}: Nummer, {N}: Anzahl der Teile">Muster <input type="text" id="textPattern" value="{n}/{N}" /></label>
+            <label class="small" data-tfor="number" title="Erste Nummer">ab <input type="number" id="textStart" value="1" min="0" step="1" /></label>
+            <span class="seg" role="group" aria-label="Seite" data-tfor="number">
+              <button data-tside="bottom" class="on" title="Auf die größte Fläche unten (liegt auf der Platte) – nach dem Zusammenbau meist unsichtbar">Unten</button>
+              <button data-tside="top" title="Auf die größte Fläche oben">Oben</button>
+            </span>
+            <label class="small" title="Höhe der Großbuchstaben bzw. des Logos (Nummern: höchstens so groß, sonst passend zur Fläche)"><span id="textSizeLabel">Größe</span> <input type="number" id="textSize" value="8" min="1" max="300" step="0.5" /> mm</label>
+            <span class="seg" role="group" aria-label="Relief">
+              <button data-tmode="raised" class="on" title="Steht aus der Fläche heraus">Erhaben</button>
+              <button data-tmode="engraved" title="In die Fläche eingelassen">Vertieft</button>
+            </span>
+            <label class="small"><span id="textDepthLabel">Höhe</span> <input type="number" id="textDepth" value="0.6" min="0.1" max="20" step="0.1" /> mm</label>
+            <label class="small" data-tfor="text logo" title="In der Fläche drehen (gegen den Uhrzeigersinn)">Drehung <input type="number" id="textRotate" value="0" step="15" /> °</label>
+            <label class="small" title="Eigenes Filament für die Beschriftung (wird als Bemalung exportiert, z. B. für AMS oder H2C)">Farbe <select id="textColor"></select></label>
+            <button id="textApply" class="small">Einprägen</button>
+            <button id="textClose" class="ghost small">Fertig</button>
+            <p class="help" id="textHelp"></p>
+          </div>
+          <div id="splitBar" hidden>
+            <strong id="splitTitle"></strong>
+            <span class="row counts">
+              <span>X <button class="ghost small" data-split-dec="0" aria-label="weniger Stücke entlang X">−</button><b data-split-count="0"></b><button class="ghost small" data-split-inc="0" aria-label="mehr Stücke entlang X">+</button></span>
+              <span>Y <button class="ghost small" data-split-dec="1" aria-label="weniger Stücke entlang Y">−</button><b data-split-count="1"></b><button class="ghost small" data-split-inc="1" aria-label="mehr Stücke entlang Y">+</button></span>
+              <span>Z <button class="ghost small" data-split-dec="2" aria-label="weniger Stücke entlang Z">−</button><b data-split-count="2"></b><button class="ghost small" data-split-inc="2" aria-label="mehr Stücke entlang Z">+</button></span>
+            </span>
+            <span class="seg" role="group" aria-label="Verbinder">
+              <button data-sconn="none" title="Nur schneiden – zum Kleben">Ohne</button>
+              <button data-sconn="pin" title="Zapfen an der einen, Bohrung an der anderen Seite">Zapfen</button>
+              <button data-sconn="dowel" title="Bohrungen in beiden Stücken, Dübel als eigene Teile – auch an senkrechten Schnitten gut druckbar">Dübel</button>
+              <button data-sconn="dovetail" title="Schwalbenschwanz: Stücke werden seitlich aufgeschoben – hält ohne Kleber">Schwalbenschwanz</button>
+              <button data-sconn="snap" title="Schnappstifte: rasten beim Zusammenstecken ein, ohne Kleber – Stifte werden eigene Teile, flach liegend">Schnapp</button>
+            </span>
+            <label class="small" title="Spiel zwischen Dübel bzw. Zapfen und Bohrung (je Seite)">Spiel <input type="number" id="splitGap" min="0" max="1" step="0.05" value="0.2" /> mm</label>
+            <button id="splitApply" class="small">Zerteilen</button>
+            <button id="splitCancel" class="ghost small">Abbrechen</button>
+            <p class="help" id="splitHelp"></p>
+          </div>
+          <div id="simpBar" hidden>
+            <strong id="simpTitle"></strong>
+            <label class="small" title="So weit darf die vereinfachte Oberfläche höchstens vom Original abweichen">Abweichung höchstens <select id="simpTol"></select></label>
+            <button id="simpApply" class="small">Vereinfachen</button>
+            <button id="simpCancel" class="ghost small">Abbrechen</button>
+            <p class="help" id="simpHelp"></p>
+          </div>
+          <div id="scaleBar" hidden>
+            <strong id="scaleTitle"></strong>
+            <span class="seg" id="scaleWhich" role="group" aria-label="Was skaliert wird">
+              <button data-which="unit" title="Alle Teile, die zusammen auf der Platte stehen">Baugruppe</button>
+              <button data-which="part" title="Nur dieses Teil – verbundene Teile passen sich an">Nur dieses Teil</button>
+            </span>
+            <label class="small">Größe <input type="number" id="scalePct" step="1" min="0.1" /> %</label>
+            <span class="small dims"><input type="number" id="scaleX" step="0.1" min="0.01" title="Breite (X) in mm" /> × <input type="number" id="scaleY" step="0.1" min="0.01" title="Tiefe (Y) in mm" /> × <input type="number" id="scaleZ" step="0.1" min="0.01" title="Höhe (Z) in mm" /> mm</span>
+            <span class="row" id="scaleQuick">
+              <button class="ghost small" data-k="0.5">50 %</button>
+              <button class="ghost small" data-k="2">200 %</button>
+              <button class="ghost small" data-k="25.4" title="Das Modell wurde in Zoll angelegt und ist deshalb 25,4-mal zu klein">Zoll → mm</button>
+              <button class="ghost small" data-k="10" title="Das Modell wurde in Zentimetern angelegt">cm → mm</button>
+            </span>
+            <button id="scaleApply" class="small">Skalieren</button>
+            <span class="row mirror">Spiegeln:
+              <button class="ghost small" data-mirror="0" title="An der Mitte spiegeln: links ↔ rechts">X</button>
+              <button class="ghost small" data-mirror="1" title="An der Mitte spiegeln: vorne ↔ hinten">Y</button>
+              <button class="ghost small" data-mirror="2" title="An der Mitte spiegeln: oben ↔ unten">Z</button>
+            </span>
+            <button id="scaleClose" class="ghost small">Schließen</button>
+            <p class="help" id="scaleHelp"></p>
+          </div>
+          <div id="gizmoBar" hidden>
+            <strong data-g="title"></strong>
+            <span class="seg" role="group" aria-label="Gizmo-Modus">
+              <button data-g-mode="translate" title="Verschieben (Taste G)">Verschieben</button>
+              <button data-g-mode="rotate" title="Drehen (Taste R)">Drehen</button>
+            </span>
+            <label class="check small" data-g="free" title="Nur in den Richtungen bewegen, die die Verbindung offen lässt (z. B. Drehen um die Zapfenachse)."><input type="checkbox" id="gizmoFree" checked /> Nur freie Richtungen</label>
+            <label class="check small">Raster
+              <select id="gizmoSnap">
+                <option value="0">aus</option>
+                <option value="1">1°</option>
+                <option value="5">5°</option>
+                <option value="15">15°</option>
+                <option value="45">45°</option>
+                <option value="90">90°</option>
+              </select>
+            </label>
+            <span class="row gnum" data-g="num">
+              <span title="Mitte der Baugruppe (X, Y) und Unterkante (Z) in mm – Wert eingeben und Enter">Lage</span>
+              <label>X <input type="number" step="0.5" data-gpos="0" /></label>
+              <label>Y <input type="number" step="0.5" data-gpos="1" /></label>
+              <label>Z <input type="number" step="0.5" data-gpos="2" /></label>
+              <span class="gsep"></span>
+              <label>Drehen <input type="number" step="5" id="gRotDeg" value="90" /> ° um</label>
+              <button class="ghost small" data-grot="0" title="Um die X-Achse drehen (durch die Mitte)">X</button>
+              <button class="ghost small" data-grot="1" title="Um die Y-Achse drehen (durch die Mitte)">Y</button>
+              <button class="ghost small" data-grot="2" title="Um die Z-Achse drehen (durch die Mitte)">Z</button>
+            </span>
+            <button class="ghost small" data-g="reset" title="Handkorrektur verwerfen">Zurücksetzen</button>
+            <button class="small" data-g="done">Fertig</button>
+            <span id="gizmoHint" class="help"></span>
+          </div>
         </div>
         <div id="hint"></div>
         <div id="toast"></div>
@@ -428,12 +467,12 @@
           <h3>So geht’s</h3>
           <ol>
             <li><b>Laden</b> – Dateien ins Fenster ziehen (STL, 3MF, STEP, OBJ …) oder ein Projekt (.d3dforge) öffnen.</li>
-            <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder links „Alles automatisch verbinden“.</li>
+            <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder im Reiter „Verbinden“ „Alles automatisch verbinden“.</li>
             <li><b>Nachjustieren</b> – „Von Hand anpassen“ dreht und schiebt in den Richtungen, die die Verbindung offen lässt; „Um 180° drehen“ wechselt zwischen gleich guten Lagen; „Einsinken“ schiebt Teile minimal ineinander, damit der Slicer sie verschmilzt.</li>
             <li><b>Malen</b> (N) – mehrfarbig für AMS/H2C: Filament wählen, mit dem Pinsel streichen oder Flächen füllen; Umschalt radiert. Kommt als Bemalung ins Bambu-Projekt.</li>
             <li><b>Beschriften</b> (W) – Text oder SVG-Logo anklicken und einprägen, erhaben oder vertieft, auf Wunsch in eigener Farbe; folgt Rundungen. „Nummern“ schreibt 1/7, 2/7 … auf die ausgewählten Teile.</li>
             <li><b>Prüfen</b> – „Passung prüfen“: grün liegt an, gelb Spalt, rot dringt ein. „Standfestigkeit“ zeigt Schwerpunkt und Standfläche und ab welcher Neigung ein Modell kippt. „Filament &amp; Kosten“ schätzt Gramm, Meter und Preis (gesamt und je Platte).</li>
-            <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Auf Fläche legen“; für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
+            <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Hinlegen“ (oben); für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
             <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“. „Montageanleitung“ druckt Bild mit Nummern, Stückliste und Schritte (auch als PDF).</li>
           </ol>
           <h3>Teileliste</h3>
@@ -448,7 +487,7 @@
             <dt>⚠</dt><dd>Netz nicht geschlossen – klicken repariert es</dd>
             <dt><kbd>Strg/⌘</kbd> + Klick</dt><dd>mehrere Teile auswählen, <kbd>⇧</kbd> + Klick: Bereich – dann gruppieren, ausblenden, Farbe, entfernen</dd>
           </dl>
-          <p class="help">In der Flächenliste einer Verbindung: Kästchen anhaken und „… zusammenfassen“ macht aus mehreren Flächen eine, ⇹ trennt sie wieder, Rechtsklick auf eine Markierung im Modell entfernt sie. Den Rand der Seitenleiste ziehen ändert ihre Breite, Doppelklick setzt sie zurück.</p>
+          <p class="help">In der Flächenliste einer Verbindung: Kästchen anhaken und „… zusammenfassen“ macht aus mehreren Flächen eine, ⇹ trennt sie wieder, Rechtsklick auf eine Markierung im Modell entfernt sie. Die Seitenleiste hat drei Reiter (Teile, Verbinden, Drucken); ihren Rand ziehen ändert die Breite, Doppelklick setzt sie zurück.</p>
         </section>
         <section>
           <h3>Tasten</h3>
@@ -462,7 +501,7 @@
             <dt><kbd>X</kbd></dt><dd>Explosionsansicht ein/aus – Baugruppen auseinandergezogen ansehen</dd>
             <dt><kbd>U</kbd></dt><dd>Überhänge und dünne Wände einfärben</dd>
             <dt><kbd>T</kbd></dt><dd>Passung: Zapfen, Bohrung oder Fläche anpassen</dd>
-            <dt><kbd>L</kbd></dt><dd>Auf Fläche legen</dd>
+            <dt><kbd>L</kbd></dt><dd>Hinlegen: eine Fläche auf die Platte legen</dd>
             <dt><kbd>A</kbd></dt><dd>Auf der Platte anordnen</dd>
             <dt><kbd>S</kbd></dt><dd>Skalieren/Spiegeln: Teil unter dem Zeiger oder Auswahl</dd>
             <dt><kbd>E</kbd></dt><dd>Aussparung: Magnet, Gewindeeinsatz, Schraube, Mutter, Bohrung an der Klickstelle</dd>

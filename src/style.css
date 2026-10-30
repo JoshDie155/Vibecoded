@@ -10,6 +10,9 @@
   --warn: #b26a00;
   --err: #c0392b;
   --view: #e9ecf1;
+  --accent-soft: #e8f0ff;
+  --forge: #f08a24;
+  --shadow: 0 6px 24px rgb(20 30 50 / 0.10);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -24,6 +27,8 @@
     --warn: #f0b04a;
     --err: #ff7a6b;
     --view: #161a21;
+    --accent-soft: #1f2d47;
+    --shadow: 0 6px 24px rgb(0 0 0 / 0.4);
     color-scheme: dark;
   }
 }
@@ -38,6 +43,8 @@
   --warn: #f0b04a;
   --err: #ff7a6b;
   --view: #161a21;
+  --accent-soft: #1f2d47;
+  --shadow: 0 6px 24px rgb(0 0 0 / 0.4);
   color-scheme: dark;
 }
 
@@ -47,15 +54,15 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  display: flex; flex-direction: column;
 }
-#app { display: flex; height: 100%; }
+#app { display: flex; flex: 1; min-height: 0; }
 #panel {
-  width: var(--panel-w, 360px);
+  width: var(--panel-w, 340px);
   flex: none;
-  overflow-y: auto;
+  display: flex; flex-direction: column; min-height: 0;
   background: var(--panel);
   border-right: 1px solid var(--line);
-  padding: 16px;
 }
 #view { position: relative; flex: 1; min-width: 0; background: var(--view); }
 #resizer {
@@ -114,11 +121,11 @@ h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
 h2 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
 .sub { color: var(--muted); margin: 4px 0 0; }
 /* Zwischenüberschrift in einem Abschnitt der Seitenleiste */
+.subhead.first { margin-top: 0; }
 .subhead { margin: 16px 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .exportopts { display: grid; gap: 6px; margin-top: 10px; }
 #bambuPrinter { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; margin-left: 4px; }
 section { border-top: 1px solid var(--line); padding: 14px 0; }
-header { padding-bottom: 14px; }
 .step {
   display: inline-grid; place-items: center;
   width: 20px; height: 20px; border-radius: 50%;
@@ -129,11 +136,13 @@ header { padding-bottom: 14px; }
 button {
   font: inherit; cursor: pointer;
   border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
-  border-radius: 7px; padding: 6px 11px;
+  border-radius: 8px; padding: 6px 12px;
 }
 button:hover { filter: brightness(1.08); }
 button:disabled { opacity: 0.45; cursor: default; filter: none; }
-button.ghost { background: transparent; color: var(--accent); }
+/* Zweitrangige Knöpfe: neutral, beim Überfahren in der Akzentfarbe */
+button.ghost { background: var(--panel); color: var(--text); border-color: var(--line); }
+button.ghost:hover:not(:disabled) { filter: none; color: var(--accent); border-color: var(--accent); }
 button.small, .small { font-size: 12.5px; padding: 4px 9px; }
 button.icon { background: transparent; border: none; color: var(--muted); padding: 2px 6px; }
 button.icon:hover { color: var(--err); }
@@ -142,12 +151,17 @@ button.icon:hover { color: var(--err); }
 .check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
 .drop {
-  display: block; position: relative;
-  border: 1.5px dashed var(--line); border-radius: 10px;
-  padding: 16px; text-align: center; cursor: pointer; color: var(--muted);
+  display: flex; align-items: center; gap: 7px; position: relative; flex: 1; min-width: 0;
+  border: 1.5px dashed var(--line); border-radius: 9px;
+  padding: 7px 11px; cursor: pointer; color: var(--muted); white-space: nowrap; overflow: hidden;
 }
-.drop strong { color: var(--text); }
-.drop small { display: block; margin-top: 6px; font-size: 11px; }
+.drop strong { color: var(--text); font-weight: 600; }
+.drop .ic { color: var(--accent); }
+.drop .or { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.loadrow { display: flex; gap: 6px; align-items: stretch; }
+.loadrow .iconbtn { padding: 0 9px; display: inline-grid; place-items: center; border-color: var(--line); color: var(--text); }
+.loadrow .iconbtn:hover { border-color: var(--accent); color: var(--accent); }
+.formats { margin: 5px 2px 0; font-size: 10.5px; color: var(--muted); }
 .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
@@ -198,16 +212,23 @@ button.icon:hover { color: var(--err); }
 .seg button { border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 3px 9px; font-size: 12px; }
 .seg button.on { background: var(--accent); color: var(--accent-ink); }
 button.ghost.on { background: var(--accent); color: var(--accent-ink); }
-#toolbar .seg button { font-size: 12.5px; padding: 4px 10px; }
 
-#toolbar, #gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #textBar, #tolBar, #anaBar, #simpBar {
-  position: absolute; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  max-width: calc(100% - 20px);
-  background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line);
+/* Werkzeug-Feld rechts im Bild: die Leisten der offenen Werkzeuge untereinander */
+#dock {
+  position: absolute; top: 10px; right: 10px; z-index: 4; width: 312px; max-height: calc(100% - 46px);
+  overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 10px;
 }
-#toolbar { top: 10px; }
-/* Platz für Ansichtswürfel und Plattenleiste oben rechts (je 108 px breit, 6 px Rand, 16 px Abstand) */
-#toolbar, #gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #textBar, #tolBar, #anaBar, #simpBar { max-width: calc(100% - 140px); }
+#dock:not(:has(> :not([hidden]))) { display: none; }
+#gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #textBar, #tolBar, #anaBar, #simpBar {
+  display: flex; flex-wrap: wrap; gap: 8px 8px; align-items: center; flex: none;
+  background: var(--panel); padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+#dock > div > strong:first-child { flex-basis: 100%; font-size: 15px; margin-bottom: 2px; }
+#dock .seg { flex: 1 1 100%; }
+#dock .seg button { flex: 1; padding: 5px 6px; }
+#dock > div > button:not(.ghost):not(.icon) { flex: 1; }
+/* Ist das Feld offen, rücken Würfel, Platten und Übersicht nach links */
+#view:has(#dock > :not([hidden])) :is(#viewCube, #plateBar, #activeBar) { right: 330px; }
 /* Eingaben in den Leisten: überall gleich (auch im dunklen Design) */
 :is(#gizmoBar, #fitBar, #measureBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #textBar, #tolBar, #anaBar, #simpBar, #explodeBar, #sectionBar, .selbar) :is(input[type='number'], input[type='text'], select) {
   font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px;
@@ -249,8 +270,7 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #activeBar button { padding: 0 6px; font-size: 12px; line-height: 1.4; color: var(--muted); }
 #activeBar button:hover { color: var(--accent); }
 #status .note { color: var(--text); }
-/* Unter der Werkzeugleiste – auch wenn sie in zwei Zeilen umbricht (--bar-top setzt main.ts) */
-#gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #textBar, #tolBar, #anaBar, #simpBar { top: var(--bar-top, 58px); font-size: 12.5px; }
+#gizmoBar, #fitBar, #measureBar, #paintBar, #scaleBar, #cutBar, #splitBar, #pocketBar, #textBar, #tolBar, #anaBar, #simpBar { font-size: 12.5px; }
 #anaBar input[type='number'] { width: 54px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
 #anaBar .help { margin: 0; flex-basis: 100%; }
 #anaBar .chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
@@ -358,7 +378,6 @@ button.ghost.on { background: var(--accent); color: var(--accent-ink); }
 #gizmoBar .help { margin: 0; flex-basis: 100%; }
 #gizmoBar .help:empty { display: none; }
 .loadopts { display: grid; gap: 4px; margin-top: 10px; color: var(--muted); }
-.projectbar { margin: -4px 0 8px; }
 .restore {
   display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between;
   margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 8px; font-size: 13px;
@@ -525,13 +544,12 @@ kbd {
 /* Touch: langes Drücken öffnet das Menü – dabei weder Text markieren noch das Systemmenü zeigen */
 #view, .parts li { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 button, select, label, input[type='checkbox'], input[type='range'] { touch-action: manipulation; }
-#undoBtn, #redoBtn { font-size: 15px; line-height: 1; padding: 3px 10px; }
 #paintErase.on { color: #fff; background: var(--accent); border-color: var(--accent); }
 /* Finger statt Maus: größere Knöpfe, Felder und Listenzeilen */
 @media (pointer: coarse) {
   button, select { min-height: 36px; }
-  button.small, .small button, #toolbar .seg button { min-height: 36px; padding-left: 12px; padding-right: 12px; }
-  #undoBtn, #redoBtn { min-width: 44px; font-size: 18px; }
+  button.small, .small button { min-height: 36px; padding-left: 12px; padding-right: 12px; }
+  .tbtn.icon-only { min-width: 44px; }
   input[type='number'], input[type='text'], textarea { min-height: 34px; font-size: 16px; }
   input[type='checkbox'] { width: 20px; height: 20px; }
   input[type='range'] { height: 30px; }
@@ -540,3 +558,67 @@ button, select, label, input[type='checkbox'], input[type='range'] { touch-actio
   #ctxMenu { max-width: min(360px, calc(100vw - 16px)); }
   .swatch, #paintSwatches .swatch { min-width: 34px; min-height: 34px; }
 }
+
+/* ---------------------------------------------------------------- Kopfleiste */
+svg.ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#topbar {
+  flex: none; display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 12px 0 14px;
+  background: var(--panel); border-bottom: 1px solid var(--line); position: relative; z-index: 6;
+}
+#topbar .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; letter-spacing: -0.01em; white-space: nowrap; width: calc(var(--panel-w, 340px) - 26px); min-width: 150px; }
+#topbar .brand b { color: var(--forge); font-weight: 800; }
+#topbar .logo { width: 28px; height: 28px; flex: none; }
+#toolbar { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+#toolbar::-webkit-scrollbar { display: none; }
+#toolbar .tgroup { display: flex; gap: 2px; }
+#toolbar .tsep { width: 1px; align-self: stretch; margin: 10px 6px; background: var(--line); flex: none; }
+.tbtn {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; flex: none;
+  min-width: 54px; height: 48px; padding: 4px 6px; border: 0; border-radius: 9px; background: transparent; color: var(--text);
+  font-size: 11px; line-height: 1.1;
+}
+.tbtn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); filter: none; }
+.tbtn.on { background: var(--accent-soft); color: var(--accent); }
+.tbtn.icon-only { min-width: 40px; height: 40px; }
+#topbar .tright { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }
+#exportBtn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; margin-left: 6px; font-weight: 600; border-radius: 9px; }
+/* Schmalere Fenster: nur Symbole (die Bezeichnung steht im Tooltip) */
+@media (max-width: 1360px) {
+  .tbtn:not(.icon-only) { min-width: 42px; height: 42px; }
+  .tbtn span { display: none; }
+  #topbar .brand { width: auto; }
+}
+@media (max-width: 700px) {
+  #topbar .brand span, #exportBtn span { display: none; }
+}
+
+/* ---------------------------------------------------------------- Seitenleiste mit Reitern */
+.ptabs { flex: none; display: flex; gap: 2px; margin: 12px 12px 0; padding: 4px; background: color-mix(in srgb, var(--text) 5%, transparent); border-radius: 10px; }
+.ptabs button { flex: 1; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-weight: 600; }
+.ptabs button:hover { filter: none; color: var(--text); }
+.ptabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); }
+/* Die drei Seiten liegen nebeneinander und gleiten beim Umschalten (am Tablet auch per Wischen) */
+#pages { flex: 1; min-height: 0; display: flex; overflow-x: hidden; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; }
+#pages > .page { flex: 0 0 100%; min-width: 0; overflow-y: auto; scroll-snap-align: start; border-top: 0; padding: 14px 14px 18px; }
+@media (pointer: coarse) { #pages { overflow-x: auto; scrollbar-width: none; } #pages::-webkit-scrollbar { display: none; } }
+
+/* ---------------------------------------------------------------- Seitenleiste: Knöpfe und Gruppen */
+/* Prüfen & Export: Knöpfe als Liste, beim Export der Hauptweg hervorgehoben, die kurzen Formate in einer Reihe */
+.page[data-page="print"] > .row.wrap:not(.exports, .matopts), .page[data-page="connect"] > .row.wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.page[data-page="print"] > .row.wrap:not(.exports, .matopts) > button { text-align: left; }
+.page[data-page="print"] .matopts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.page[data-page="print"] .matopts label { justify-content: space-between; }
+.page[data-page="print"] .exports { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.page[data-page="print"] .exports button { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
+.page[data-page="print"] .exports :is([data-export="3mf-bambu"], [data-export="3mf-color"]) { grid-column: 1 / -1; }
+.page[data-page="print"] .exports [data-export="3mf-bambu"] { font-weight: 600; }
+.page[data-page="print"] .exports button:not([data-export="3mf-bambu"]) { background: var(--panel); color: var(--text); border-color: var(--line); }
+.page[data-page="print"] .exports button:not([data-export="3mf-bambu"]):hover { filter: none; color: var(--accent); border-color: var(--accent); }
+
+/* ---------------------------------------------------------------- Werkzeug-Feld: Zeilen wie ein Formular */
+#dock label { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; min-width: 0; }
+#dock label > :is(input[type='number'], input[type='text'], select) { margin-left: auto; }
+#dock label.check { gap: 8px; }
+#dock textarea { flex: 1 1 100%; width: auto !important; }
+#dock select:not(label select) { flex: 1 1 auto; }
+#dock .help { color: var(--muted); }

@@ -13,8 +13,14 @@ Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechne
 
 ## So funktioniert's
 
-Im Programm zeigt **?** (Knopf oben im 3D-Fenster oder Taste ?) eine Kurzanleitung mit allen Tastenkürzeln
+Im Programm zeigt **?** (Knopf rechts oben oder Taste ?) eine Kurzanleitung mit allen Tastenkürzeln
 und Mausaktionen.
+
+**Aufbau**: Oben die Kopfleiste mit den Werkzeugen (Auswahl, Ansehen & Messen, Bearbeiten), Rückgängig,
+Wiederholen, Hilfe und „Exportieren“. Links die Seitenleiste mit drei Reitern – **Teile** (laden, Liste,
+Beispiele), **Verbinden** (Verbindungen) und **Drucken** (prüfen, ausrichten, Filament & Kosten, Export,
+Montageanleitung); am Tablet lässt sich auch zwischen ihnen wischen. Ein offenes Werkzeug (Messen, Malen,
+Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts im 3D-Fenster.
 
 1. **Modelle laden** – Dateien ins Fenster ziehen (STL, OBJ mit MTL, 3MF, STEP, IGES, BREP, PLY, AMF, GLB/GLTF, FBX,
    DAE, WRL, 3DS, VTK). CAD-Dateien (STEP/IGES/BREP) liest OpenCascade im Hintergrund und trianguliert sie
@@ -132,7 +138,7 @@ und Mausaktionen.
    Baugruppe darin, sagt es die Statuszeile: Bambu Studio druckt dort nur mit den Filamenten dieser Düse.
    **Druckausrichtung**: „Für den Druck ausrichten" legt jede Baugruppe mit ihrer größten ebenen
    Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
-   was schon gut liegt, bleibt. Von Hand: oben „Auf Fläche legen" (Taste L), dann die Fläche
+   was schon gut liegt, bleibt. Von Hand: oben „Hinlegen" (Taste L), dann die Fläche
    anklicken, die unten liegen soll – die ganze Baugruppe dreht sich mit. Strg+Z macht beides rückgängig.
    **Passung**: oben „Passung" (Taste T), dann einen Zapfen, eine Bohrung oder eine ebene Fläche
    anklicken und das neue Maß eingeben – z. B. Zapfen 0,2 mm dünner (Schnellknöpfe −0,1/−0,2/−0,3),
@@ -183,7 +189,7 @@ drücken** öffnet das Menü wie ein Rechtsklick – im 3D-Fenster und in der Te
 Skalieren, Aussparungen, Beschriften, Bewegen usw. Oben im 3D-Fenster stehen **↶ ↷** für Rückgängig und
 Wiederholen, beim Malen ersetzt „Radierer“ die Umschalttaste. Knöpfe, Felder und Menüs werden mit dem Finger
 größer; ein Tablet im Hochformat zeigt das 3D-Fenster oben und die Seitenleiste darunter.
-**Überhänge & Wände** (Abschnitt 3 oder Taste U): färbt Flächen rot, die zu flach nach unten zeigen und
+**Überhänge & Wände** (Reiter „Drucken“ oder Taste U): färbt Flächen rot, die zu flach nach unten zeigen und
 Stützen brauchen (ab einstellbarem Winkel von der Senkrechten, Standard 45° – auf der Platte liegende und
 innere Flächen zählen nicht), und lila, wo eine Wand dünner ist als eingestellt (Standard 0,8 mm = zwei
 Bahnen bei 0,4-mm-Düse). Die Flächen stehen in der Leiste; nach dem Drehen („Auf Fläche legen", „Für den
@@ -191,7 +197,7 @@ Druck ausrichten") rechnet die Ansicht sofort neu.
 **Explosionsansicht** (oben „Explosion", Taste X): zieht jede Baugruppe auseinander, damit man sieht, wie die
 Teile zusammengehören – Regler unten rechts für den Abstand. Nur zum Ansehen: Lage, Export und Prüfungen
 bleiben unverändert, Markierungen und Anklicken ruhen, bis sie wieder zu ist.
-**Montageanleitung** (unter „Exportieren“): ein Blatt zum Ausdrucken oder als PDF („Drucken / PDF“, im
+**Montageanleitung** (Reiter „Drucken“, unter „Exportieren“): ein Blatt zum Ausdrucken oder als PDF („Drucken / PDF“, im
 Druckdialog „Als PDF speichern“) – ein Bild der sichtbaren Teile aus der Blickrichtung des 3D-Fensters, auf
 Wunsch auseinandergezogen, mit nummerierten Ballons und Hinweislinien; die **Stückliste** fasst gleiche Teile
 zusammen (z. B. „4× Dübel“) und nennt Maße, Filament und Gewicht; die **Schritte** kommen aus den

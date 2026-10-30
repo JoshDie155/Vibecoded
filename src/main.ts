@@ -332,9 +332,6 @@ function resize() {
 }
 new ResizeObserver(resize).observe(view);
 resize();
-// Leisten unter der Werkzeugleiste beginnen lassen, auch wenn diese umbricht
-const toolbarEl = document.getElementById('toolbar')!;
-new ResizeObserver(() => view.style.setProperty('--bar-top', `${toolbarEl.offsetTop + toolbarEl.offsetHeight + 6}px`)).observe(toolbarEl);
 
 /**
  * Drehen und Verschieben der Ansicht ohne Bildschirmrand: Stößt der Mauszeiger beim Ziehen an den Rand des
@@ -468,7 +465,6 @@ renderer.setAnimationLoop(() => {
   placeLabelList(standLabelAt);
   placeLabelList(dimLabelAt, true);
   renderActive();
-  layoutBars();
 });
 
 /** Vier Pfeile: Teil frei bewegen */
@@ -3008,6 +3004,8 @@ renderer.domElement.addEventListener('pointerup', (e) => {
       : `„${h.part.name}" gehört nicht zur aktiven Verbindung. Wähle sie links aus oder lege eine neue an.`, 5000);
     return;
   }
+  // Beim Verbinden die Karte der Verbindung zeigen
+  if (tabNow === 'parts') showTab('connect');
   if (pickMode === 'brush') return; // Pinsel arbeitet beim Ziehen
   if (pickMode === 'face') toggleFace(j, side, h.part, h.tri, helper ? h.part.id : undefined, e.altKey);
   else if (pickMode === 'edge') {
@@ -3391,10 +3389,10 @@ function renderHint() {
   else if (tool === 'fit') el.textContent = fitTarget ? 'Wert oben eingeben und „Übernehmen" – oder eine andere Fläche anklicken. Esc bricht ab.' : 'Klicke einen Zapfen, eine Bohrung oder eine ebene Fläche an, deren Passung du ändern willst. Esc bricht ab.';
   else if (parts.length === 0) el.textContent = 'Lade zwei oder mehr Modelle – oder probiere ein Beispiel. Taste ? zeigt Anleitung und Tastenkürzel.';
   else if (parts.length === 1) el.textContent = 'Lade noch ein weiteres Teil, das angefügt werden soll.';
-  else if (!j) el.textContent = 'Lege links eine Verbindung an.';
+  else if (!j) el.textContent = 'Lege im Reiter „Verbinden“ eine Verbindung an.';
   else if (j.auto && !j.ma.length && !j.mb.length && !j.fa.length && !j.fb.length) {
     el.textContent = {
-      face: 'Klicke die Kontaktfläche auf einem Teil – danach die passende Fläche auf dem Teil, das daran soll. Oder links „Alles automatisch verbinden".',
+      face: 'Klicke die Kontaktfläche auf einem Teil – danach die passende Fläche auf dem Teil, das daran soll. Oder im Reiter „Verbinden" „Alles automatisch verbinden".',
       edge: 'Klicke eine gerade Kante auf einem Teil – danach die passende Kante auf dem Teil, das daran soll.',
       point: 'Klicke markante Punkte auf einem Teil – danach dieselben Stellen auf dem Teil, das daran soll.',
       brush: 'Male die Kontaktstelle auf einem Teil an – danach die passende Stelle auf dem Teil, das daran soll.',
@@ -3763,6 +3761,50 @@ document.getElementById('moveAll')!.addEventListener('click', () => {
   if (!base) { toast('Lade zuerst ein Modell.'); return; }
   openGizmo({ kind: 'part', id: base.id, assembly: true }, 'translate');
   renderAll();
+});
+
+// ---------------------------------------------------------------- Seitenleiste: Reiter
+
+/**
+ * Reiter „Teile“, „Verbinden“, „Drucken“: Die drei Seiten liegen nebeneinander und gleiten beim Umschalten
+ * (am Tablet auch per Wischen). Was auf einer anderen Seite in den Blick gerückt wird (Teil in der Liste
+ * zeigen, Tastatur-Fokus), wechselt die Seite mit.
+ */
+const TABS = ['parts', 'connect', 'print'] as const;
+type Tab = (typeof TABS)[number];
+const pagesEl = document.getElementById('pages')!;
+let tabNow: Tab = 'parts';
+const calmMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+function markTab(t: Tab) {
+  tabNow = t;
+  for (const b of document.querySelectorAll<HTMLElement>('.ptabs [data-tab]')) {
+    const on = b.dataset.tab === t;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  }
+}
+
+function showTab(t: Tab, smooth = true) {
+  markTab(t);
+  pagesEl.scrollTo({ left: TABS.indexOf(t) * pagesEl.clientWidth, behavior: smooth && !calmMotion.matches ? 'smooth' : 'auto' });
+}
+
+// Erst wenn die Seite eingerastet ist, den Reiter umstellen (nicht beim Durchgleiten)
+pagesEl.addEventListener('scroll', () => {
+  const w = Math.max(1, pagesEl.clientWidth);
+  const i = Math.round(pagesEl.scrollLeft / w);
+  if (Math.abs(pagesEl.scrollLeft - i * w) < 2 && TABS[i] && TABS[i] !== tabNow) markTab(TABS[i]);
+}, { passive: true });
+document.querySelector('.ptabs')!.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-tab]');
+  if (b) showTab(b.dataset.tab as Tab);
+});
+// Breite der Seitenleiste geändert: auf derselben Seite bleiben
+new ResizeObserver(() => { pagesEl.scrollLeft = TABS.indexOf(tabNow) * pagesEl.clientWidth; }).observe(pagesEl);
+document.getElementById('exportBtn')!.addEventListener('click', () => {
+  showTab('print', false);
+  document.getElementById('exportHead')!.scrollIntoView({ block: 'start', inline: 'nearest', behavior: calmMotion.matches ? 'auto' : 'smooth' });
 });
 
 // Seitenleiste in der Breite verstellen; die Breite bleibt im Browser gespeichert
@@ -8986,31 +9028,6 @@ activeBar.addEventListener('click', (e) => {
   const b = (e.target as HTMLElement).closest<HTMLElement>('[data-active]');
   if (b) activeList[Number(b.dataset.active)]?.off();
 });
-
-/**
- * Leisten oben (Messen, Passung, Druckprüfung …) liegen sonst alle an derselben Stelle: sichtbare
- * untereinander stapeln und neben der Übersicht rechts enden lassen. Jedes Bild, nur bei Änderungen.
- */
-const TOP_BARS = ['gizmoBar', 'fitBar', 'measureBar', 'paintBar', 'scaleBar', 'cutBar', 'splitBar', 'pocketBar', 'textBar', 'tolBar', 'anaBar', 'simpBar']
-  .map((id) => document.getElementById(id)!);
-let barsSig = '';
-function layoutBars() {
-  const shown = TOP_BARS.filter((b) => !b.hidden);
-  const a = activeBar.hidden ? null : activeBar.getBoundingClientRect();
-  const sig = `${shown.map((b) => `${b.id}:${b.offsetHeight}`).join(',')}|${a ? `${Math.round(a.left)},${Math.round(a.top)},${Math.round(a.bottom)}` : ''}|${view.style.getPropertyValue('--bar-top')}`;
-  if (sig === barsSig) return;
-  barsSig = sig;
-  const v = view.getBoundingClientRect();
-  let top = parseFloat(view.style.getPropertyValue('--bar-top')) || 58;
-  for (const b of TOP_BARS) if (b.hidden) { b.style.top = ''; b.style.maxWidth = ''; }
-  for (const b of shown) {
-    b.style.top = `${top}px`;
-    // Reicht die Leiste bis zur Übersicht rechts, endet sie davor
-    const overlaps = a && top < a.bottom - v.top && top + b.offsetHeight > a.top - v.top;
-    b.style.maxWidth = overlaps ? `${Math.max(240, a!.left - v.left - b.offsetLeft - 12)}px` : '';
-    top += b.offsetHeight + 6;
-  }
-}
 
 // Spiel für Drucker und Material in die Felder (erst hier: braucht Drucker- und Materialauswahl)
 applyMyClearance();
