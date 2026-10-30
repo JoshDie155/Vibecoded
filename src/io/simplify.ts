@@ -1,6 +1,6 @@
 /**
  * Netz vereinfachen (manifold-3d): weniger Dreiecke, die Oberfläche weicht dabei höchstens um die
- * Toleranz ab – etwa für Scans oder fein modellierte Figuren, die PartJoin und den Slicer bremsen.
+ * Toleranz ab – etwa für Scans oder fein modellierte Figuren, die D3DForge und den Slicer bremsen.
  *
  * Gruppen (je Dreieck eine Nummer) halten Grenzen fest: Kanten zwischen verschiedenen Gruppen bleiben, wo
  * sie sind, ein Dreieck mit eigener Gruppe bleibt unverändert. So kommen Bemalung und gewählte Flächen

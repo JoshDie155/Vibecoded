@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PartJoin</title>
+    <title>D3DForge</title>
     <meta name="description" content="Mehrere 3D-Modelle über markierte Punkte automatisch passgenau zusammenfügen." />
   </head>
   <body>
     <div id="app">
       <aside id="panel">
         <header>
-          <h1>PartJoin</h1>
-          <p class="sub">Einzelteile über markierte Punkte automatisch passgenau verbinden – fertig zum Drucken.</p>
+          <h1>D3DForge</h1>
+          <p class="sub">3D-Druckteile passgenau verbinden, zerteilen, beschriften und druckfertig machen – alles im Browser.</p>
         </header>
 
         <section>
@@ -24,14 +24,14 @@
             </span>
           </div>
           <div class="row wrap projectbar">
-            <button id="projOpen" class="ghost small" title="PartJoin-Projekt (.partjoin) öffnen. Es ersetzt die aktuelle Arbeit – Strg+Z holt sie zurück.">Projekt öffnen</button>
+            <button id="projOpen" class="ghost small" title="D3DForge-Projekt (.d3dforge, auch ältere .partjoin) öffnen. Es ersetzt die aktuelle Arbeit – Strg+Z holt sie zurück.">Projekt öffnen</button>
             <button id="projSave" class="ghost small" title="Alle Teile mit Lage, Farben, Aufschriften und Verbindungen in einer Datei speichern (Strg+S)">Projekt speichern</button>
-            <input type="file" id="projFile" accept=".partjoin" hidden />
+            <input type="file" id="projFile" accept=".d3dforge,.partjoin" hidden />
           </div>
           <label class="drop" id="drop">
             <input type="file" id="file" multiple />
             <strong>Dateien hierher ziehen</strong> oder klicken
-            <small>STL · OBJ (+MTL) · 3MF · STEP · IGES · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK · PartJoin-Projekt</small>
+            <small>STL · OBJ (+MTL) · 3MF · STEP · IGES · PLY · AMF · GLB/GLTF · FBX · DAE · WRL · 3DS · VTK · D3DForge-Projekt</small>
           </label>
           <div class="loadopts">
             <label class="check small" title="Viele mehrteilige Downloads liegen in den Dateien schon richtig zueinander. Dann werden die Teile genau so geladen.">
@@ -40,7 +40,7 @@
             <label class="check small" title="3MF-Dateien mit mehreren Objekten oder Teilen (z. B. aus Bambu Studio, OrcaSlicer, PrusaSlicer) und GLB/OBJ mit mehreren Netzen werden in einzelne Teile mit ihrer Farbe zerlegt.">
               <input type="checkbox" id="splitParts" checked /> Mehrteilige Dateien in Teile zerlegen
             </label>
-            <label class="check small" title="Fester Boden: Jede Baugruppe (alles, was zusammenhängt) steht mit ihrem tiefsten Punkt auf der Druckplatte – in PartJoin und im Export für den Slicer. Teile mit „Lage aus der Datei“ stehen gemeinsam darauf und bleiben untereinander, wie sie geladen wurden. Ausschalten, um Teile frei im Raum zu lassen.">
+            <label class="check small" title="Fester Boden: Jede Baugruppe (alles, was zusammenhängt) steht mit ihrem tiefsten Punkt auf der Druckplatte – in D3DForge und im Export für den Slicer. Teile mit „Lage aus der Datei“ stehen gemeinsam darauf und bleiben untereinander, wie sie geladen wurden. Ausschalten, um Teile frei im Raum zu lassen.">
               <input type="checkbox" id="onFloor" checked /> Auf die Druckplatte stellen
             </label>
           </div>
@@ -87,7 +87,7 @@
         <section>
           <h2><span class="step">2</span> Verbindungen</h2>
           <p class="help">
-            <b>Flächen:</b> die Kontaktflächen anklicken (eben, Kreisfläche, Zapfen/Bohrung) – PartJoin setzt sie wie im CAD aufeinander.
+            <b>Flächen:</b> die Kontaktflächen anklicken (eben, Kreisfläche, Zapfen/Bohrung) – D3DForge setzt sie wie im CAD aufeinander.
             Flächen dürfen auch auf Nachbarteilen liegen, die schon fest mit dem Teil verbunden sind.
             <b>Kanten:</b> gerade Kante auf gerade Kante. <b>Punkte:</b> dieselben markanten Stellen auf beiden Teilen, Reihenfolge egal.
             <b>Pinsel:</b> eine Kontaktstelle selbst bemalen.
@@ -286,7 +286,7 @@
             <button data-tsrc="logo" title="Logo aus einer SVG-Datei (gefüllte Flächen)">Logo</button>
             <button data-tsrc="number" title="Mehrere Teile durchnummerieren (1/7, 2/7 …) – automatisch auf der größten Fläche unten oder oben">Nummern</button>
           </span>
-          <textarea id="textValue" data-tfor="text" rows="1" spellcheck="false" aria-label="Text" title="Zeilenumbruch mit Umschalt + Enter">PartJoin</textarea>
+          <textarea id="textValue" data-tfor="text" rows="1" spellcheck="false" aria-label="Text" title="Zeilenumbruch mit Umschalt + Enter">D3DForge</textarea>
           <select id="textFont" data-tfor="text number" aria-label="Schrift"><option value="bold">Fett</option><option value="regular">Normal</option></select>
           <button id="textLogoPick" data-tfor="logo" class="ghost small" title="SVG-Datei wählen – gefüllte Flächen werden zur Form">SVG laden …</button>
           <input type="file" id="textLogoFile" accept=".svg,image/svg+xml" hidden />
@@ -414,20 +414,20 @@
         <table id="sheetParts"></table>
         <h3>Zusammenbau</h3>
         <ol id="sheetSteps"></ol>
-        <p class="sheet-foot">Erstellt mit PartJoin. Gewichte geschätzt (ohne Stützen, Brim und Spülturm).</p>
+        <p class="sheet-foot">Erstellt mit D3DForge. Gewichte geschätzt (ohne Stützen, Brim und Spülturm).</p>
       </div>
     </dialog>
     <div id="printArea"></div>
     <dialog id="help" aria-labelledby="helpTitle">
       <header>
-        <h2 id="helpTitle">PartJoin – Anleitung &amp; Tastenkürzel</h2>
+        <h2 id="helpTitle">D3DForge – Anleitung &amp; Tastenkürzel</h2>
         <button id="helpClose" class="icon" aria-label="Schließen" title="Schließen (Esc)">✕</button>
       </header>
       <div class="help-cols">
         <section>
           <h3>So geht’s</h3>
           <ol>
-            <li><b>Laden</b> – Dateien ins Fenster ziehen (STL, 3MF, STEP, OBJ …) oder ein Projekt (.partjoin) öffnen.</li>
+            <li><b>Laden</b> – Dateien ins Fenster ziehen (STL, 3MF, STEP, OBJ …) oder ein Projekt (.d3dforge) öffnen.</li>
             <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder links „Alles automatisch verbinden“.</li>
             <li><b>Nachjustieren</b> – „Von Hand anpassen“ dreht und schiebt in den Richtungen, die die Verbindung offen lässt; „Um 180° drehen“ wechselt zwischen gleich guten Lagen; „Einsinken“ schiebt Teile minimal ineinander, damit der Slicer sie verschmilzt.</li>
             <li><b>Malen</b> (N) – mehrfarbig für AMS/H2C: Filament wählen, mit dem Pinsel streichen oder Flächen füllen; Umschalt radiert. Kommt als Bemalung ins Bambu-Projekt.</li>
@@ -498,12 +498,12 @@
             <li>Mehrere Platten liegen wie in Bambu Studio im Raster; die Leiste „Platten“ unter dem Würfel blendet sie ein und aus, springt per Nummer zu einer Platte und fügt mit + eine hinzu. Bambu-Projekte kommen mit ihren Platten.</li>
             <li>Drucker mit zwei Düsen (H2D, H2C, X2D …): Getönte Streifen am Rand erreicht nur die linke bzw. rechte Düse.</li>
             <li>Die Statuszeile unten zeigt die Maße der Baugruppe unter dem Mauszeiger.</li>
-            <li>PartJoin sichert deine Arbeit laufend im Browser; nach dem Neuladen „Wiederherstellen“.</li>
+            <li>D3DForge sichert deine Arbeit laufend im Browser; nach dem Neuladen „Wiederherstellen“.</li>
             <li>Etwas ging schief? <kbd>Strg/⌘</kbd> <kbd>Z</kbd> nimmt jede Aktion zurück.</li>
           </ul>
         </section>
       </div>
-      <p class="help-license">PartJoin © 2026 Joshua Diekamp – MIT-Lizenz. Enthält three.js, three-mesh-bvh und fflate (MIT), manifold-3d und die Schrift Droid Sans (Apache-2.0) sowie OpenCascade über occt-import-js (LGPL-2.1).</p>
+      <p class="help-license">D3DForge © 2026 Joshua Diekamp – MIT-Lizenz. Enthält three.js, three-mesh-bvh und fflate (MIT), manifold-3d und die Schrift Droid Sans (Apache-2.0) sowie OpenCascade über occt-import-js (LGPL-2.1).</p>
     </dialog>
   </body>
 </html>

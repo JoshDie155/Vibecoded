@@ -570,7 +570,7 @@ ${textInfo}
 });
 
 describe('Bambu-Export: mehrere Druckplatten', () => {
-  it('jedes Objekt auf seiner Platte, Lage wie auf der PartJoin-Platte', async () => {
+  it('jedes Objekt auf seiner Platte, Lage wie auf der D3DForge-Platte', async () => {
     const { bambuPlateOrigin } = await import('../src/io/threemf');
     const W = 256 * 1.2;
     const parts = [

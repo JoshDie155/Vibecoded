@@ -5,7 +5,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 import type { Plugin } from 'vite';
 
 /**
- * manifold-3d verweist selbst auf seine WASM-Datei (new URL(…, import.meta.url)). PartJoin übergibt
+ * manifold-3d verweist selbst auf seine WASM-Datei (new URL(…, import.meta.url)). D3DForge übergibt
  * die Datei selbst (src/io/union.ts); ohne diesen Schritt landete sie doppelt im Build.
  */
 const manifoldWasmOnce: Plugin = {

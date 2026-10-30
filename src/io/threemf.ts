@@ -773,7 +773,7 @@ export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor', th
   let vOffset = 0;
   let tCount = 0;
   const list = mode === 'single'
-    ? [{ name: 'PartJoin', color: slots[0] ?? '#cccccc', positions: concat(parts.map((p) => p.positions)) }]
+    ? [{ name: 'D3DForge', color: slots[0] ?? '#cccccc', positions: concat(parts.map((p) => p.positions)) }]
     : parts;
   for (const part of list) {
     const { verts, tris, kept } = weld(part.positions);
@@ -796,8 +796,8 @@ export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor', th
   const objAttr = mode === 'multicolor' ? ' pid="1" pindex="0"' : '';
   const model = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="de-DE" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06">
-<metadata name="Application">PartJoin</metadata>
-<resources>${materials}<object id="2" name="PartJoin" type="model"${objAttr}><mesh><vertices>${vChunks.join('')}</vertices><triangles>${tChunks.join('')}</triangles></mesh></object></resources>
+<metadata name="Application">D3DForge</metadata>
+<resources>${materials}<object id="2" name="D3DForge" type="model"${objAttr}><mesh><vertices>${vChunks.join('')}</vertices><triangles>${tChunks.join('')}</triangles></mesh></object></resources>
 <build><item objectid="2"/></build>
 </model>`;
   const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
@@ -831,7 +831,7 @@ export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor', th
     files['Metadata/Slic3r_PE_model.config'] = strToU8(`<?xml version="1.0" encoding="UTF-8"?>
 <config>
  <object id="2" instances_count="1">
-  <metadata type="object" key="name" value="PartJoin"/>
+  <metadata type="object" key="name" value="D3DForge"/>
 ${vol}
  </object>
 </config>
@@ -890,12 +890,12 @@ export interface BambuOptions {
   printer?: string;
   /**
    * Mitte der Druckplatte in den Koordinaten der Teile: Dann liegt alles im Slicer genau so auf der Platte
-   * wie in PartJoin. Ohne Angabe wird das Ganze mittig auf die Platte gesetzt.
+   * wie in D3DForge. Ohne Angabe wird das Ganze mittig auf die Platte gesetzt.
    */
   plateCenter?: [number, number];
   /**
    * Mehrere Platten: Mitte jeder Platte in den Koordinaten der Teile (ColoredPart.plate wählt die Platte).
-   * Jedes Objekt kommt so auf seine Platte, wie es dort in PartJoin liegt.
+   * Jedes Objekt kommt so auf seine Platte, wie es dort in D3DForge liegt.
    */
   plateCenters?: [number, number][];
   /** Vorschaubilder (PNG) je Platte – Bambu Studio zeigt sie in der Plattenliste und beim Öffnen. */
@@ -1020,7 +1020,7 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
         }
     return { min, max };
   };
-  // Alles zusammen mittig auf die Platte, Unterseite auf z = 0; die Objekte liegen zueinander wie in PartJoin
+  // Alles zusammen mittig auf die Platte, Unterseite auf z = 0; die Objekte liegen zueinander wie in D3DForge
   const all = box(parts);
   const c = opts.plateCenter
     ? [opts.plateCenter[0], opts.plateCenter[1], all.min[2]]
@@ -1126,7 +1126,7 @@ ${components.join('\n')}
    </components>
   </object>`);
     items.push(`  <item objectid="${objId}" p:UUID="${uuid(5, objId)}" transform="${place}" printable="1"/>`);
-    const name = list[0].objectName ?? (groups.size === 1 ? 'PartJoin' : list[0].name);
+    const name = list[0].objectName ?? (groups.size === 1 ? 'D3DForge' : list[0].name);
     const firstSlot = Math.max(0, slots.indexOf(list[0].color.toLowerCase())) + 1;
     configObjects.push(`  <object id="${objId}">
     <metadata key="name" value="${esc(name)}"/>
@@ -1147,8 +1147,8 @@ ${settings.join('\n')}
 <model unit="millimeter" xml:lang="en-US" ${ns}>
  <metadata name="Application">${version}</metadata>
  <metadata name="BambuStudio:3mfVersion">1</metadata>
- <metadata name="Title">PartJoin</metadata>
- <metadata name="Designer">PartJoin</metadata>
+ <metadata name="Title">D3DForge</metadata>
+ <metadata name="Designer">D3DForge</metadata>
  <resources>
 ${mainObjects.join('\n')}
  </resources>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
-import { type Blobs, newProject, packProject, referencedKeys, unpackProject } from '../src/io/project';
+import { type Blobs, PROJECT_EXTS, newProject, packProject, referencedKeys, unpackProject } from '../src/io/project';
 
 const project = () => {
   const blobs: Blobs = new Map([
@@ -22,7 +22,7 @@ const project = () => {
   return { data, blobs };
 };
 
-describe('PartJoin-Projektdatei', () => {
+describe('D3DForge-Projektdatei', () => {
   it('Hin- und Rückweg: Beschreibung und Netze bleiben gleich', () => {
     const { data, blobs } = project();
     const back = unpackProject(packProject(data, blobs));
@@ -33,12 +33,20 @@ describe('PartJoin-Projektdatei', () => {
   });
 
   it('meldet fremde, unvollständige und zu neue Dateien verständlich', () => {
-    expect(() => unpackProject(strToU8('kein zip'))).toThrow('kein PartJoin-Projekt');
-    expect(() => unpackProject(zipSync({ 'x.txt': strToU8('hallo') }))).toThrow('kein PartJoin-Projekt');
+    expect(() => unpackProject(strToU8('kein zip'))).toThrow('kein D3DForge-Projekt');
+    expect(() => unpackProject(zipSync({ 'x.txt': strToU8('hallo') }))).toThrow('kein D3DForge-Projekt');
     const { data, blobs } = project();
     blobs.delete('a-m0');
     expect(() => unpackProject(packProject(data, blobs))).toThrow('fehlt ein Netz');
     const future = { ...data, version: 99 };
-    expect(() => unpackProject(packProject(future, project().blobs))).toThrow('neueren PartJoin-Version');
+    expect(() => unpackProject(packProject(future, project().blobs))).toThrow('neueren D3DForge-Version');
+  });
+
+  it('neue Projekte heißen D3DForge, alte PartJoin-Projekte öffnen weiter', () => {
+    const { data, blobs } = project();
+    expect(data.app).toBe('D3DForge');
+    const old = unpackProject(packProject({ ...data, app: 'PartJoin' }, blobs));
+    expect(old.data.parts).toEqual(data.parts);
+    expect(PROJECT_EXTS).toEqual(['d3dforge', 'partjoin']);
   });
 });

@@ -1,6 +1,6 @@
 /**
- * PartJoin-Projekte: alle Teile mit Lage, Farbe, Gruppe und Slicer-Zusätzen sowie alle Verbindungen in
- * einer Datei (.partjoin – ein ZIP-Archiv aus project.json und den Netzen als Float32-Binärdaten).
+ * D3DForge-Projekte (früher PartJoin): alle Teile mit Lage, Farbe, Gruppe und Slicer-Zusätzen sowie alle Verbindungen in
+ * einer Datei (.d3dforge, früher .partjoin – ein ZIP-Archiv aus project.json und den Netzen als Float32-Binärdaten).
  *
  * Dazu die automatische Sicherung der Sitzung im Browser (IndexedDB): Nach einem Neuladen der Seite
  * lässt sich der letzte Stand zurückholen. Die Netze werden dort einzeln abgelegt und nur geschrieben,
@@ -9,7 +9,11 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import type { Modifier } from './threemf';
 
-export const PROJECT_EXT = 'partjoin';
+export const PROJECT_EXT = 'd3dforge';
+/** Endungen, die als Projekt geöffnet werden – auch die alten PartJoin-Projekte. */
+export const PROJECT_EXTS = [PROJECT_EXT, 'partjoin'];
+/** Kennung im Projekt; ältere Dateien tragen noch „PartJoin“. */
+const APP = 'D3DForge';
 const VERSION = 1;
 
 export interface ProjectPart {
@@ -34,7 +38,7 @@ export interface ProjectPart {
 }
 
 export interface ProjectData {
-  app: 'PartJoin';
+  app: 'D3DForge' | 'PartJoin';
   version: number;
   savedAt: string;
   parts: ProjectPart[];
@@ -62,13 +66,13 @@ export function unpackProject(bytes: Uint8Array): { data: ProjectData; blobs: Bl
   try {
     files = unzipSync(bytes);
   } catch {
-    throw new Error('Die Datei ist kein PartJoin-Projekt.');
+    throw new Error('Die Datei ist kein D3DForge-Projekt.');
   }
   const json = files['project.json'];
-  if (!json) throw new Error('Die Datei ist kein PartJoin-Projekt.');
+  if (!json) throw new Error('Die Datei ist kein D3DForge-Projekt.');
   const data = JSON.parse(strFromU8(json)) as ProjectData;
-  if (data.app !== 'PartJoin' || !Array.isArray(data.parts)) throw new Error('Die Datei ist kein PartJoin-Projekt.');
-  if (data.version > VERSION) throw new Error('Das Projekt stammt aus einer neueren PartJoin-Version.');
+  if ((data.app !== APP && data.app !== 'PartJoin') || !Array.isArray(data.parts)) throw new Error('Die Datei ist kein D3DForge-Projekt.');
+  if (data.version > VERSION) throw new Error('Das Projekt stammt aus einer neueren D3DForge-Version.');
   const blobs: Blobs = new Map();
   for (const [name, u8] of Object.entries(files)) {
     const m = /^geometry\/(.+)\.bin$/.exec(name);
@@ -80,7 +84,7 @@ export function unpackProject(bytes: Uint8Array): { data: ProjectData; blobs: Bl
 }
 
 export function newProject(fields: Omit<ProjectData, 'app' | 'version' | 'savedAt'>): ProjectData {
-  return { app: 'PartJoin', version: VERSION, savedAt: new Date().toISOString(), ...fields };
+  return { app: APP, version: VERSION, savedAt: new Date().toISOString(), ...fields };
 }
 
 /** Alle Netz-Schlüssel, auf die das Projekt verweist. */
@@ -98,6 +102,7 @@ export function referencedKeys(data: ProjectData): Set<string> {
 
 // ---------------------------------------------------------------- Sitzung im Browser
 
+// Name aus der Zeit als „PartJoin“ – so bleibt die gesicherte Sitzung erhalten
 const DB = 'partjoin';
 const SESSION = 'session';
 const GEOMETRY = 'geometry';

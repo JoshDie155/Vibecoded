@@ -1,8 +1,13 @@
-# PartJoin
+# D3DForge
 
-Mehrere 3D-Modelle, die eigentlich zusammengehören (z. B. ein in Teile zerlegter Download),
-**über markierte Punkte automatisch passgenau zu einem Modell verbinden** – damit man nach dem
-3D-Druck nichts mehr zusammensetzen und kleben muss.
+*(früher „PartJoin“)*
+
+Eine Werkstatt im Browser für 3D-Druckteile. Im Kern: Mehrere Modelle, die eigentlich zusammengehören (z. B. ein
+in Teile zerlegter Download), **über markierte Flächen oder Punkte automatisch passgenau zu einem Modell
+verbinden** – damit man nach dem Druck nichts mehr zusammensetzen und kleben muss. Dazu alles rund um den Druck:
+zerschneiden und auf Plattengröße zerteilen (mit Zapfen, Dübeln, Schwalbenschwanz oder Schnappstiften),
+Passungen anpassen, Aussparungen, Beschriften und Nummerieren, mehrfarbig bemalen, messen, prüfen, für den Druck
+ausrichten und auf Platten verteilen, Montageanleitung – und Export für Bambu Studio, OrcaSlicer und PrusaSlicer.
 
 Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechner.
 
@@ -43,21 +48,21 @@ und Mausaktionen.
    lässt sich mit Strg+Z zurücknehmen. Die Bemalung kommt ins Projekt, in die Sitzungssicherung und als
    Farbbemalung ins 3MF für Bambu Studio / OrcaSlicer (und PrusaSlicer).
    **Projekt speichern/öffnen**: „Projekt speichern" (Strg/⌘+S) legt alle Teile mit Lage, Farben,
-   Gruppen, Aufschriften, Bemalung und allen Verbindungen in einer `.partjoin`-Datei ab; „Projekt
+   Gruppen, Aufschriften, Bemalung und allen Verbindungen in einer `.d3dforge`-Datei ab (ältere `.partjoin`-Projekte öffnen weiterhin); „Projekt
    öffnen" oder Hineinziehen macht dort weiter (die vorige Arbeit holt Strg+Z zurück). Zusätzlich
-   sichert PartJoin die Sitzung laufend im Browser – nach einem Neuladen bietet es an, den letzten
+   sichert D3DForge die Sitzung laufend im Browser – nach einem Neuladen bietet es an, den letzten
    Stand wiederherzustellen.
 2. **Automatisch oder von Hand auswählen** – **„Alles automatisch verbinden"** sucht für alle Teile
    passende Flächen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und setzt sie ab dem
    Basisteil zusammen; **„Vorschlagen"** macht das für eine einzelne Verbindung, „Nächster Vorschlag"
    probiert weitere. Von Hand: oben im 3D-Fenster zwischen **Flächen** (Taste F, Standard), **Kanten** (Taste K),
    **Punkte** (Taste P) und **Pinsel** (Taste B) wechseln.
-   - *Flächen:* die Kontaktfläche auf beiden Teilen anklicken. PartJoin erkennt selbst, ob es eine
+   - *Flächen:* die Kontaktfläche auf beiden Teilen anklicken. D3DForge erkennt selbst, ob es eine
      ebene Fläche, eine Kreisfläche oder ein Zylinder (Zapfen bzw. Bohrung) ist, und setzt die Teile
      wie in einem CAD-Programm aufeinander: Ebene auf Ebene, Kreis mittig auf Kreis, Zapfen koaxial
      in Bohrung. Mehrere Flächenpaare (z. B. Auflagefläche + Zapfen) legen die Lage vollständig fest.
    - *Punkte:* auf beiden Teilen dieselben markanten Stellen anklicken (Ecken, Kanten …).
-     **Die Reihenfolge ist egal** – PartJoin erkennt selbst, welche Markierung zu welcher gehört.
+     **Die Reihenfolge ist egal** – D3DForge erkennt selbst, welche Markierung zu welcher gehört.
    - *Kanten:* gerade Kante auf gerade Kante (z. B. bündig an einer Außenkante) – gut kombinierbar mit einer Fläche.
    - *Pinsel:* mit gedrückter Maustaste über die Kontaktstelle streichen; beim Loslassen wird daraus eine
      Fläche (eben oder Freiform). Praktisch, wo die automatische Flächenerkennung nicht passt.
@@ -69,7 +74,7 @@ und Mausaktionen.
      eine runde Fläche; „⇹" trennt sie wieder.
    Punkte, Kanten und Flächen lassen sich auch kombinieren. Besteht das Gegenstück aus mehreren Teilen (z. B.
    eine Maske, die auf Kopf *und* Haare passt), dürfen Flächen auch auf Nachbarteilen liegen, die schon fest mit
-   Teil 1 verbunden sind – PartJoin rechnet und prüft den Kontakt dann mit allen diesen Teilen.
+   Teil 1 verbunden sind – D3DForge rechnet und prüft den Kontakt dann mit allen diesen Teilen.
 3. **Verbinden** – das bewegliche Teil wird exakt an das feste angesetzt. Was die Auswahl offen lässt
    (z. B. die Drehung um einen Zapfen), sucht *Automatisch einpassen* über Flächenkontakt ohne
    Durchdringung: Teile mit Abflachung, Nut oder Lochbild drehen sich so von selbst richtig, und ein
@@ -108,7 +113,7 @@ und Mausaktionen.
    15°, gelb knapp, rot wackelig oder kippt um (Schwerpunkt neben der Standfläche). Der Schwerpunkt rechnet
    mit Wänden und Füllung wie bei „Filament & Kosten“ – bei wenig Füllung tragen die Wände das Gewicht.
    **Filament & Kosten**: Material (PLA, PETG, ABS, ASA, TPU, PC, PA, PLA-CF, PETG-CF), Füllung, Wände und
-   Preis je kg wählen – PartJoin schätzt Gramm, Meter Filament (1,75 mm) und Kosten aller sichtbaren Teile und
+   Preis je kg wählen – D3DForge schätzt Gramm, Meter Filament (1,75 mm) und Kosten aller sichtbaren Teile und
    je Platte. Gerechnet wird wie im Slicer: Wände, Boden und Deckel voll, das Innere mit der Füllung; Teile aus
    Bambu-Projekten mit eigenen Wänden oder eigener Füllung nutzen diese. Ohne Stützen, Brim und Spülturm –
    genau rechnet der Slicer. Die Vorgaben bleiben im Browser gespeichert.
@@ -133,13 +138,13 @@ und Mausaktionen.
    anklicken und das neue Maß eingeben – z. B. Zapfen 0,2 mm dünner (Schnellknöpfe −0,1/−0,2/−0,3),
    Bohrung weiter oder eine Fläche zurücksetzen. Nur die Form ändert sich, die Verbindungen bleiben,
    wo sie sind; so entsteht genau dieser Spalt (gut für getrennt gedruckte Steckteile oder bewegliche
-   Gelenke). Bei Bohrungen und Zapfen nimmt PartJoin die ganze Wand – auch wenn ein Schnitt (z. B. aus
+   Gelenke). Bei Bohrungen und Zapfen nimmt D3DForge die ganze Wand – auch wenn ein Schnitt (z. B. aus
    Bambu Studio) durch die Bohrung geht und ein Teil der Wand im anderen Teil liegt, oder unsaubere Netze
    sie zerstückeln; der Durchmesser wird aus allen Stücken bestimmt. „auch in …" weitet die Stücke in den
    angrenzenden Teilen mit (abhaken, wenn nur ein Teil mehr Spiel bekommen soll). Strg+Z macht es rückgängig.
 5. **Exportieren**
    - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): **jede Baugruppe ein eigenes
-     Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in PartJoin und
+     Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in D3DForge und
      lassen sich im Slicer einzeln anordnen („Anordnen", Taste A); jede Teilefarbe wird ein Filament in
      genau dieser Farbe. Die Datei bringt
      Projekteinstellungen für den gewählten Drucker mit (System-Profile von Bambu Studio: 0,4-mm-Düse,
@@ -197,7 +202,7 @@ rechts, „⇄ Seite" zeigt die andere Hälfte. Wo die Ebene durch Material geht
 einem dunkleren Ton des Teils (auch bei aufeinanderliegenden Teilen sauber getrennt), so lassen sich
 Wandstärken, Bohrungen und Passungen ansehen. Klicken und Messen treffen nur, was sichtbar ist – z. B. eine
 Bohrung im Inneren.
-**Netz reparieren**: Nach dem Laden prüft PartJoin jedes Netz im Hintergrund. Offene oder verdrehte Netze
+**Netz reparieren**: Nach dem Laden prüft D3DForge jedes Netz im Hintergrund. Offene oder verdrehte Netze
 bekommen ein ⚠ in der Teileliste (und einen Hinweis in der Statuszeile); ein Klick darauf oder Rechtsklick ›
 „Netz reparieren" verschweißt fast deckungsgleiche Punkte (feine Risse), entfernt doppelte Dreiecke und
 Innenwände, gleicht den Umlaufsinn an, dreht nach innen zeigende Netze nach außen und schließt Löcher
@@ -206,7 +211,7 @@ erhalten. Zerschneiden und Vereinigen brauchen ein geschlossenes Netz – beim Z
 direkt einen Knopf. Zusammengefallene Dreiecke ohne Fläche gelten nicht als Fehler.
 
 **Netz vereinfachen** (Rechtsklick, auch für mehrere ausgewählte Teile): weniger Dreiecke – etwa für Scans
-oder fein modellierte Figuren, die PartJoin und den Slicer bremsen. Man wählt, wie weit die Oberfläche
+oder fein modellierte Figuren, die D3DForge und den Slicer bremsen. Man wählt, wie weit die Oberfläche
 höchstens abweichen darf (0,01 bis 0,5 mm); die Auswahl zeigt für jede Stufe, wie viele Dreiecke übrig
 bleiben. 0,05 mm sieht man im Druck nicht, für enge Passungen lieber 0,01–0,02 mm. Bemalung und gewählte
 Flächen bleiben genau erhalten (ihre Ränder bleiben stehen, fein bemalte Dreiecke unverändert; teilt die
@@ -239,7 +244,7 @@ unten (vertieft, liegt auf der Platte und ist nach dem Zusammenbau meist unsicht
 die Fläche erlaubt (höchstens die eingestellte Größe), an Bohrungen vorbei. Dübel und Schnappstifte bleiben
 ohne Nummer. Alles mit Strg/⌘+Z in einem Schritt zurücknehmbar.
 **Auf Druckplattengröße zerteilen**: Ist ein Teil zu groß für den gewählten Drucker, bietet die Statuszeile
-„Zerteilen …" an (auch per Rechtsklick). PartJoin schlägt vor, wie viele gleich große Stücke je Achse nötig
+„Zerteilen …" an (auch per Rechtsklick). D3DForge schlägt vor, wie viele gleich große Stücke je Achse nötig
 sind, damit jedes mit Rand für die Verbinder auf die Platte passt (auch um 90° gedreht); mit − / + lässt sich
 das ändern, die Schnittebenen sind rot vorgezeigt. Verbinder: Dübel (Standard – auch an senkrechten
 Schnitten gut druckbar), Zapfen, Schwalbenschwanz, Schnapp (Schnappstifte, siehe Zerschneiden) oder ohne.
@@ -265,7 +270,7 @@ Auswahl): Größe in % oder als Breite/Tiefe/Höhe in mm (gleichmäßig), Schnel
 Mitte, danach wieder auf der Platte. Verbindungen bleiben erhalten: Wird alles gemeinsam umgeformt, gilt ihr
 Ergebnis unverändert weiter; bei einem einzelnen Teil setzen sich die verbundenen Teile neu daran. Bemalung
 und Bambu-Text skalieren mit (der Text bleibt in Bambu Studio bearbeitbar); beim Spiegeln gehen Bemalung
-und Bearbeitbarkeit des Textes verloren (die Textform bleibt), PartJoin sagt das vorher.
+und Bearbeitbarkeit des Textes verloren (die Textform bleibt), D3DForge sagt das vorher.
 **Mehrfachauswahl**: In der Teileliste wählt Strg/⌘+Klick einzelne Teile, Umschalt+Klick einen Bereich; im
 3D-Fenster Umschalt+Klick, Strg/⌘+A alle sichtbaren, Esc hebt auf. Ausgewählte Teile haben einen Rahmen;
 über der Liste (und per Rechtsklick) lassen sie sich **gruppieren** – sie bleiben, wo sie sind, und bewegen
@@ -301,14 +306,14 @@ oder dreht das ganze zusammengesetzte Modell.
 
 ## Runde Teile
 
-Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. PartJoin geht so vor:
+Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. D3DForge geht so vor:
 
 1. Achsen und Mittelpunkte werden exakt ausgerichtet (Zapfen ↔ Bohrung koaxial, Kreisfläche ↔ Kreisfläche
    mittig). Das Spiel zwischen Zapfen und Bohrung wird angezeigt.
 2. Die Drehung wird über den ganzen Kreis abgetastet und die Stellung mit dem besten Flächenkontakt ohne
    Durchdringung gewählt. Hat das Teil irgendetwas Unrundes (Abflachung, Nase, Lochbild, Kanten), ist die
    Stellung damit eindeutig.
-3. Ist das Teil wirklich rund, sagt PartJoin das – dann ist die Drehung frei: mit dem Gizmo (Drehring um die
+3. Ist das Teil wirklich rund, sagt D3DForge das – dann ist die Drehung frei: mit dem Gizmo (Drehring um die
    Achse, Raster z. B. 15°) einstellen oder einen zusätzlichen Punkt auf beiden Teilen setzen.
 
 ## Wie viele Punkte?
@@ -317,7 +322,7 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
 | --- | --- |
 | 1 | Teile berühren sich am Punkt, Flächen liegen aufeinander. Drehung um die Kontaktachse per Regler. |
 | 2 | Lage eindeutig, wenn die Flächennormalen helfen (Standard). |
-| 3+ | Am genauesten. Bei symmetrischen Anordnungen (z. B. Quadrat) warnt PartJoin, wenn mehrere Lösungen unterschiedlich aussehen – „Alternative" schaltet durch. |
+| 3+ | Am genauesten. Bei symmetrischen Anordnungen (z. B. Quadrat) warnt D3DForge, wenn mehrere Lösungen unterschiedlich aussehen – „Alternative" schaltet durch. |
 
 ## Wie es intern funktioniert
 
@@ -354,7 +359,7 @@ Bei Kreisen und Zylindern legt die Form die Drehung um die Achse nicht fest. Par
 - **CAD-Import**: `occt-import-js` (OpenCascade als WebAssembly, `src/io/step.ts`); das WebAssembly steckt
   gzip-gepackt in der Datei (`vite.config.ts`) und wird im Hintergrund-Thread entpackt und gestartet.
   OpenCascade und occt-import-js stehen unter der LGPL-2.1 (Lizenztexte in
-  `node_modules/occt-import-js/dist/`); wer PartJoin weitergibt, legt diese Hinweise bei.
+  `node_modules/occt-import-js/dist/`); wer D3DForge weitergibt, legt diese Hinweise bei.
 - **Projekte**: ZIP mit `project.json` und den Netzen als Float32-Daten, Sitzungssicherung in IndexedDB
   (`src/io/project.ts`).
 - **3MF** lesen/schreiben inkl. Slicer-Metadaten (`src/io/threemf.ts`), Bemalung im Format des
@@ -381,7 +386,7 @@ npm run build:single   # eine einzige, eigenständige HTML-Datei: dist-single/in
 
 ## Lizenz
 
-PartJoin steht unter der [MIT-Lizenz](LICENSE) – © 2026 Joshua Diekamp. Nutzen, ändern und weitergeben ist
+D3DForge steht unter der [MIT-Lizenz](LICENSE) – © 2026 Joshua Diekamp. Nutzen, ändern und weitergeben ist
 erlaubt, auch kommerziell, solange der Urheberhinweis und der Lizenztext dabeibleiben.
 
 Eingebaute Bibliotheken und Daten behalten ihre eigenen Lizenzen (auch in der Standalone-Datei und auf der

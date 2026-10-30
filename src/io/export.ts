@@ -24,7 +24,7 @@ export function toSTL(parts: ExportPart[]): Blob {
   const tris = pos.count / 3;
   const buf = new ArrayBuffer(84 + tris * 50);
   const dv = new DataView(buf);
-  const header = 'PartJoin – zusammengefuegtes Modell';
+  const header = 'D3DForge – zusammengefuegtes Modell';
   for (let i = 0; i < Math.min(80, header.length); i++) dv.setUint8(i, header.charCodeAt(i) & 0x7f);
   dv.setUint32(80, tris, true);
   const a = new THREE.Vector3();
@@ -57,7 +57,7 @@ function indexed(g: THREE.BufferGeometry) {
 const f = (x: number) => +x.toFixed(5);
 
 export function toOBJ(parts: ExportPart[]): Blob {
-  const lines = ['# PartJoin – zusammengefuegtes Modell'];
+  const lines = ['# D3DForge – zusammengefuegtes Modell'];
   let offset = 1;
   for (const p of parts) {
     const { pos, idx } = indexed(p.geometry);

@@ -29,7 +29,7 @@ import { BAMBU_PRINTERS, type ColoredPart, type ReadInfo, type SlicerExtras, bam
 import { compute, hasWorker } from './compute/client';
 import { decorate, disposeDecor, refreshPaint } from './decor';
 import {
-  type Blobs, type ProjectData, PROJECT_EXT, clearSession, loadSession, newProject, saveSession, sessionInfo, unpackProject,
+  type Blobs, type ProjectData, PROJECT_EXT, PROJECT_EXTS, clearSession, loadSession, newProject, saveSession, sessionInfo, unpackProject,
 } from './io/project';
 import type { Connector } from './io/cut';
 import type { MeshHealth } from './math/repair';
@@ -203,6 +203,7 @@ const selected = new Set<number>();
 let selAnchor: number | null = null;
 /** Teileliste eingeklappt (bleibt im Browser gespeichert). */
 let partsFolded = false;
+// Gespeicherte Einstellungen heißen noch „partjoin.…“ (früherer Name) – so bleiben sie erhalten
 try { partsFolded = localStorage.getItem('partjoin.partsFolded') === '1'; } catch { /* ohne Speicher */ }
 const SNAP_PX = 14;
 /** Auch sehr fein aufgelöste Flächen (Millionen Dreiecke) vollständig erfassen. */
@@ -1070,8 +1071,8 @@ async function loadList(list: File[]) {
   // Farben für OBJ: passende .mtl-Datei (gleicher Name oder die einzige mitgegebene)
   const mtls = new Map<string, string>();
   for (const f of list) if (f.name.toLowerCase().endsWith('.mtl')) mtls.set(f.name.replace(/\.[^.]+$/, '').toLowerCase(), await f.text());
-  // PartJoin-Projekt: ersetzt die aktuelle Arbeit, weitere Dateien kommen dazu
-  const project = list.find((f) => f.name.toLowerCase().endsWith(`.${PROJECT_EXT}`));
+  // Projekt (auch alte .partjoin): ersetzt die aktuelle Arbeit, weitere Dateien kommen dazu
+  const project = list.find((f) => PROJECT_EXTS.some((x) => f.name.toLowerCase().endsWith(`.${x}`)));
   if (project) {
     try {
       const { data, blobs } = unpackProject(new Uint8Array(await project.arrayBuffer()));
@@ -3839,7 +3840,7 @@ gizmoBar.addEventListener('change', (e) => {
 });
 
 const fileInput = document.getElementById('file') as HTMLInputElement;
-fileInput.accept = [...SUPPORTED, PROJECT_EXT].map((s) => `.${s}`).join(',');
+fileInput.accept = [...SUPPORTED, ...PROJECT_EXTS].map((s) => `.${s}`).join(',');
 fileInput.addEventListener('change', () => {
   if (fileInput.files?.length) loadFiles(fileInput.files);
   fileInput.value = '';
@@ -3879,7 +3880,7 @@ document.getElementById('demo')!.addEventListener('click', () =>
   loadDemo(makeDemo(), 'Beispiel „Haus": Klicke die Oberseite des Hauses und die Unterseite des Dachs an, dann „Verbinden" – oder setze unter „Punkte" die vier Ecken.', 'face'),
 );
 document.getElementById('demoRound')!.addEventListener('click', () =>
-  loadDemo(makeRoundDemo(), 'Beispiel „Zapfen": Klicke den runden Teil des Zapfens und die runde Bohrungswand der Kappe an, dann „Verbinden". Die Drehung findet PartJoin über die Abflachung selbst.', 'face'),
+  loadDemo(makeRoundDemo(), 'Beispiel „Zapfen": Klicke den runden Teil des Zapfens und die runde Bohrungswand der Kappe an, dann „Verbinden". Die Drehung findet D3DForge über die Abflachung selbst.', 'face'),
 );
 
 // Drucker für das Bambu-Projekt: zuletzt gewählter oder der eines geladenen Bambu-Projekts
@@ -4096,7 +4097,7 @@ async function exportAs(kind: string) {
       await new Promise((r) => setTimeout(r, 30));
       try {
         const res = await compute('unionParts', { parts: world.map((p) => ({ name: p.name, positions: p.positions })), wasm: manifoldUrl });
-        body = [{ name: 'PartJoin', positions: res.positions }];
+        body = [{ name: 'D3DForge', positions: res.positions }];
         toast(res.notClosed.length
           ? `Vereinigt. Nicht geschlossen und deshalb nur angehängt: ${res.notClosed.join(', ')} – vorher Rechtsklick › „Netz reparieren“.`
           : 'Zu einem Körper vereinigt.', 6000);
@@ -4834,7 +4835,7 @@ const mmc = (x: number) => String(+x.toFixed(2)).replace('.', ',');
 
 /**
  * Netz vereinfachen (im Hintergrund): weniger Dreiecke – etwa für Scans oder fein modellierte Figuren,
- * die PartJoin und den Slicer bremsen. Die Form weicht höchstens um die gewählte Abweichung ab. Bemalung
+ * die D3DForge und den Slicer bremsen. Die Form weicht höchstens um die gewählte Abweichung ab. Bemalung
  * und gewählte Flächen bleiben genau erhalten: ihre Ränder bleiben stehen, fein bemalte Dreiecke unverändert.
  */
 const SIMPLIFY_TOLS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5];
@@ -6692,7 +6693,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
     { label: section && !cutTarget ? 'Hier zerschneiden …' : 'Zerschneiden …', run: () => openCut(p), title: 'In zwei Teile schneiden, auf Wunsch mit Zapfen oder Dübeln zum Zusammenstecken' },
     ...(fitsBed(partBox(p).getSize(new THREE.Vector3())) ? [] : [{ label: 'Auf Druckplattengröße zerteilen …', run: () => openSplit(p), title: `Zu groß für den ${currentPrinter().label}: in Stücke teilen, die auf die Platte passen` }]),
     { label: p.health && !p.health.closed ? 'Netz reparieren ⚠' : 'Netz prüfen und reparieren', run: () => void repairParts([p]), title: p.health ? `Netz: ${healthText(p.health)}` : 'Löcher schließen, verdrehte Flächen umdrehen, Duplikate entfernen' },
-    { label: 'Netz vereinfachen …', run: () => openSimplify([p]), title: `${countText(triCount(p))} Dreiecke – weniger machen PartJoin und den Slicer schneller; die Form weicht höchstens um die gewählte Abweichung ab` },
+    { label: 'Netz vereinfachen …', run: () => openSimplify([p]), title: `${countText(triCount(p))} Dreiecke – weniger machen D3DForge und den Slicer schneller; die Form weicht höchstens um die gewählte Abweichung ab` },
     { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
   );
   if (assembly.length > 1) entries.push({ label: assembly.some((q) => q.id === baseId) ? 'Gesamtes Modell bewegen' : 'Baugruppe bewegen', run: () => { openGizmo({ kind: 'part', id: seed.id, assembly: true }, 'translate'); renderAll(); } });
@@ -8534,7 +8535,7 @@ function openProject(data: ProjectData, blobs: Blobs) {
 }
 
 /** Dateiname aus dem Basisteil, ohne Zeichen, die Dateisysteme nicht mögen. */
-const projectName = () => (getPart(baseId)?.name ?? parts[0]?.name ?? 'PartJoin').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'PartJoin';
+const projectName = () => (getPart(baseId)?.name ?? parts[0]?.name ?? 'D3DForge').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'D3DForge';
 
 async function saveProject() {
   if (!parts.length) {
