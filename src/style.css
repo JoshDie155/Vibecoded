@@ -124,7 +124,6 @@ h2 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 
 .subhead.first { margin-top: 0; }
 .subhead { margin: 16px 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .exportopts { display: grid; gap: 6px; margin-top: 10px; }
-#bambuPrinter { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; margin-left: 4px; }
 section { border-top: 1px solid var(--line); padding: 14px 0; }
 .step {
   display: inline-grid; place-items: center;
@@ -565,7 +564,7 @@ svg.ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor
   flex: none; display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 12px 0 14px;
   background: var(--panel); border-bottom: 1px solid var(--line); position: relative; z-index: 6;
 }
-#topbar .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; letter-spacing: -0.01em; white-space: nowrap; width: calc(var(--panel-w, 340px) - 26px); min-width: 150px; }
+#topbar .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; letter-spacing: -0.01em; white-space: nowrap; flex: none; margin-right: 8px; }
 #topbar .brand b { color: var(--forge); font-weight: 800; }
 #topbar .logo { width: 28px; height: 28px; flex: none; }
 #toolbar { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -582,16 +581,39 @@ svg.ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor
 .tbtn.icon-only { min-width: 40px; height: 40px; }
 #topbar .tright { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }
 #exportBtn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; margin-left: 6px; font-weight: 600; border-radius: 9px; }
-/* Schmalere Fenster: nur Symbole (die Bezeichnung steht im Tooltip) */
-@media (max-width: 1360px) {
-  .tbtn:not(.icon-only) { min-width: 42px; height: 42px; }
-  .tbtn span { display: none; }
-  #topbar .brand { width: auto; }
+/* Passt die Leiste nicht, nur Symbole (die Bezeichnung steht im Tooltip) – setzt main.ts */
+#topbar.compact .tbtn:not(.icon-only) { min-width: 42px; height: 42px; }
+#topbar.compact .tbtn span { display: none; }
+/* Drucker: kompakte Auswahl mit Symbol */
+#topbar .printer {
+  display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 4px 0 9px; margin-right: 6px;
+  border: 1px solid var(--line); border-radius: 9px; color: var(--muted); cursor: pointer;
 }
+#topbar .printer:hover { border-color: var(--accent); color: var(--accent); }
+#topbar .printer .pname { display: flex; flex-direction: column; min-width: 0; line-height: 1.1; }
+#topbar .printer small { font-size: 10px; font-weight: 500; color: var(--muted); padding-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Breite nach dem gewählten Drucker, nicht nach dem längsten Namen der Liste */
+#topbar .printer select { font: inherit; font-size: 13px; font-weight: 600; color: var(--text); background: transparent; border: 0; padding: 0 2px; max-width: 190px; cursor: pointer; field-sizing: content; }
+#topbar.compact .printer select { max-width: 120px; }
+#topbar.tight .brand span, #topbar.tight #exportBtn span, #topbar.tight .printer .ic { display: none; }
+#topbar.tight .brand { margin-right: 0; }
+#topbar.tight #exportBtn { padding: 0 10px; }
+#topbar.tight .printer { padding-left: 6px; }
+#topbar.tight .printer select { max-width: 100px; }
+#topbar.narrow .tbtn:not(.icon-only) { min-width: 34px; padding: 4px 2px; }
+#topbar.narrow #helpBtn { display: none; }
+#topbar.narrow #toolbar .tsep { margin: 10px 1px; }
+/* Mehr Werkzeuge, als hineinpassen: der Rand blendet aus, wo man weiterwischen kann */
+#toolbar.more-r { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+#toolbar.more-l { mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); }
+#toolbar.more-l.more-r { mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
 @media (max-width: 920px) {
   #topbar { gap: 6px; padding: 0 8px; }
   #topbar .brand span, #exportBtn span { display: none; }
-  #topbar .brand { width: auto; min-width: 0; }
+  #topbar .brand { margin-right: 0; }
+  #topbar .printer { padding-left: 6px; margin-right: 2px; }
+  #topbar .printer .ic { display: none; }
+  #topbar .printer select { max-width: 92px; }
   .tbtn:not(.icon-only) { min-width: 38px; height: 40px; padding: 4px; }
   .tbtn.icon-only { min-width: 36px; }
   #toolbar .tsep { margin: 10px 3px; }
@@ -614,12 +636,12 @@ svg.ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor
 .page[data-page="print"] > .row.wrap:not(.exports, .matopts) > button { text-align: left; }
 .page[data-page="print"] .matopts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .page[data-page="print"] .matopts label { justify-content: space-between; }
-.page[data-page="print"] .exports { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
-.page[data-page="print"] .exports button { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
-.page[data-page="print"] .exports :is([data-export="3mf-bambu"], [data-export="3mf-color"]) { grid-column: 1 / -1; }
-.page[data-page="print"] .exports [data-export="3mf-bambu"] { font-weight: 600; }
-.page[data-page="print"] .exports button:not([data-export="3mf-bambu"]) { background: var(--panel); color: var(--text); border-color: var(--line); }
-.page[data-page="print"] .exports button:not([data-export="3mf-bambu"]):hover { filter: none; color: var(--accent); border-color: var(--accent); }
+/* Export: Ziel wählen, dann ein Knopf */
+.exportrow { display: flex; gap: 6px; align-items: stretch; }
+.exporttarget { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.exporttarget select { flex: 1; min-width: 0; font: inherit; font-size: 13.5px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+#exportGo { font-weight: 600; white-space: nowrap; }
+#exportHelp { margin: 6px 0 10px; }
 
 /* ---------------------------------------------------------------- Werkzeug-Feld: Zeilen wie ein Formular */
 #dock label { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; min-width: 0; }

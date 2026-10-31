@@ -7,7 +7,8 @@ in Teile zerlegter Download), **über markierte Flächen oder Punkte automatisch
 verbinden** – damit man nach dem Druck nichts mehr zusammensetzen und kleben muss. Dazu alles rund um den Druck:
 zerschneiden und auf Plattengröße zerteilen (mit Zapfen, Dübeln, Schwalbenschwanz oder Schnappstiften),
 Passungen anpassen, Aussparungen, Beschriften und Nummerieren, mehrfarbig bemalen, messen, prüfen, für den Druck
-ausrichten und auf Platten verteilen, Montageanleitung – und Export für Bambu Studio, OrcaSlicer und PrusaSlicer.
+ausrichten und auf Platten verteilen, Montageanleitung – und Export für die gängigen Slicer (Bambu Studio,
+OrcaSlicer und seine Ableger, PrusaSlicer, Cura) und Drucker vieler Hersteller.
 
 Läuft komplett im Browser, keine Installation, keine Daten verlassen den Rechner.
 
@@ -44,8 +45,8 @@ Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts
    Druckeinstellungen je Teil mit: Sie werden angezeigt (die Oberfläche erscheint dort in der
    Filamentfarbe, wo sie im Modifier liegt – so wie gedruckt) und beim Export nach Bambu Studio
    wieder mitgeschrieben.
-   **Farben malen** (oben „Malen", Taste N) – für mehrfarbigen Druck mit AMS oder H2C, wie in Bambu
-   Studio: Oben stehen die Filamente als nummerierte Felder, in derselben Reihenfolge wie im Bambu-Export
+   **Farben malen** (oben „Malen", Taste N) – für mehrfarbigen Druck mit Mehrfarbsystem oder mehreren Düsen,
+   wie im Slicer: Oben stehen die Filamente als nummerierte Felder, in derselben Reihenfolge wie im Export
    (die Teilefarben, dann die bemalten); „+" fügt eine übliche Filamentfarbe oder eine eigene hinzu.
    **Pinsel**: mit gedrückter linker Maustaste über das Teil streichen (Größe = Durchmesser, auch mit Alt +
    Mausrad) – große Dreiecke werden am Pinselrand fein unterteilt, gemalt wird nur, was zur Kamera zeigt.
@@ -62,7 +63,7 @@ Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts
    passende Flächen (deckungsgleiche Schnittflächen, Zapfen und Bohrungen) und setzt sie ab dem
    Basisteil zusammen; **„Vorschlagen"** macht das für eine einzelne Verbindung, „Nächster Vorschlag"
    probiert weitere. Von Hand: oben im 3D-Fenster zwischen **Flächen** (Taste F, Standard), **Kanten** (Taste K),
-   **Punkte** (Taste P) und **Pinsel** (Taste B) wechseln.
+   **Punkte** (Taste P) und **Polygone** (Taste B) wechseln.
    - *Flächen:* die Kontaktfläche auf beiden Teilen anklicken. D3DForge erkennt selbst, ob es eine
      ebene Fläche, eine Kreisfläche oder ein Zylinder (Zapfen bzw. Bohrung) ist, und setzt die Teile
      wie in einem CAD-Programm aufeinander: Ebene auf Ebene, Kreis mittig auf Kreis, Zapfen koaxial
@@ -70,8 +71,9 @@ Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts
    - *Punkte:* auf beiden Teilen dieselben markanten Stellen anklicken (Ecken, Kanten …).
      **Die Reihenfolge ist egal** – D3DForge erkennt selbst, welche Markierung zu welcher gehört.
    - *Kanten:* gerade Kante auf gerade Kante (z. B. bündig an einer Außenkante) – gut kombinierbar mit einer Fläche.
-   - *Pinsel:* mit gedrückter Maustaste über die Kontaktstelle streichen; beim Loslassen wird daraus eine
-     Fläche (eben oder Freiform). Praktisch, wo die automatische Flächenerkennung nicht passt.
+   - *Polygone:* einzelne Dreiecke markieren – mit gedrückter Maustaste über die Kontaktstelle streichen; beim
+     Loslassen wird daraus eine Fläche (eben oder Freiform). Über eine Auswahl streichen hebt sie wieder auf.
+     Praktisch, wo die automatische Flächenerkennung nicht passt.
    - *Flächen zusammenfassen:* in der Flächenliste zwei oder mehr Flächen anhaken und „… zu einer
      zusammenfassen" klicken – oder mit Alt/⌥ + Klick eine Fläche direkt an die zuletzt gewählte anhängen.
      Das geht mit ebenen, runden und Freiformflächen (nicht mit Kanten) und auch über fest verbundene Teile
@@ -97,7 +99,7 @@ Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts
    ineinander, damit der Slicer sie sicher verschmilzt.
 4. **Prüfen** – „Passung prüfen" färbt ein, wo sich die Teile berühren (grün), wo ein Spalt bleibt
    (gelb, z. B. das Spiel eines Zapfens) und wo sie sich durchdringen (rot), mit Maßen je Teilepaar.
-   **Messen** (oben „Messen", Taste M) funktioniert wie in Bambu Studio: Unter dem Zeiger leuchtet das
+   **Messen** (oben „Messen", Taste M) funktioniert wie im Slicer: Unter dem Zeiger leuchtet das
    Merkmal auf – Ecke, gerade Kante, Kreis oder Bogen (Bohrung, runde Außenkante, auch abgerundete Ecken),
    Seite eines Vielecks (Sechskant), ebene Fläche oder auf Rundungen der ganze Zapfen bzw. die Bohrung. Schon
    ein Merkmal zeigt sein Maß: eine Kante ihre Länge, ein Kreis seinen Durchmesser (im Bild und in der
@@ -121,21 +123,28 @@ Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts
    **Filament & Kosten**: Material (PLA, PETG, ABS, ASA, TPU, PC, PA, PLA-CF, PETG-CF), Füllung, Wände und
    Preis je kg wählen – D3DForge schätzt Gramm, Meter Filament (1,75 mm) und Kosten aller sichtbaren Teile und
    je Platte. Gerechnet wird wie im Slicer: Wände, Boden und Deckel voll, das Innere mit der Füllung; Teile aus
-   Bambu-Projekten mit eigenen Wänden oder eigener Füllung nutzen diese. Ohne Stützen, Brim und Spülturm –
+   Slicer-Projekten mit eigenen Wänden oder eigener Füllung nutzen diese. Ohne Stützen, Brim und Spülturm –
    genau rechnet der Slicer. Die Vorgaben bleiben im Browser gespeichert.
-   **Druckplatte**: Der Umriss der Platte des gewählten Bambu-Druckers (mit 10-mm-Raster) liegt im Ursprung;
+   **Drucker** (Auswahl oben rechts, nach Hersteller gruppiert): Bambu Lab, Prusa, Creality, Anycubic, Elegoo,
+   QIDI, Sovol, Voron, Snapmaker, Flashforge, Artillery und UltiMaker – mit Druckbereich und -höhe nach
+   Herstellerangabe (bei widersprüchlichen Angaben der kleinere Wert). Der Drucker bestimmt Platte, Prüfung
+   „zu groß“, Zerteilen und die Vorauswahl des Slicers beim Export.
+   **Druckplatte**: Der Umriss der Platte des gewählten Druckers (mit 10-mm-Raster) liegt im Ursprung;
    rot, wenn eine Baugruppe daneben liegt oder zu groß ist (mit Hinweis in der Statuszeile). „Auf der Platte
    anordnen" (Taste A) legt alle sichtbaren Baugruppen platzsparend darauf; passt nicht alles auf eine Platte,
-   füllt es weitere. **Mehrere Platten** liegen wie in Bambu Studio im Raster (etwa √n Spalten, weitere Reihen
+   füllt es weitere. **Mehrere Platten** liegen wie im Slicer im Raster (etwa √n Spalten, weitere Reihen
    davor). Die Leiste „Platten" unter dem Ansichtswürfel blendet die Platten ein und aus, springt per Nummer
    zu einer Platte, fügt mit + eine hinzu und entfernt mit − die leeren (auch im Rechtsklick-Menü ins Leere).
-   Ändert sich die Zahl der Platten oder der Drucker, wandern die Teile mit ihrer Platte. Ein Bambu-Projekt
-   kommt mit seinen Platten: jedes Objekt auf seine Platte, an dieselbe Stelle. Liegt alles auf den Platten,
-   übernimmt der Bambu-Export genau diese Lage – mit derselben Aufteilung auf Platten in Bambu Studio.
-   **Zwei Düsen** (H2D, H2D Pro, H2C, X2D): Getönte Streifen am Plattenrand zeigen, was nur die linke
-   (orange) bzw. nur die rechte Düse (lila) erreicht – Werte aus den Druckerprofilen von Bambu Studio
-   (H2D: links 25 mm, rechts 25 mm; H2C: links 25 mm, rechts 5 mm; X2D: links 20,5 mm). Liegt eine
-   Baugruppe darin, sagt es die Statuszeile: Bambu Studio druckt dort nur mit den Filamenten dieser Düse.
+   Ändert sich die Zahl der Platten oder der Drucker, wandern die Teile mit ihrer Platte. Ein Slicer-Projekt
+   (Bambu Studio, OrcaSlicer und Ableger) kommt mit seinen Platten: jedes Objekt auf seine Platte, an
+   dieselbe Stelle. Liegt alles auf den Platten, übernimmt der Export ins Projekt genau diese Lage – mit
+   derselben Aufteilung auf Platten.
+   **Zwei Düsen mit eingeschränkter Reichweite** (z. B. Bambu Lab H2D, H2D Pro, H2C, X2D): Getönte Streifen
+   am Plattenrand zeigen, was nur die linke (orange) bzw. nur die rechte Düse (lila) erreicht – Werte aus den
+   Druckerprofilen (H2D: links 25 mm, rechts 25 mm; H2C: links 25 mm, rechts 5 mm; X2D: links 20,5 mm). Liegt
+   eine Baugruppe darin, sagt es die Statuszeile: Der Slicer druckt dort nur mit den Filamenten dieser Düse.
+   Drucker mit Werkzeugwechsler oder unabhängigen Druckköpfen, deren Werkzeuge die ganze Platte erreichen
+   (Prusa XL, Snapmaker U1/J1, UltiMaker S-Serie), brauchen das nicht.
    **Druckausrichtung**: „Für den Druck ausrichten" legt jede Baugruppe mit ihrer größten ebenen
    Auflage auf die Druckplatte (bei fast gleicher Fläche die stabilere Lage mit tieferem Schwerpunkt);
    was schon gut liegt, bleibt. Von Hand: oben „Hinlegen" (Taste L), dann die Fläche
@@ -145,32 +154,38 @@ Beschriften, Passung, Zerschneiden …) zeigt seine Einstellungen im Feld rechts
    Bohrung weiter oder eine Fläche zurücksetzen. Nur die Form ändert sich, die Verbindungen bleiben,
    wo sie sind; so entsteht genau dieser Spalt (gut für getrennt gedruckte Steckteile oder bewegliche
    Gelenke). Bei Bohrungen und Zapfen nimmt D3DForge die ganze Wand – auch wenn ein Schnitt (z. B. aus
-   Bambu Studio) durch die Bohrung geht und ein Teil der Wand im anderen Teil liegt, oder unsaubere Netze
+   dem Slicer) durch die Bohrung geht und ein Teil der Wand im anderen Teil liegt, oder unsaubere Netze
    sie zerstückeln; der Durchmesser wird aus allen Stücken bestimmt. „auch in …" weitet die Stücke in den
    angrenzenden Teilen mit (abhaken, wenn nur ein Teil mehr Spiel bekommen soll). Strg+Z macht es rückgängig.
-5. **Exportieren**
-   - **3MF für Bambu Studio / OrcaSlicer** (Projektformat von Bambu): **jede Baugruppe ein eigenes
-     Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen zueinander wie in D3DForge und
-     lassen sich im Slicer einzeln anordnen („Anordnen", Taste A); jede Teilefarbe wird ein Filament in
-     genau dieser Farbe. Die Datei bringt
-     Projekteinstellungen für den gewählten Drucker mit (System-Profile von Bambu Studio: 0,4-mm-Düse,
-     0,20 mm Standard, Bambu PLA Basic; auch H2C, H2D, H2D Pro und X2D mit zwei Düsen) – ohne sie lädt
-     Bambu Studio ab 2.8.2 nur die Geometrie.
-     Der Drucker eines geladenen Bambu-Projekts wird vorausgewählt.
+5. **Exportieren** (oben „Exportieren“ oder Reiter „Drucken“): in der Liste den Slicer wählen – vorausgewählt
+   ist der des gewählten Druckers –, dann „Exportieren“.
+   - **Bambu Studio** und **OrcaSlicer & Ableger** (Creality Print, Anycubic Slicer Next, ElegooSlicer,
+     QIDI Studio, Snapmaker Orca, Orca-Flashforge – sie lesen alle das Projektformat von Bambu Studio):
+     **jede Baugruppe ein eigenes Objekt** aus ihren Teilen (mit eigenem Namen), die Objekte liegen
+     zueinander wie in D3DForge und lassen sich im Slicer einzeln anordnen; jede Teilefarbe wird ein
+     Filament in genau dieser Farbe. Bei Bambu-Lab-Druckern bringt die Datei die Projekteinstellungen mit
+     (System-Profile: 0,4-mm-Düse, 0,20 mm Standard, Bambu PLA Basic; auch die Drucker mit zwei Düsen);
+     bei Druckern anderer Hersteller nur Druckbereich und Filamentfarben – Drucker- und Prozessprofil wählt
+     man nach dem Öffnen im Slicer. Der Drucker eines geladenen Projekts wird vorausgewählt.
      Modifier (Aufschriften, negative Volumen, Stützen-Volumen), Bemalung und Druckeinstellungen je
      Teil (Wände, Infill, Muster …) bleiben erhalten; Texte aus Bambu Studio bleiben dort bearbeitbar
      (Textangaben, eigenes Netz und Lage werden mitgeschrieben); die Filamentnummern werden dabei auf die
      Filamente des Exports umgestellt. Einstellungen, die nur für ein ganzes Objekt gelten (z. B.
      Schichthöhe, Brim), bleiben erhalten, solange alle Teile eines Objekts dieselben Werte mitbringen;
      sonst gilt das Druckprofil.
-   - **3MF für PrusaSlicer**: ein Objekt aus mehreren Teilen; Teile gleicher Farbe bekommen dieselbe
+   - **PrusaSlicer / SuperSlicer**: ein Objekt aus mehreren Teilen; Teile gleicher Farbe bekommen dieselbe
      Extrudernummer – im Slicer jeder Nummer das passende Filament zuordnen. Die Bemalung kommt mit,
      Modifier nicht (andere Programme würden sie als Teil des Körpers drucken).
+   - **UltiMaker Cura**: jedes Teil ein eigenes Objekt mit Namen, Farbe und Extruder-Nummer (1. Farbe =
+     Extruder 1 …, Eintrag `cura:extruder_nr`, den Cura beim Öffnen übernimmt), so auf der Platte wie hier.
+     Bemalung kennt Cura nicht.
    - **STL, OBJ, 3MF (ein Körper)**: mit „Zu einem Körper vereinigen" werden die Teile per
      boolescher Vereinigung zu einem geschlossenen Netz (Überlappungen und Innenflächen verschwinden).
      Nicht geschlossene Teile werden unverändert angehängt und genannt.
-   - **Vorschaubild**: Jede 3MF-Datei bekommt ein Bild der Teile (schräg von vorne, ohne Hintergrund) – der
-     Bambu-Export eines je Druckplatte, wie Bambu Studio es in seiner Plattenliste und Dateivorschau zeigt.
+   - **Vorschaubild**: Jede 3MF-Datei bekommt ein Bild der Teile (schräg von vorne, ohne Hintergrund) –
+     das Projekt eines je Druckplatte, wie der Slicer es in seiner Plattenliste und Dateivorschau zeigt.
+   Getestet mit echten Druckern ist bisher der Weg über Bambu Studio; die Formate für die übrigen Slicer
+   folgen deren Dokumentation bzw. Quellcode.
 
 Mehr als zwei Teile: einfach weitere Verbindungen anlegen. Alles wird ausgehend vom **Basisteil**
 zusammengesetzt (Basis in der Teileliste wählbar).
@@ -243,8 +258,8 @@ einlassen – Größe (Höhe der Großbuchstaben), Höhe bzw. Tiefe, Drehung und
 einstellbar, mehrzeilig mit Umschalt + Enter. Die Form folgt der Oberfläche, auch auf Zylindern und
 Wölbungen; an senkrechten Flächen steht sie aufrecht, an waagerechten liest sie sich aus der aktuellen
 Ansicht. Eine Vorschau zeigt sie vorher, mit Hinweis, wenn sie über den Rand ragt oder die Wand dahinter zu
-dünn wird. Auf Wunsch bekommt sie ein eigenes Filament (als Bemalung im Bambu-Projekt – etwa für AMS oder
-H2C). **Nummerieren** (Rechtsklick auf mehrere ausgewählte Teile › „Nummerieren …“, oder „Nummern“ in der
+dünn wird. Auf Wunsch bekommt sie ein eigenes Filament (als Bemalung im Slicer-Projekt – für
+Mehrfarbsysteme oder mehrere Düsen). **Nummerieren** (Rechtsklick auf mehrere ausgewählte Teile › „Nummerieren …“, oder „Nummern“ in der
 Leiste): prägt 1/7, 2/7 … (Muster und Startnummer frei) in die ausgewählten Teile – je auf die größte Fläche
 unten (vertieft, liegt auf der Platte und ist nach dem Zusammenbau meist unsichtbar) oder oben, so groß wie
 die Fläche erlaubt (höchstens die eingestellte Größe), an Bohrungen vorbei. Dübel und Schnappstifte bleiben
@@ -300,7 +315,7 @@ aus der Gruppe lösen, entfernen – auf einer gewählten Fläche zuerst „Dies
 ins Leere: Ansicht anpassen, alle zeigen, anordnen, Hilfe. Rechts ziehen verschiebt weiterhin die Ansicht.
 Der **Ansichtswürfel** oben rechts dreht sich mit: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht
 dorthin (Drehpunkt und Abstand bleiben), Ziehen am Würfel dreht sie, ⌂ zeigt die Schrägansicht. Tasten wie
-in Bambu Studio: 1 oben, 2 unten, 3 vorne, 4 hinten, 5 links, 6 rechts, 0 schräg.
+im Slicer: 1 oben, 2 unten, 3 vorne, 4 hinten, 5 links, 6 rechts, 0 schräg.
 Namen: Mauszeiger kurz über einem Teil halten zeigt seinen Namen, Shift+Klick wählt es aus und zeigt es in der Teileliste,
 Klick auf einen Namen lässt das Teil aufleuchten, Doppelklick benennt es um. Die Seitenleiste lässt sich
 am Rand breiter oder schmaler ziehen (Doppelklick: zurücksetzen).

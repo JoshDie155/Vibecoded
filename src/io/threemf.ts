@@ -765,7 +765,13 @@ const settingLines = (settings: Record<string, string> | undefined, indent: stri
  *             'multicolor': ein Objekt aus mehreren Teilen mit je eigener Farbe/eigenem Extruder.
  */
 /** thumbnail: PNG als Vorschaubild (3MF-Standard, z. B. für Dateimanager und Slicer). */
-export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor', thumbnail?: Uint8Array): Uint8Array {
+/**
+ * Allgemeines 3MF. single: alles ein Körper ohne Farben. multicolor: PrusaSlicer-Format (ein Objekt, Teile
+ * mit Namen, Extruder und Bemalung). cura: ein Objekt je Teil mit Farbe und Extruder-Nummer für UltiMaker
+ * Cura (cura:extruder_nr), Ursprung vorne links auf der Platte (bed: Druckbereich in mm).
+ */
+export function write3MF(parts: ColoredPart[], mode: 'single' | 'multicolor' | 'cura', thumbnail?: Uint8Array, bed?: [number, number]): Uint8Array {
+  if (mode === 'cura') return write3MFCura(parts, bed ?? [256, 256], thumbnail);
   const slots = colorSlots(parts);
   const vChunks: string[] = [];
   const tChunks: string[] = [];
@@ -840,6 +846,54 @@ ${vol}
   return zipSync(files);
 }
 
+const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+<Default Extension="config" ContentType="text/xml"/>
+<Default Extension="png" ContentType="image/png"/>
+</Types>`;
+
+/**
+ * Für UltiMaker Cura: jedes Teil ein eigenes Objekt mit Namen, Farbe (basematerials) und Extruder-Nummer
+ * (Metadatum cura:extruder_nr, ab 0 – Cura weist es dem Extruder an dieser Stelle zu, falls vorhanden). Die
+ * Platte des Programms liegt mit ihrer vorderen linken Ecke im Ursprung, wie es 3MF vorsieht.
+ */
+function write3MFCura(parts: ColoredPart[], bed: [number, number], thumbnail?: Uint8Array): Uint8Array {
+  const slots = colorSlots(parts);
+  const objects: string[] = [];
+  const items: string[] = [];
+  parts.forEach((part, i) => {
+    const { verts, tris } = weld(part.positions);
+    if (!tris.length) return;
+    const id = i + 2;
+    const slot = Math.max(0, slots.indexOf(part.color.toLowerCase()));
+    const v: string[] = [];
+    for (let k = 0; k < verts.length; k += 3) v.push(`<vertex x="${f5(verts[k] + bed[0] / 2)}" y="${f5(verts[k + 1] + bed[1] / 2)}" z="${f5(verts[k + 2])}"/>`);
+    const t: string[] = [];
+    for (let k = 0; k < tris.length; k += 3) t.push(`<triangle v1="${tris[k]}" v2="${tris[k + 1]}" v3="${tris[k + 2]}"/>`);
+    objects.push(`<object id="${id}" name="${esc(part.name)}" type="model" pid="1" pindex="${slot}"><metadatagroup><metadata name="cura:extruder_nr" preserve="true" type="xs:string">${slot}</metadata></metadatagroup><mesh><vertices>${v.join('')}</vertices><triangles>${t.join('')}</triangles></mesh></object>`);
+    items.push(`<item objectid="${id}"/>`);
+  });
+  const model = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="de-DE" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:cura="http://software.ultimaker.com/xml/cura/3mf/2015/10">
+<metadata name="Application">D3DForge</metadata>
+<resources><basematerials id="1">${slots.map((c, i) => `<base name="Farbe ${i + 1}" displaycolor="${c.toUpperCase()}FF"/>`).join('')}</basematerials>${objects.join('')}</resources>
+<build>${items.join('')}</build>
+</model>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>${thumbnail ? `
+<Relationship Target="/Metadata/thumbnail.png" Id="rel1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>` : ''}
+</Relationships>`;
+  return zipSync({
+    '[Content_Types].xml': strToU8(CONTENT_TYPES),
+    '_rels/.rels': strToU8(rels),
+    '3D/3dmodel.model': strToU8(model),
+    ...(thumbnail ? { 'Metadata/thumbnail.png': thumbnail } : {}),
+  });
+}
+
 /** Gleichbleibende Pseudo-UUID (Bambu Studio erwartet p:UUID-Attribute, Inhalt ist beliebig). */
 function uuid(kind: number, n: number): string {
   const h = (x: number, len: number) => x.toString(16).padStart(len, '0').slice(-len);
@@ -886,8 +940,14 @@ export const BAMBU_PRINTERS: BambuPrinter[] = [
 ];
 
 export interface BambuOptions {
-  /** Kennung aus BAMBU_PRINTERS, Standard X1C. */
+  /** Kennung aus BAMBU_PRINTERS, Standard X1C. Ein anderer Drucker: bed angeben. */
   printer?: string;
+  /**
+   * Drucker eines anderen Herstellers (OrcaSlicer und Ableger): Druckbereich und -höhe in mm. Das Projekt
+   * nennt dann keine Bambu-Profile – Drucker- und Prozessprofil wählt man im Slicer.
+   */
+  bed?: [number, number];
+  height?: number;
   /**
    * Mitte der Druckplatte in den Koordinaten der Teile: Dann liegt alles im Slicer genau so auf der Platte
    * wie in D3DForge. Ohne Angabe wird das Ganze mittig auf die Platte gesetzt.
@@ -939,6 +999,34 @@ function bambuProjectSettings(printer: BambuPrinter, colors: string[], version: 
     filament_map: each('1'),
     inherits_group: Array.from({ length: n + 2 }, () => ''),
     different_settings_to_system: Array.from({ length: n + 2 }, () => ''),
+  }, null, 4);
+}
+
+/**
+ * Projekteinstellungen für Drucker anderer Hersteller (OrcaSlicer und Ableger): keine Profilnamen, nur der
+ * Druckbereich und die Filamente in den Teilefarben – Drucker-, Prozess- und Filamentprofil wählt man im
+ * Slicer. Die Filamentfarben müssen dabei sein (ohne sie stürzen ältere Versionen beim Öffnen ab).
+ */
+function genericProjectSettings(bed: [number, number], height: number | undefined, colors: string[], version: string): string {
+  const n = Math.max(1, colors.length);
+  const list = colors.length ? colors.map((c) => c.toUpperCase()) : ['#FFFFFF'];
+  const each = (v: string) => Array.from({ length: n }, () => v);
+  const [w, d] = bed;
+  return JSON.stringify({
+    name: 'project_settings',
+    from: 'project',
+    version,
+    printer_technology: 'FFF',
+    printable_area: ['0x0', `${w}x0`, `${w}x${d}`, `0x${d}`],
+    ...(height ? { printable_height: String(height) } : {}),
+    nozzle_diameter: ['0.4'],
+    filament_colour: list,
+    filament_multi_colour: list,
+    filament_colour_type: each('1'),
+    filament_type: each('PLA'),
+    filament_diameter: each('1.75'),
+    filament_self_index: list.map((_, i) => String(i + 1)),
+    filament_map: each('1'),
   }, null, 4);
 }
 
@@ -1025,14 +1113,16 @@ export function write3MFBambu(parts: ColoredPart[], opts: BambuOptions = {}): Ui
   const c = opts.plateCenter
     ? [opts.plateCenter[0], opts.plateCenter[1], all.min[2]]
     : [(all.min[0] + all.max[0]) / 2, (all.min[1] + all.max[1]) / 2, all.min[2]];
-  const printer = BAMBU_PRINTERS.find((p) => p.id === opts.printer) ?? BAMBU_PRINTERS[0];
-  const [bx, by] = [printer.bed[0] / 2, printer.bed[1] / 2];
+  const known = BAMBU_PRINTERS.find((p) => p.id === opts.printer);
+  const printer = known ?? BAMBU_PRINTERS[0];
+  const bed = known || !opts.bed ? printer.bed : opts.bed;
+  const [bx, by] = [bed[0] / 2, bed[1] / 2];
   const plateCount = Math.max(1, opts.plateCenters?.length ?? 1);
   /** Mitte (Koordinaten der Teile) und Ursprung in Bambu Studio für die Platte eines Objekts. */
   const plateOf = (list: ColoredPart[]) => {
     const i = Math.min(plateCount - 1, Math.max(0, list[0].plate ?? 0));
     const pc = opts.plateCenters?.[i];
-    return { i, center: pc ? [pc[0], pc[1], all.min[2]] : c, origin: bambuPlateOrigin(i, plateCount, printer.bed) };
+    return { i, center: pc ? [pc[0], pc[1], all.min[2]] : c, origin: bambuPlateOrigin(i, plateCount, bed) };
   };
   const plateInstances: string[][] = Array.from({ length: plateCount }, () => []);
   const groups = new Map<string, ColoredPart[]>();
@@ -1197,7 +1287,9 @@ ${subRels.join('\n')}
     '3D/_rels/3dmodel.model.rels': strToU8(modelRels),
     ...files,
     'Metadata/model_settings.config': strToU8(config),
-    'Metadata/project_settings.config': strToU8(bambuProjectSettings(printer, slots, version.replace(/^BambuStudio-/, ''))),
+    'Metadata/project_settings.config': strToU8(known || !opts.bed
+      ? bambuProjectSettings(printer, slots, version.replace(/^BambuStudio-/, ''))
+      : genericProjectSettings(bed, opts.height, slots, version.replace(/^BambuStudio-/, ''))),
   });
 }
 

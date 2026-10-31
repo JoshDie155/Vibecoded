@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>D3DForge</title>
-    <meta name="description" content="Mehrere 3D-Modelle über markierte Punkte automatisch passgenau zusammenfügen." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3.5 8.5Q3.5 7 5 7h9.5v5.2l4 -1.6v10.8l-4 -1.6V25H5Q3.5 25 3.5 23.5z' fill='%232f6fde'/%3E%3Cpath d='M17.5 7H27Q28.5 7 28.5 8.5v15Q28.5 25 27 25h-9.5v-4.8l4 1.6V10.2l-4 1.6z' fill='%23f08a24'/%3E%3C/svg%3E" />
+    <meta name="description" content="3D-Druckteile passgenau verbinden, zerteilen, beschriften und druckfertig machen – im Browser." />
   </head>
   <body>
     <svg width="0" height="0" style="position:absolute" aria-hidden="true">
       <defs>
-        <symbol id="i-logo" viewBox="0 0 32 32"><path d="M16 3 28 9.5v13L16 29 4 22.5v-13z" fill="#2f6fde"/><path d="M16 3 28 9.5 16 16 4 9.5z" fill="#6f9cf0"/><path d="M16 16v13L4 22.5v-13z" fill="#2457b8"/><path d="M20.5 13.5l2.2-5.2M23.6 15.4l4-3.2M24 19l4.6-.6" stroke="#f08a24" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+        <symbol id="i-logo" viewBox="0 0 32 32"><path d="M3.5 8.5Q3.5 7 5 7h9.5v5.2l4 -1.6v10.8l-4 -1.6V25H5Q3.5 25 3.5 23.5z" fill="#2f6fde"/><path d="M17.5 7H27Q28.5 7 28.5 8.5v15Q28.5 25 27 25h-9.5v-4.8l4 1.6V10.2l-4 1.6z" fill="#f08a24"/><path d="M3.5 8.5Q3.5 7 5 7h9.5v2.2H3.5z" fill="#fff" fill-opacity=".18"/><path d="M17.5 7H27Q28.5 7 28.5 8.5v.7H17.5z" fill="#fff" fill-opacity=".22"/></symbol>
         <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
         <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
         <symbol id="i-view" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
@@ -30,6 +31,8 @@
         <symbol id="i-face" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4z" fill="currentColor" fill-opacity=".25"/><path d="M4 8v8l8 4 8-4V8M12 12v8"/></symbol>
         <symbol id="i-edge" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8" opacity=".35"/><path d="M12 12v8" stroke-width="3"/></symbol>
         <symbol id="i-point" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8" opacity=".35"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></symbol>
+        <symbol id="i-printer" viewBox="0 0 24 24"><path d="M4 3h16v18H4z"/><path d="M4 7h16M10 7v4h4V7M7 17h10"/><path d="M12 11v3"/></symbol>
+        <symbol id="i-poly" viewBox="0 0 24 24"><path d="M3 18 9 5l6 13zM9 5l10 4-4 9M3 18h12"/><path d="M9 5 6 11.5h6z" fill="currentColor" fill-opacity=".35" stroke="none"/></symbol>
         <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M15 4l5 5L9 20H4v-5z"/><path d="M13 6l5 5"/></symbol>
       </defs>
     </svg>
@@ -40,19 +43,19 @@
           <button data-pick="face" class="tbtn on" title="Flächen auswählen (Taste F)"><svg class="ic" aria-hidden="true"><use href="#i-face"/></svg><span>Flächen</span></button>
           <button data-pick="edge" class="tbtn" title="Gerade Kanten auswählen (Taste K)"><svg class="ic" aria-hidden="true"><use href="#i-edge"/></svg><span>Kanten</span></button>
           <button data-pick="point" class="tbtn" title="Punkte markieren, z. B. Ecken (Taste P)"><svg class="ic" aria-hidden="true"><use href="#i-point"/></svg><span>Punkte</span></button>
-          <button data-pick="brush" class="tbtn" title="Fläche selbst bemalen: mit gedrückter Maustaste über das Teil streichen, beim Loslassen wird daraus eine Fläche (Taste B)"><svg class="ic" aria-hidden="true"><use href="#i-pencil"/></svg><span>Pinsel</span></button>
+          <button data-pick="brush" class="tbtn" title="Einzelne Polygone (Dreiecke) markieren: mit gedrückter Maustaste darüberstreichen – beim Loslassen wird daraus eine Kontaktfläche. Über eine Auswahl streichen hebt sie wieder auf (Taste B)"><svg class="ic" aria-hidden="true"><use href="#i-poly"/></svg><span>Polygone</span></button>
         </span>
         <span class="tsep"></span>
         <span class="tgroup" role="group" aria-label="Ansehen und Messen">
               <button id="fit" class="tbtn" title="Ansicht auf alle Teile anpassen"><svg class="ic" aria-hidden="true"><use href="#i-view"/></svg><span>Ansicht</span></button>
-              <button id="measureTool" class="tbtn" title="Messen wie in Bambu Studio: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)"><svg class="ic" aria-hidden="true"><use href="#i-ruler"/></svg><span>Messen</span></button>
+              <button id="measureTool" class="tbtn" title="Messen wie im Slicer: Kante, Kreis, Ecke oder Fläche anklicken – eine Kante zeigt ihre Länge, ein Kreis seinen Durchmesser; zwei Merkmale ergeben Abstand und Winkel (Taste M)"><svg class="ic" aria-hidden="true"><use href="#i-ruler"/></svg><span>Messen</span></button>
               <button id="dimsTool" class="tbtn" title="Außenmaße im Bild: Breite, Tiefe und Höhe jeder Baugruppe – oder der ausgewählten Teile (Taste D)"><svg class="ic" aria-hidden="true"><use href="#i-dims"/></svg><span>Maße</span></button>
               <button id="sectionTool" class="tbtn" title="Schnittansicht: das Modell entlang X, Y oder Z aufschneiden und hineinsehen – Wandstärken, Bohrungen, Passungen (Taste C)"><svg class="ic" aria-hidden="true"><use href="#i-section"/></svg><span>Schnitt</span></button>
               <button id="explodeTool" class="tbtn" title="Explosionsansicht: Baugruppen auseinandergezogen zeigen – nur zum Ansehen (Taste X)"><svg class="ic" aria-hidden="true"><use href="#i-explode"/></svg><span>Explosion</span></button>
         </span>
         <span class="tsep"></span>
         <span class="tgroup" role="group" aria-label="Bearbeiten">
-              <button id="paintTool" class="tbtn" title="Farben malen wie in Bambu Studio: Filament wählen und über das Teil streichen oder Flächen füllen – für mehrfarbigen Druck mit AMS oder H2C (Taste N)"><svg class="ic" aria-hidden="true"><use href="#i-drop"/></svg><span>Malen</span></button>
+              <button id="paintTool" class="tbtn" title="Farben malen wie im Slicer: Filament wählen und über das Teil streichen oder Flächen füllen – für mehrfarbigen Druck mit Mehrfarbsystem oder mehreren Düsen (Taste N)"><svg class="ic" aria-hidden="true"><use href="#i-drop"/></svg><span>Malen</span></button>
               <button id="textTool" class="tbtn" title="Beschriften: Text oder Logo an der Klickstelle erhaben aufsetzen oder vertieft einlassen – folgt Rundungen (Taste W). Mehrere Teile durchnummerieren: Rechtsklick › „Nummerieren …“"><svg class="ic" aria-hidden="true"><use href="#i-text"/></svg><span>Beschriften</span></button>
               <button id="fitTool" class="tbtn" title="Passung anpassen: erst diesen Knopf, dann einen Zapfen, eine Bohrung oder eine ebene Fläche anklicken – z. B. Zapfen 0,2 mm dünner für getrennt gedruckte Steckteile (Taste T, Esc bricht ab)"><svg class="ic" aria-hidden="true"><use href="#i-fit"/></svg><span>Passung</span></button>
               <button id="layFlat" class="tbtn" title="Eine Baugruppe mit einer Fläche auf die Druckplatte legen: erst diesen Knopf, dann die Fläche anklicken, die unten liegen soll (Taste L, Esc bricht ab)"><svg class="ic" aria-hidden="true"><use href="#i-lay"/></svg><span>Hinlegen</span></button>
@@ -61,10 +64,14 @@
         <label class="check small" hidden><input type="checkbox" id="snap" checked /> An Ecken einrasten</label>
       </div>
       <div class="tright">
+        <label class="printer" title="Drucker: bestimmt Druckplatte, Bauraum und Düsenbereiche – und welches Druckerprofil der Export mitgibt">
+          <svg class="ic" aria-hidden="true"><use href="#i-printer"/></svg>
+          <span class="pname"><small id="printerVendor"></small><select id="bambuPrinter" aria-label="Drucker"></select></span>
+        </label>
         <button id="undoBtn" class="tbtn icon-only" title="Rückgängig (Strg/⌘+Z)" aria-label="Rückgängig"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg></button>
         <button id="redoBtn" class="tbtn icon-only" title="Wiederholen (Strg/⌘+Umschalt+Z)" aria-label="Wiederholen"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg></button>
         <button id="helpBtn" class="tbtn icon-only" title="Anleitung und Tastenkürzel (Taste ?)" aria-label="Hilfe"><svg class="ic" aria-hidden="true"><use href="#i-help"/></svg></button>
-        <button id="exportBtn" class="primary" title="Zu den Export-Möglichkeiten (3MF für Bambu Studio / OrcaSlicer / PrusaSlicer, STL, OBJ, Montageanleitung)"><svg class="ic" aria-hidden="true"><use href="#i-export"/></svg><span>Exportieren</span></button>
+        <button id="exportBtn" class="primary" title="Zu den Export-Möglichkeiten (Projekt für den Slicer, STL, OBJ, Montageanleitung)"><svg class="ic" aria-hidden="true"><use href="#i-export"/></svg><span>Exportieren</span></button>
       </div>
     </header>
     <div id="app">
@@ -97,7 +104,7 @@
             <label class="check small" title="Viele mehrteilige Downloads liegen in den Dateien schon richtig zueinander. Dann werden die Teile genau so geladen.">
               <input type="checkbox" id="keepPos" /> Lage aus der Datei übernehmen
             </label>
-            <label class="check small" title="3MF-Dateien mit mehreren Objekten oder Teilen (z. B. aus Bambu Studio, OrcaSlicer, PrusaSlicer) und GLB/OBJ mit mehreren Netzen werden in einzelne Teile mit ihrer Farbe zerlegt.">
+            <label class="check small" title="3MF-Dateien mit mehreren Objekten oder Teilen (aus dem Slicer) und GLB/OBJ mit mehreren Netzen werden in einzelne Teile mit ihrer Farbe zerlegt.">
               <input type="checkbox" id="splitParts" checked /> Mehrteilige Dateien in Teile zerlegen
             </label>
             <label class="check small" title="Fester Boden: Jede Baugruppe (alles, was zusammenhängt) steht mit ihrem tiefsten Punkt auf der Druckplatte – in D3DForge und im Export für den Slicer. Teile mit „Lage aus der Datei“ stehen gemeinsam darauf und bleiben untereinander, wie sie geladen wurden. Ausschalten, um Teile frei im Raum zu lassen.">
@@ -150,7 +157,7 @@
             <b>Flächen:</b> die Kontaktflächen anklicken (eben, Kreisfläche, Zapfen/Bohrung) – D3DForge setzt sie wie im CAD aufeinander.
             Flächen dürfen auch auf Nachbarteilen liegen, die schon fest mit dem Teil verbunden sind.
             <b>Kanten:</b> gerade Kante auf gerade Kante. <b>Punkte:</b> dieselben markanten Stellen auf beiden Teilen, Reihenfolge egal.
-            <b>Pinsel:</b> eine Kontaktstelle selbst bemalen.
+            <b>Polygone:</b> einzelne Dreiecke der Kontaktstelle selbst markieren (darüberstreichen).
           </p>
           <div id="joints"></div>
           <div class="row wrap">
@@ -179,25 +186,33 @@
           </div>
           <div id="matResult"></div>
           <h3 class="subhead" id="exportHead">Exportieren</h3>
-          <div class="row wrap exports">
-            <button data-export="3mf-bambu" title="Projektformat von Bambu Studio und OrcaSlicer: ein Objekt aus mehreren Teilen, Teile gleicher Farbe bekommen dasselbe Filament in dieser Farbe.">3MF für Bambu Studio / OrcaSlicer</button>
-            <button data-export="3mf-color" title="Format von PrusaSlicer: ein Objekt aus mehreren Teilen mit eigenem Extruder je Farbe.">3MF für PrusaSlicer</button>
-            <button data-export="3mf" title="Alle Teile als ein Körper, ohne Farben.">3MF (ein Körper)</button>
-            <button data-export="stl">STL</button>
-            <button data-export="obj">OBJ</button>
+          <div class="exportrow">
+            <label class="exporttarget" title="Für welchen Slicer – bestimmt das Dateiformat">Für
+              <select id="exportTarget">
+                <optgroup label="Projekt: Teile, Farben, Bemalung, Platten">
+                  <option value="bambu">Bambu Studio</option>
+                  <option value="orca">OrcaSlicer &amp; Ableger (Creality Print, Anycubic, Elegoo, QIDI, Snapmaker, Flashforge)</option>
+                  <option value="prusa">PrusaSlicer / SuperSlicer</option>
+                  <option value="cura">UltiMaker Cura</option>
+                </optgroup>
+                <optgroup label="Nur die Form">
+                  <option value="3mf">3MF (ein Körper)</option>
+                  <option value="stl">STL</option>
+                  <option value="obj">OBJ</option>
+                </optgroup>
+              </select>
+            </label>
+            <button id="exportGo">Exportieren</button>
           </div>
+          <p class="help" id="exportHelp"></p>
           <div class="row wrap">
             <button id="sheetBtn" class="ghost" title="Bild der Teile mit Nummern (auf Wunsch auseinandergezogen, Blickrichtung wie im 3D-Fenster), Stückliste und Schritte – zum Ausdrucken oder als PDF speichern">Montageanleitung</button>
           </div>
           <div class="exportopts">
-            <label class="check small" title="Drucker, Prozess- und Filamentprofil im Bambu-Projekt (System-Profile von Bambu Studio, 0,4-mm-Düse, Bambu PLA Basic). Die Teilefarben werden die Filamentfarben.">
-              Drucker <select id="bambuPrinter"></select>
-            </label>
             <label class="check small" title="Boolesche Vereinigung: Überlappungen und innenliegende Flächen verschwinden, der Slicer bekommt ein einziges geschlossenes Netz. Gilt für STL, OBJ und 3MF (ein Körper).">
               <input type="checkbox" id="unionExport" checked /> Zu einem Körper vereinigen (STL, OBJ, 3MF ein Körper)
             </label>
           </div>
-          <p class="help">Exportiert alle sichtbaren Teile in ihrer zusammengesetzten Lage. Die mehrfarbigen 3MF-Varianten behalten Teile und Farben: Jede Farbe bekommt eine eigene Filament-/Extrudernummer. Für Bambu Studio wird jede Baugruppe ein eigenes Objekt. Bambu Studio übernimmt die Teilefarben direkt als Filamentfarben (Profil: Bambu PLA Basic, im Slicer änderbar); in PrusaSlicer ordnest du jedem Extruder das passende Filament zu.</p>
         </section>
         </div>
       </aside>
@@ -214,7 +229,7 @@
         <div id="plateBar" role="group" aria-label="Druckplatten">
           <button id="platesShow" class="ghost small" title="Druckplatten ein- oder ausblenden (Umriss, Raster, Düsenbereiche)">Platten</button>
           <span id="plateList"></span>
-          <button id="plateAdd" class="ghost small" title="Platte hinzufügen – wie in Bambu Studio im Raster; die Teile wandern mit ihrer Platte" aria-label="Platte hinzufügen">+</button>
+          <button id="plateAdd" class="ghost small" title="Platte hinzufügen – wie im Slicer im Raster; die Teile wandern mit ihrer Platte" aria-label="Platte hinzufügen">+</button>
         </div>
         <div id="explodeBar" hidden>
           <strong>Explosion</strong>
@@ -252,7 +267,7 @@
             <label class="small" id="paintAngleWrap" hidden title="Füllen hört an Knicken auf, die größer sind">bis Knick <input type="number" id="paintAngle" value="30" min="1" max="90" step="5" /> °</label>
             <span id="paintInfo" class="small"></span>
             <button id="paintClose" class="ghost small">Fertig</button>
-            <p class="help">Linke Maustaste malt mit dem gewählten Filament, mit Umschalt radiert sie (zurück zum Filament des Teils). Die Nummern sind die Filamente im Bambu-Export, in derselben Reihenfolge. Ziehen neben dem Teil dreht die Ansicht.</p>
+            <p class="help">Linke Maustaste malt mit dem gewählten Filament, mit Umschalt radiert sie (zurück zum Filament des Teils). Die Nummern sind die Filamente im Export, in derselben Reihenfolge. Ziehen neben dem Teil dreht die Ansicht.</p>
           </div>
           <div id="fitBar" hidden>
             <strong id="fitTitle"></strong>
@@ -341,7 +356,7 @@
             </span>
             <label class="small"><span id="textDepthLabel">Höhe</span> <input type="number" id="textDepth" value="0.6" min="0.1" max="20" step="0.1" /> mm</label>
             <label class="small" data-tfor="text logo" title="In der Fläche drehen (gegen den Uhrzeigersinn)">Drehung <input type="number" id="textRotate" value="0" step="15" /> °</label>
-            <label class="small" title="Eigenes Filament für die Beschriftung (wird als Bemalung exportiert, z. B. für AMS oder H2C)">Farbe <select id="textColor"></select></label>
+            <label class="small" title="Eigenes Filament für die Beschriftung (wird als Bemalung exportiert – für Mehrfarbsysteme oder mehrere Düsen)">Farbe <select id="textColor"></select></label>
             <button id="textApply" class="small">Einprägen</button>
             <button id="textClose" class="ghost small">Fertig</button>
             <p class="help" id="textHelp"></p>
@@ -469,11 +484,11 @@
             <li><b>Laden</b> – Dateien ins Fenster ziehen (STL, 3MF, STEP, OBJ …) oder ein Projekt (.d3dforge) öffnen.</li>
             <li><b>Verbinden</b> – Kontaktfläche auf dem einen Teil anklicken, dann die passende auf dem anderen: Das Teil setzt sich an. Weitere Flächenpaare (z. B. Auflage + Zapfen) legen die Lage eindeutig fest. Oder im Reiter „Verbinden“ „Alles automatisch verbinden“.</li>
             <li><b>Nachjustieren</b> – „Von Hand anpassen“ dreht und schiebt in den Richtungen, die die Verbindung offen lässt; „Um 180° drehen“ wechselt zwischen gleich guten Lagen; „Einsinken“ schiebt Teile minimal ineinander, damit der Slicer sie verschmilzt.</li>
-            <li><b>Malen</b> (N) – mehrfarbig für AMS/H2C: Filament wählen, mit dem Pinsel streichen oder Flächen füllen; Umschalt radiert. Kommt als Bemalung ins Bambu-Projekt.</li>
+            <li><b>Malen</b> (N) – mehrfarbig für Mehrfarbsysteme oder mehrere Düsen: Filament wählen, mit dem Pinsel streichen oder Flächen füllen; Umschalt radiert. Kommt als Bemalung ins Slicer-Projekt.</li>
             <li><b>Beschriften</b> (W) – Text oder SVG-Logo anklicken und einprägen, erhaben oder vertieft, auf Wunsch in eigener Farbe; folgt Rundungen. „Nummern“ schreibt 1/7, 2/7 … auf die ausgewählten Teile.</li>
             <li><b>Prüfen</b> – „Passung prüfen“: grün liegt an, gelb Spalt, rot dringt ein. „Standfestigkeit“ zeigt Schwerpunkt und Standfläche und ab welcher Neigung ein Modell kippt. „Filament &amp; Kosten“ schätzt Gramm, Meter und Preis (gesamt und je Platte).</li>
             <li><b>Für den Druck</b> – „Für den Druck ausrichten“ oder „Hinlegen“ (oben); für Steckteile „Passung“ (Zapfen dünner, Bohrung weiter).</li>
-            <li><b>Exportieren</b> – „3MF für Bambu Studio / OrcaSlicer“ (Farben, Aufschriften, ein Objekt je Baugruppe), PrusaSlicer, STL, OBJ. Zwischendurch „Projekt speichern“. „Montageanleitung“ druckt Bild mit Nummern, Stückliste und Schritte (auch als PDF).</li>
+            <li><b>Exportieren</b> – oben „Exportieren“ oder Reiter „Drucken“: Slicer wählen (Bambu Studio, OrcaSlicer und Ableger, PrusaSlicer, Cura) – Teile, Farben, Bemalung, Aufschriften und Platten kommen mit; oder STL, OBJ, 3MF ein Körper. Zwischendurch „Projekt speichern“. „Montageanleitung“ druckt Bild mit Nummern, Stückliste und Schritte (auch als PDF).</li>
           </ol>
           <h3>Teileliste</h3>
           <dl class="keys">
@@ -492,8 +507,8 @@
         <section>
           <h3>Tasten</h3>
           <dl class="keys">
-            <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Pinsel</dd>
-            <dt><kbd>M</kbd></dt><dd>Messen wie in Bambu Studio: Kante (Länge), Kreis (Durchmesser), Fläche; zwei Merkmale: Abstand, Winkel. Umschalt + Klick: beliebiger Punkt, <kbd>Entf</kbd> neu, <kbd>Esc</kbd> ein Merkmal zurück</dd>
+            <dt><kbd>F</kbd> <kbd>K</kbd> <kbd>P</kbd> <kbd>B</kbd></dt><dd>Auswahl: Flächen, Kanten, Punkte, Polygone</dd>
+            <dt><kbd>M</kbd></dt><dd>Messen wie im Slicer: Kante (Länge), Kreis (Durchmesser), Fläche; zwei Merkmale: Abstand, Winkel. Umschalt + Klick: beliebiger Punkt, <kbd>Entf</kbd> neu, <kbd>Esc</kbd> ein Merkmal zurück</dd>
             <dt><kbd>N</kbd></dt><dd>Farben malen: Pinsel oder Füllen, Umschalt radiert, Alt + Mausrad Pinselgröße</dd>
             <dt><kbd>W</kbd></dt><dd>Beschriften: Text oder Logo erhaben bzw. vertieft an der Klickstelle, Teile durchnummerieren</dd>
             <dt><kbd>D</kbd></dt><dd>Maße im Bild: Breite, Tiefe, Höhe jeder Baugruppe oder der Auswahl</dd>
@@ -507,7 +522,7 @@
             <dt><kbd>E</kbd></dt><dd>Aussparung: Magnet, Gewindeeinsatz, Schraube, Mutter, Bohrung an der Klickstelle</dd>
             <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Gizmo: Verschieben bzw. Drehen</dd>
             <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Auswahl (oder Gizmo-Teil) 1 mm verschieben – passend zur Blickrichtung; mit <kbd>⇧</kbd> 10 mm, mit <kbd>Alt/⌥</kbd> 0,1 mm; <kbd>Bild↑</kbd> <kbd>Bild↓</kbd> Höhe</dd>
-            <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie in Bambu Studio</dd>
+            <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Ansicht von oben, unten, vorne, hinten, links, rechts (<kbd>0</kbd>: schräg) – wie im Slicer</dd>
             <dt><kbd>Esc</kbd></dt><dd>Werkzeug oder Gizmo beenden, sonst Auswahl aufheben</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>A</kbd></dt><dd>alle sichtbaren Teile auswählen</dd>
             <dt><kbd>Strg/⌘</kbd> <kbd>Z</kbd></dt><dd>Rückgängig – jede Aktion</dd>
@@ -528,14 +543,14 @@
             <dt>Ansichtswürfel</dt><dd>oben rechts: Fläche, Kante oder Ecke anklicken schwenkt die Ansicht dorthin, Ziehen dreht sie, ⌂ = Schrägansicht</dd>
             <dt>Touch</dt><dd>ein Finger dreht, zwei Finger zoomen und schieben, antippen wählt; lange drücken öffnet das Menü (wie Rechtsklick, auch in der Teileliste); ↶ ↷ oben: Rückgängig/Wiederholen; beim Malen „Radierer“</dd>
             <dt><kbd>Strg/⌘</kbd> + ziehen</dt><dd>Teil (mit allem, was daran hängt) über die Platte schieben</dd>
-            <dt>Pinsel</dt><dd>Maustaste halten und über die Kontaktstelle streichen</dd>
+            <dt>Polygone</dt><dd>Maustaste halten und über die Kontaktstelle streichen – über eine Auswahl streichen hebt sie auf</dd>
           </dl>
           <h3>Gut zu wissen</h3>
           <ul>
             <li>„Auf die Druckplatte stellen“ (Standard): Jede Baugruppe steht mit ihrem tiefsten Punkt auf der Platte – im Slicer schwebt nichts.</li>
             <li>Der Umriss zeigt die Druckplatte des gewählten Druckers; rot heißt: etwas liegt daneben oder ist zu groß. Liegt alles darauf, kommt es im Slicer genau so an.</li>
-            <li>Mehrere Platten liegen wie in Bambu Studio im Raster; die Leiste „Platten“ unter dem Würfel blendet sie ein und aus, springt per Nummer zu einer Platte und fügt mit + eine hinzu. Bambu-Projekte kommen mit ihren Platten.</li>
-            <li>Drucker mit zwei Düsen (H2D, H2C, X2D …): Getönte Streifen am Rand erreicht nur die linke bzw. rechte Düse.</li>
+            <li>Mehrere Platten liegen wie im Slicer im Raster; die Leiste „Platten“ unter dem Würfel blendet sie ein und aus, springt per Nummer zu einer Platte und fügt mit + eine hinzu. Slicer-Projekte (Bambu Studio, OrcaSlicer und Ableger) kommen mit ihren Platten.</li>
+            <li>Drucker mit zwei Düsen, die nicht überall hinkommen (z. B. Bambu Lab H2D, H2C, X2D): Getönte Streifen am Rand erreicht nur die linke bzw. rechte Düse.</li>
             <li>Die Statuszeile unten zeigt die Maße der Baugruppe unter dem Mauszeiger.</li>
             <li>D3DForge sichert deine Arbeit laufend im Browser; nach dem Neuladen „Wiederherstellen“.</li>
             <li>Etwas ging schief? <kbd>Strg/⌘</kbd> <kbd>Z</kbd> nimmt jede Aktion zurück.</li>

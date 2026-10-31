@@ -649,3 +649,40 @@ describe('Vorschaubilder', () => {
     expect((strFromU8(gap['Metadata/model_settings.config']).match(/thumbnail_file/g) ?? []).length).toBe(1);
   });
 });
+
+describe('Export für weitere Slicer', () => {
+  const parts = [
+    { name: 'Rot', positions: transformPositions(box(10, 10, 10), new THREE.Matrix4().makeTranslation(-20, 0, 0)), color: '#ff0000' },
+    { name: 'Blau', positions: box(10, 10, 10), color: '#0000ff' },
+    { name: 'Rot 2', positions: transformPositions(box(4, 4, 4), new THREE.Matrix4().makeTranslation(20, 0, 0)), color: '#ff0000' },
+  ];
+
+  it('Cura: ein Objekt je Teil mit Namen, Farbe und Extruder-Nummer, Ursprung vorne links auf der Platte', () => {
+    const files = unzipSync(write3MF(parts, 'cura', undefined, [220, 220]));
+    const model = strFromU8(files['3D/3dmodel.model']);
+    const objects = [...model.matchAll(/<object id="(\d+)" name="([^"]+)"[^>]*pindex="(\d+)"><metadatagroup><metadata name="cura:extruder_nr"[^>]*>(\d+)<\/metadata><\/metadatagroup><mesh>/g)];
+    expect(objects.map((m) => [m[2], m[3], m[4]])).toEqual([['Rot', '0', '0'], ['Blau', '1', '1'], ['Rot 2', '0', '0']]);
+    expect([...model.matchAll(/<item objectid="(\d+)"\/>/g)].map((m) => m[1])).toEqual(objects.map((m) => m[1]));
+    // Plattenmitte (0, 0) liegt bei (110, 110)
+    const xs = [...model.matchAll(/<vertex x="([-\d.]+)" y="([-\d.]+)"/g)].map((m) => [Number(m[1]), Number(m[2])]);
+    expect(Math.min(...xs.map((v) => v[0]))).toBeCloseTo(110 - 25, 4);
+    expect(Math.max(...xs.map((v) => v[1]))).toBeCloseTo(110 + 5, 4);
+    // Andere Programme lesen die Teile samt Farben
+    const back = read3MF(write3MF(parts, 'cura', undefined, [220, 220]));
+    expect(back.map((p) => p.color)).toEqual(['#ff0000', '#0000ff', '#ff0000']);
+  });
+
+  it('Projekt für Drucker anderer Hersteller: keine Bambu-Profile, Druckbereich und Filamentfarben', () => {
+    const files = unzipSync(write3MFBambu(parts, { bed: [300, 250], height: 280 }));
+    const cfg = JSON.parse(strFromU8(files['Metadata/project_settings.config']));
+    expect(cfg.printer_settings_id).toBeUndefined();
+    expect(cfg.print_settings_id).toBeUndefined();
+    expect(cfg.filament_settings_id).toBeUndefined();
+    expect(cfg.printable_area).toEqual(['0x0', '300x0', '300x250', '0x250']);
+    expect(cfg.printable_height).toBe('280');
+    expect(cfg.filament_colour).toEqual(['#FF0000', '#0000FF']);
+    // Bambu-Drucker: wie bisher mit Profilen
+    const bambu = JSON.parse(strFromU8(unzipSync(write3MFBambu(parts, { printer: 'P2S' }))['Metadata/project_settings.config']));
+    expect(bambu.printer_settings_id).toBe('Bambu Lab P2S 0.4 nozzle');
+  });
+});

@@ -25,7 +25,8 @@ import { offsetCylinder, offsetPlane } from './math/offset';
 import { cylinderWall } from './math/wall';
 import { type LoadedPart, loadModel, SUPPORTED } from './io/load';
 import { type ExportPart, download, toOBJ, toSTL } from './io/export';
-import { BAMBU_PRINTERS, type ColoredPart, type ReadInfo, type SlicerExtras, bambuPlateOrigin, colorSlots } from './io/threemf';
+import { PRINTERS, VENDORS, printerById, printerName } from './printers';
+import { type ColoredPart, type ReadInfo, type SlicerExtras, bambuPlateOrigin, colorSlots } from './io/threemf';
 import { compute, hasWorker } from './compute/client';
 import { decorate, disposeDecor, refreshPaint } from './decor';
 import {
@@ -208,7 +209,7 @@ try { partsFolded = localStorage.getItem('partjoin.partsFolded') === '1'; } catc
 const SNAP_PX = 14;
 /** Auch sehr fein aufgelöste Flächen (Millionen Dreiecke) vollständig erfassen. */
 const FEATURE_OPTS = { maxTris: 4_000_000 };
-/** Auswahlmodus im 3D-Fenster: Flächen (Standard), Kanten, Punkte oder Pinsel (Fläche selbst bemalen). */
+/** Auswahlmodus im 3D-Fenster: Flächen (Standard), Kanten, Punkte oder Polygone (Fläche selbst bemalen). */
 type PickMode = 'face' | 'edge' | 'point' | 'brush';
 /** Pinselgröße in Bildschirmpixeln (Radius). */
 const BRUSH_PX = 16;
@@ -1164,7 +1165,7 @@ async function loadList(list: File[]) {
         if (keep && !plateLayout) part.fromFile = true;
         if (l.together) part.together = l.together;
       }
-      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${plateLayout && info.plates! > 1 ? ` – auf ${info.plates} Platten wie in Bambu Studio` : ''}${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
+      if (loaded.length > 1) toast(`${file.name}: ${loaded.length} Teile geladen${plateLayout && info.plates! > 1 ? ` – auf ${info.plates} Platten wie im Slicer` : ''}${separated ? ' (lose Teile getrennt)' : ''}.`, 5000);
     } catch (e) {
       toast(`${file.name}: ${(e as Error).message}`);
     }
@@ -2706,8 +2707,9 @@ const endPlatformDrag = (e: PointerEvent) => {
 renderer.domElement.addEventListener('pointerup', endPlatformDrag, { capture: true });
 renderer.domElement.addEventListener('pointercancel', endPlatformDrag, { capture: true });
 
-// Pinsel: mit gedrückter linker Maustaste Dreiecke bemalen, beim Loslassen wird daraus eine Fläche
-let painting: { id: number; part: Part; side: Side; on?: number; tris: Set<number> } | null = null;
+// Polygone: mit gedrückter linker Maustaste Dreiecke bemalen, beim Loslassen wird daraus eine Fläche
+/** Laufender Strich im Modus „Polygone“; first: Dreieck, auf dem er begann. */
+let painting: { id: number; part: Part; side: Side; on?: number; tris: Set<number>; first: number } | null = null;
 /** Dreiecke im Pinselradius um den Treffer, zusammenhängend mit dem getroffenen Dreieck. */
 function paintAt(h: Hit) {
   if (!painting || h.part !== painting.part) return;
@@ -2733,7 +2735,7 @@ function paintAt(h: Hit) {
   hoverMesh.visible = true;
 }
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (pickMode !== 'brush' || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  if (pickMode !== 'brush' || tool || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
   const h = pick(e);
   const j = activeJoint();
   if (!h || !j || (tc.object && tc.axis)) return;
@@ -2743,7 +2745,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (!side) return;
   // Beginnt der Strich auf einem Teil der Verbindung, wird gemalt statt die Ansicht gedreht
   e.stopImmediatePropagation();
-  painting = { id: e.pointerId, part: h.part, side, on: helper ? h.part.id : undefined, tris: new Set() };
+  painting = { id: e.pointerId, part: h.part, side, on: helper ? h.part.id : undefined, tris: new Set(), first: h.tri };
   renderer.domElement.setPointerCapture(e.pointerId);
   paintAt(h);
 }, { capture: true });
@@ -2756,14 +2758,28 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 const endPainting = (e: PointerEvent) => {
   if (!painting || e.pointerId !== painting.id) return;
   e.stopImmediatePropagation();
-  const { part, side, on, tris } = painting;
+  const { part, side, on, tris, first } = painting;
   painting = null;
   hoverMesh.visible = false;
   const j = activeJoint();
   if (!j || !tris.size) return;
-  const f: PickedFeature = featureFromTris(topologyOf(part), [...tris]);
-  if (on !== undefined) f.on = on;
-  (side === 'a' ? j.fa : j.fb).push(f);
+  const list = side === 'a' ? j.fa : j.fb;
+  // Beginnt der Strich auf einer schon gewählten Fläche dieses Teils (oder liegt er überwiegend darauf):
+  // diese abwählen – wie ein zweiter Klick im Modus „Flächen“
+  const hit = list.findIndex((g) => g.kind !== 'edge' && (() => {
+    const own = new Set((g.pieces ?? [g]).filter((q) => featurePart(j, side, q) === part).flatMap((q) => q.tris));
+    if (own.has(first)) return true;
+    let n = 0;
+    for (const t of tris) if (own.has(t)) n++;
+    return n >= 0.6 * tris.size;
+  })());
+  if (hit >= 0) list.splice(hit, 1);
+  else {
+    const f: PickedFeature = featureFromTris(topologyOf(part), [...tris]);
+    if (on !== undefined) f.on = on;
+    list.push(f);
+  }
+  if (j.ma.length + j.mb.length + j.fa.length + j.fb.length === 0) j.applied = false;
   markersChanged(j);
   solveAll();
   renderAll();
@@ -3395,7 +3411,7 @@ function renderHint() {
       face: 'Klicke die Kontaktfläche auf einem Teil – danach die passende Fläche auf dem Teil, das daran soll. Oder im Reiter „Verbinden" „Alles automatisch verbinden".',
       edge: 'Klicke eine gerade Kante auf einem Teil – danach die passende Kante auf dem Teil, das daran soll.',
       point: 'Klicke markante Punkte auf einem Teil – danach dieselben Stellen auf dem Teil, das daran soll.',
-      brush: 'Male die Kontaktstelle auf einem Teil an – danach die passende Stelle auf dem Teil, das daran soll.',
+      brush: 'Streiche mit gedrückter Maustaste über die Polygone der Kontaktstelle auf einem Teil – danach über die passende Stelle auf dem anderen.',
     }[pickMode];
   } else if (j.a !== null && j.b === null) {
     const what = { face: 'Fläche', edge: 'Kante', point: 'Stelle', brush: 'Stelle' }[pickMode];
@@ -3403,7 +3419,7 @@ function renderHint() {
   } else if (j.a === null || j.b === null) el.textContent = 'Klicke die beiden Teile an, die verbunden werden sollen.';
   else if (j.applied) el.textContent = `Verbunden. Weitere ${what} verfeinern das Ergebnis live · Rechtsklick entfernt eine Auswahl.`;
   else if (pickMode === 'brush') {
-    el.textContent = `Pinsel: mit gedrückter Maustaste über die Kontaktstelle auf „${nameOf(j.fa.length <= j.fb.length ? j.a : j.b)}" streichen – beim Loslassen wird daraus eine Fläche. Daneben ziehen dreht die Ansicht.`;
+    el.textContent = `Polygone: mit gedrückter Maustaste über die Kontaktstelle auf „${nameOf(j.fa.length <= j.fb.length ? j.a : j.b)}" streichen – beim Loslassen wird daraus eine Fläche; über eine Auswahl streichen hebt sie auf. Daneben ziehen dreht die Ansicht.`;
   } else if (pickMode === 'edge') {
     const na = j.fa.filter((f) => f.kind === 'edge').length;
     const nb = j.fb.filter((f) => f.kind === 'edge').length;
@@ -3763,6 +3779,44 @@ document.getElementById('moveAll')!.addEventListener('click', () => {
   renderAll();
 });
 
+// ---------------------------------------------------------------- Kopfleiste
+
+/**
+ * Passt die Werkzeugleiste nicht in die Breite, in Stufen enger werden: erst nur Symbole (die Bezeichnung
+ * steht im Tooltip), dann auch ohne Schriftzug und Export-Text, zuletzt schmalere Knöpfe ohne Hilfe-Knopf
+ * (Hilfe bleibt im Menü und auf „?“). Reicht auch das nicht, lässt sich die Leiste wischen – ein
+ * ausgeblendeter Rand zeigt, dass dort noch Werkzeuge liegen.
+ */
+{
+  const topbar = document.getElementById('topbar')!;
+  const bar = document.getElementById('toolbar')!;
+  const LEVELS = ['compact', 'tight', 'narrow'];
+  const edges = () => {
+    const more = bar.scrollWidth - bar.clientWidth > 1;
+    bar.classList.toggle('more-l', more && bar.scrollLeft > 1);
+    bar.classList.toggle('more-r', more && bar.scrollLeft < bar.scrollWidth - bar.clientWidth - 1);
+  };
+  bar.addEventListener('scroll', edges, { passive: true });
+  /** Breite der Kopfleiste, ab der die jeweilige Stufe wieder entfallen kann. */
+  const needs: number[] = [];
+  const fit = () => {
+    for (let i = LEVELS.length - 1; i >= 0; i--) {
+      if (topbar.classList.contains(LEVELS[i]) && topbar.clientWidth >= needs[i]) topbar.classList.remove(LEVELS[i]);
+    }
+    for (let i = 0; i < LEVELS.length; i++) {
+      if (topbar.classList.contains(LEVELS[i])) continue;
+      if (bar.scrollWidth <= bar.clientWidth + 1) break;
+      needs[i] = topbar.clientWidth + (bar.scrollWidth - bar.clientWidth) + 8;
+      topbar.classList.add(LEVELS[i]);
+    }
+    edges();
+  };
+  const ro = new ResizeObserver(fit);
+  ro.observe(topbar);
+  // Auch wenn rechts etwas breiter oder schmaler wird (anderer Drucker gewählt)
+  ro.observe(topbar.querySelector('.tright')!);
+}
+
 // ---------------------------------------------------------------- Seitenleiste: Reiter
 
 /**
@@ -3925,26 +3979,33 @@ document.getElementById('demoRound')!.addEventListener('click', () =>
   loadDemo(makeRoundDemo(), 'Beispiel „Zapfen": Klicke den runden Teil des Zapfens und die runde Bohrungswand der Kappe an, dann „Verbinden". Die Drehung findet D3DForge über die Abflachung selbst.', 'face'),
 );
 
-// Drucker für das Bambu-Projekt: zuletzt gewählter oder der eines geladenen Bambu-Projekts
+// Drucker (nach Hersteller gruppiert): zuletzt gewählter oder der eines geladenen Projekts
 const bambuPrinter = document.getElementById('bambuPrinter') as HTMLSelectElement;
-bambuPrinter.innerHTML = BAMBU_PRINTERS.map((p) => `<option value="${p.id}">${p.label}</option>`).join('');
+bambuPrinter.innerHTML = VENDORS.map((v) => `<optgroup label="${esc(v)}">${PRINTERS.filter((p) => p.vendor === v)
+  .map((p) => `<option value="${p.id}" title="${esc(`${p.vendor} ${p.label}: ${p.bed[0]} × ${p.bed[1]}${p.height ? ` × ${p.height}` : ''} mm${p.tools ? ` · ${p.tools} Düsen/Werkzeuge` : ''}`)}">${esc(p.label)}</option>`).join('')}</optgroup>`).join('');
 try { bambuPrinter.value = localStorage.getItem('partjoin.bambuPrinter') ?? 'X1C'; } catch { /* ohne Speicher */ }
 if (!bambuPrinter.value) bambuPrinter.value = 'X1C';
 /** Drucker, für den die Platten gerade liegen. */
 let shownPrinter = bambuPrinter.value;
+/** Hersteller über dem Modellnamen (die Liste zeigt ihn als Gruppe, die geschlossene Auswahl nicht). */
+const printerVendor = document.getElementById('printerVendor')!;
+const renderPrinterVendor = () => { printerVendor.textContent = (printerById(bambuPrinter.value) ?? PRINTERS[0]).vendor; };
+renderPrinterVendor();
 function setBambuPrinter(id: string) {
   bambuPrinter.value = id;
   shownPrinter = id;
+  renderPrinterVendor();
   try { localStorage.setItem('partjoin.bambuPrinter', id); } catch { /* ohne Speicher */ }
 }
 /** Anderer Drucker: Platten bekommen seine Größe, die Teile bleiben auf ihrer Platte an derselben Stelle. */
 function changePrinter(id: string) {
-  const from = (BAMBU_PRINTERS.find((b) => b.id === shownPrinter) ?? BAMBU_PRINTERS[0]).bed;
+  const from = (printerById(shownPrinter) ?? PRINTERS[0]).bed;
   setBambuPrinter(id);
   if (parts.length) relayoutPlates(plateTotal, (i) => i, from);
   renderAll();
   if (splitTarget) renderSplit();
   applyMyClearance();
+  renderExportTarget();
 }
 bambuPrinter.addEventListener('change', () => changePrinter(bambuPrinter.value));
 
@@ -3969,9 +4030,33 @@ async function exclusive(run: () => Promise<void>) {
   }
 }
 
-document.querySelectorAll<HTMLButtonElement>('[data-export]').forEach((b) =>
-  b.addEventListener('click', () => void exclusive(() => exportAs(b.dataset.export ?? 'stl'))),
-);
+/**
+ * Export: Ziel (Slicer bzw. Format) aus der Liste, dann „Exportieren“. Ohne eigene Wahl richtet sich das Ziel
+ * nach dem Slicer des gewählten Druckers.
+ */
+const exportTarget = document.getElementById('exportTarget') as HTMLSelectElement;
+const EXPORT_HELP: Record<string, string> = {
+  bambu: 'Bambu-Studio-Projekt: jede Baugruppe ein Objekt aus ihren Teilen, die Teilefarben als Filamente, Bemalung, Aufschriften und Platten wie hier. Bei Bambu-Lab-Druckern samt Drucker-, Prozess- und Filamentprofil.',
+  orca: 'Projekt im Format von Bambu Studio, das OrcaSlicer und seine Ableger (Creality Print, Anycubic Slicer Next, ElegooSlicer, QIDI Studio, Snapmaker Orca, Orca-Flashforge) lesen: Objekte, Filamente in den Teilefarben, Bemalung und Platten. Bei Druckern anderer Hersteller ohne Profile – Drucker und Prozess wählst du nach dem Öffnen im Slicer.',
+  prusa: 'PrusaSlicer-Format (auch SuperSlicer): ein Objekt aus Teilen mit eigenem Extruder je Farbe und Bemalung. Im Slicer jedem Extruder das passende Filament zuordnen.',
+  cura: 'Für UltiMaker Cura: jedes Teil ein eigenes Objekt mit Namen und Extruder je Farbe (1. Farbe = Extruder 1 …), so platziert wie hier. Bemalung kennt Cura nicht.',
+  '3mf': 'Alle Teile als ein Körper ohne Farben – für jeden Slicer.',
+  stl: 'STL für jeden Slicer – ohne Farben.',
+  obj: 'OBJ für jeden Slicer – ohne Farben.',
+};
+let exportChosen = false;
+try { exportChosen = !!localStorage.getItem('partjoin.exportTarget'); if (exportChosen) exportTarget.value = localStorage.getItem('partjoin.exportTarget')!; } catch { /* ohne Speicher */ }
+function renderExportTarget() {
+  if (!exportChosen) exportTarget.value = currentPrinter().slicer;
+  if (!exportTarget.value) exportTarget.value = 'orca';
+  document.getElementById('exportHelp')!.textContent = EXPORT_HELP[exportTarget.value] ?? '';
+}
+exportTarget.addEventListener('change', () => {
+  exportChosen = true;
+  try { localStorage.setItem('partjoin.exportTarget', exportTarget.value); } catch { /* ohne Speicher */ }
+  renderExportTarget();
+});
+document.getElementById('exportGo')!.addEventListener('click', () => void exclusive(() => exportAs(exportTarget.value)));
 
 /**
  * Vorschaubild (PNG) der sichtbaren Teile – schräg von vorne, durchsichtiger Hintergrund, nur die Teile.
@@ -4111,25 +4196,33 @@ async function exportAs(kind: string) {
       for (const u of visibleUnits()) for (const q of u.members) unitPlate.set(q.id, plateOfBox(u.box).i);
       visible.forEach((p, i) => { world[i].plate = unitPlate.get(p.id) ?? 0; });
     }
-    if (kind === '3mf-color' || kind === '3mf-bambu') {
+    // Frühere Bezeichnungen der Export-Knöpfe
+    if (kind === '3mf-bambu') kind = 'bambu';
+    if (kind === '3mf-color') kind = 'prusa';
+    const printer = currentPrinter();
+    if (kind === 'bambu' || kind === 'orca' || kind === 'prusa' || kind === 'cura') {
       toast('Speichere …', 20000);
-      const data = kind === '3mf-bambu'
+      const project = kind === 'bambu' || kind === 'orca';
+      const data = project
         ? await compute('write3mfBambu', {
           parts: world,
           // Liegt alles auf der Platte, kommt es im Slicer genau so an
           opts: {
-            printer: bambuPrinter.value,
+            printer: printer.bambu ? printer.id : undefined,
+            bed: printer.bambu ? undefined : printer.bed,
+            height: printer.height,
             plateCenter: onBed ? [0, 0] : undefined,
             plateCenters: onBed && plates > 1 ? Array.from({ length: plates }, (_, i) => plateCenter(i).toArray() as [number, number]) : undefined,
             thumbnails: await thumbnails(plates),
           },
         })
-        : await compute('write3mf', { parts: world, mode: 'multicolor', thumbnail: (await thumbnails(1))[0] });
+        : await compute('write3mf', { parts: world, mode: kind === 'cura' ? 'cura' : 'multicolor', thumbnail: (await thumbnails(1))[0], bed: printer.bed });
       await download(new Blob([data as Uint8Array<ArrayBuffer>], { type: 'model/3mf' }), 'zusammengefuegt.3mf');
       const slots = colorSlots(world);
       const objects = new Set(world.map((w) => w.object)).size;
-      toast(kind === '3mf-bambu'
-        ? `Gespeichert – ${objects} Objekt${objects > 1 ? 'e (je Baugruppe eins)' : ''}, ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben, Drucker ${bambuPrinter.selectedOptions[0]?.text ?? ''}.${onBed ? (plates > 1 ? ` ${plates} Platten, alles liegt wie hier.` : ' Alles liegt wie hier auf der Platte.') : ' Nicht alles lag auf der Platte – in Bambu Studio „Anordnen“ (A).'}`
+      const where = onBed ? (plates > 1 ? ` ${plates} Platten, alles liegt wie hier.` : ' Alles liegt wie hier auf der Platte.') : ' Nicht alles lag auf der Platte – im Slicer „Anordnen“.';
+      toast(project
+        ? `Gespeichert – ${objects} Objekt${objects > 1 ? 'e (je Baugruppe eins)' : ''}, ${slots.length} Filament${slots.length > 1 ? 'e' : ''} in den Teilefarben${printer.bambu ? `, Drucker ${printerName(printer)}` : ` – Drucker- und Prozessprofil für den ${printerName(printer)} im Slicer wählen`}.${where}`
         : `Gespeichert. Im Slicer zuordnen: ${slots.map((c, i) => `Extruder ${i + 1} = ${c.toUpperCase()}`).join(' · ')}`, 9000);
       return;
     }
@@ -5723,7 +5816,7 @@ async function updateTextPreview() {
     if (textSrc === 'logo' && textLogo?.skipped) out.push(`${textLogo.skipped} Linie${textLogo.skipped === 1 ? '' : 'n'} ohne Füllung übersprungen.`);
   } else if (textSrc === 'text') out.push('Text eingeben.');
   if (error) out.push(`<span class="warn">${esc(error)}</span>`);
-  if (textColor.value) out.push('Die Farbe kommt als Bemalung ins Bambu-Projekt.');
+  if (textColor.value) out.push('Die Farbe kommt als Bemalung ins Slicer-Projekt.');
   textHelp.innerHTML = out.join(' ');
 }
 
@@ -5909,7 +6002,7 @@ function renderSplit() {
   const box = partBox(p);
   const s = box.getSize(new THREE.Vector3());
   const c = splitTarget.counts;
-  document.getElementById('splitTitle')!.textContent = `„${p.name}“ (${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm) für den ${printer.label} zerteilen`;
+  document.getElementById('splitTitle')!.textContent = `„${p.name}“ (${mmText1(s.x)} × ${mmText1(s.y)} × ${mmText1(s.z)} mm) für den ${printerName(printer)} zerteilen`;
   for (let a = 0; a < 3; a++) {
     splitBar.querySelector(`[data-split-count="${a}"]`)!.textContent = String(c[a]);
     (splitBar.querySelector(`[data-split-dec="${a}"]`) as HTMLButtonElement).disabled = c[a] <= 1;
@@ -6211,7 +6304,7 @@ function myClearance(): number {
     return 0.2;
   }
 }
-const clearanceFor = () => `${currentPrinter().label} · ${material().label}`;
+const clearanceFor = () => `${printerName(currentPrinter())} · ${material().label}`;
 function applyMyClearance() {
   const c = String(myClearance());
   cutGap.value = c;
@@ -6733,7 +6826,7 @@ function partMenu(p: Part, h: Hit | null, x: number, y: number, marker?: ReturnT
   entries.push(
     { label: 'Skalieren / Spiegeln …', run: () => openScale({ partId: p.id, which: members.length > 1 ? 'unit' : 'part' }), title: 'Größe in % oder mm, Zoll → mm, an X/Y/Z spiegeln (Taste S)' },
     { label: section && !cutTarget ? 'Hier zerschneiden …' : 'Zerschneiden …', run: () => openCut(p), title: 'In zwei Teile schneiden, auf Wunsch mit Zapfen oder Dübeln zum Zusammenstecken' },
-    ...(fitsBed(partBox(p).getSize(new THREE.Vector3())) ? [] : [{ label: 'Auf Druckplattengröße zerteilen …', run: () => openSplit(p), title: `Zu groß für den ${currentPrinter().label}: in Stücke teilen, die auf die Platte passen` }]),
+    ...(fitsBed(partBox(p).getSize(new THREE.Vector3())) ? [] : [{ label: 'Auf Druckplattengröße zerteilen …', run: () => openSplit(p), title: `Zu groß für den ${printerName(currentPrinter())}: in Stücke teilen, die auf die Platte passen` }]),
     { label: p.health && !p.health.closed ? 'Netz reparieren ⚠' : 'Netz prüfen und reparieren', run: () => void repairParts([p]), title: p.health ? `Netz: ${healthText(p.health)}` : 'Löcher schließen, verdrehte Flächen umdrehen, Duplikate entfernen' },
     { label: 'Netz vereinfachen …', run: () => openSimplify([p]), title: `${countText(triCount(p))} Dreiecke – weniger machen D3DForge und den Slicer schneller; die Form weicht höchstens um die gewählte Abweichung ab` },
     { label: gizmoPart()?.id === p.id && !gizmoTarget?.assembly ? 'Bewegen beenden' : 'Von Hand bewegen/drehen', run: () => movePartByHand(p.id) },
@@ -6787,7 +6880,7 @@ function viewMenu(x: number, y: number) {
     'sep',
     { label: 'Auf der Platte anordnen', run: () => void arrangeOnBed(), disabled: !parts.length },
     { label: platesShown ? 'Druckplatten ausblenden' : 'Druckplatten einblenden', run: () => setPlatesShown(!platesShown), title: 'Umriss, Raster und Beschriftung der Platten (Knopf „Platten“ unter dem Würfel)' },
-    { label: 'Platte hinzufügen', run: addPlate, title: 'Weitere Druckplatte wie in Bambu Studio – das Raster ordnet sich neu, die Teile wandern mit ihrer Platte' },
+    { label: 'Platte hinzufügen', run: addPlate, title: 'Weitere Druckplatte wie im Slicer – das Raster ordnet sich neu, die Teile wandern mit ihrer Platte' },
     { label: 'Leere Platten entfernen', run: removeEmptyPlates, disabled: plateTotal === 1 || occupiedPlates().size >= plateTotal },
     ...(plateTotal > 1 ? [{ label: 'Alle Platten ansehen', run: () => viewPlate(-1) }] : []),
     'sep',
@@ -7018,7 +7111,7 @@ function renderMaterial() {
     for (const [i, list] of [...byPlate].sort((a, b) => a[0] - b[0])) rows.push(`<div class="plate">Platte ${i + 1}: ${estimateText(estimateOf(list))}</div>`);
   }
   const own = units.some((u) => u.members.some((p) => p.settings?.wall_loops || p.settings?.sparse_infill_density || p.objectSettings?.wall_loops || p.objectSettings?.sparse_infill_density));
-  rows.push(`<div class="note">${all.open ? '⚠ Ein Netz ist nicht geschlossen – dort ungenau. ' : ''}${own ? 'Teile mit eigenen Wänden oder eigener Füllung aus dem Bambu-Projekt rechnen damit. ' : ''}Schätzung ohne Stützen, Brim und Spülturm – genau rechnet der Slicer.</div>`);
+  rows.push(`<div class="note">${all.open ? '⚠ Ein Netz ist nicht geschlossen – dort ungenau. ' : ''}${own ? 'Teile mit eigenen Wänden oder eigener Füllung aus dem Slicer-Projekt rechnen damit. ' : ''}Schätzung ohne Stützen, Brim und Spülturm – genau rechnet der Slicer.</div>`);
   matResult.innerHTML = rows.join('');
 }
 
@@ -7151,7 +7244,7 @@ function bedWarning(): string {
   if (tooBig.length) {
     const n = tooBig[0].name;
     const single = tooBig.find((u) => (u as { members?: Part[] }).members?.length === 1) as { members: Part[] } | undefined;
-    return ` · <span class="warn">⚠ ${tooBig.length > 1 ? `${tooBig.length} Baugruppen sind` : `„${esc(n)}“ ist`} zu groß für den ${esc(printer.label)} (${printer.bed[0]} × ${printer.bed[1]}${printer.height ? ` × ${printer.height}` : ''} mm)</span>`
+    return ` · <span class="warn">⚠ ${tooBig.length > 1 ? `${tooBig.length} Baugruppen sind` : `„${esc(n)}“ ist`} zu groß für den ${esc(printerName(printer))} (${printer.bed[0]} × ${printer.bed[1]}${printer.height ? ` × ${printer.height}` : ''} mm)</span>`
       + (single ? ` <button class="linkish" data-split-part="${single.members[0].id}">Zerteilen …</button>` : '');
   }
   if (outside.length) return ` · <span class="warn">⚠ ${outside.length > 1 ? `${outside.length} Baugruppen liegen` : `„${esc(outside[0].name)}“ liegt`} nicht ganz auf einer Platte – „Auf der Platte anordnen“ (A)</span>`;
@@ -7166,7 +7259,7 @@ statusEl.addEventListener('click', (e) => {
 
 // ---------------------------------------------------------------- Druckplatte
 
-const currentPrinter = () => BAMBU_PRINTERS.find((p) => p.id === bambuPrinter.value) ?? BAMBU_PRINTERS[0];
+const currentPrinter = () => printerById(bambuPrinter.value) ?? PRINTERS[0];
 
 /** Umriss der Druckplatte des gewählten Druckers, Mitte im Ursprung (dorthin legt der Export die Platte). */
 const bedGroup = new THREE.Group();
@@ -7372,7 +7465,7 @@ function drawBed() {
     const gridLines = new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: 0x8890a0, transparent: true, opacity: 0.22, depthWrite: false }));
     gridLines.raycast = () => {};
     // Beschriftung vorne links
-    const text = i === 0 ? `${printer.label} · ${w} × ${d} mm${plateTotal > 1 ? ' · Platte 1' : ''}` : `Platte ${i + 1}`;
+    const text = i === 0 ? `${printerName(printer)} · ${w} × ${d} mm${plateTotal > 1 ? ' · Platte 1' : ''}` : `Platte ${i + 1}`;
     bedGroup.add(plate, outline, gridLines, flatLabel(text, bad ? '#e5484d' : '#2f6fde', lw, x - w / 2 + 2, y - d / 2 - lw / 16 - 2));
     // Bereiche, die nur eine Düse erreicht: getönt, mit Grenzlinie und Beschriftung hinter der Platte
     for (const z of zones) {
@@ -7417,7 +7510,7 @@ function nozzleNote(): string {
     : one.sides.length > 1
       ? `„${esc(one.name)}“ reicht in beide Randstreifen, die jeweils nur eine Düse erreicht`
       : `„${esc(one.name)}“ liegt im Bereich, den nur die ${one.sides[0] === 'links' ? 'linke' : 'rechte'} Düse erreicht`;
-  return ` · <span class="note" title="Bambu Studio druckt dort nur mit den Filamenten dieser Düse – mehrfarbige Teile besser weiter zur Mitte schieben.">◧ ${text}</span>`;
+  return ` · <span class="note" title="Der Slicer druckt dort nur mit den Filamenten dieser Düse – mehrfarbige Teile besser weiter zur Mitte schieben.">◧ ${text}</span>`;
 }
 
 const plateBar = document.getElementById('plateBar')!;
@@ -7541,7 +7634,7 @@ async function arrangeOnBed() {
   const where = plates > 1 ? `auf ${plates} Platten` : 'auf der Platte';
   toast(overflow
     ? `${items.length - overflow} von ${items.length} Baugruppen ${where} angeordnet, ${overflow} ${overflow > 1 ? 'sind' : 'ist'} für jede Platte zu groß und ${overflow > 1 ? 'liegen' : 'liegt'} daneben – „Auf Druckplattengröße zerteilen“.`
-    : `${items.length} Baugruppe${items.length === 1 ? '' : 'n'} ${where} angeordnet.${plates > 1 ? ' Der Bambu-Export übernimmt die Platten.' : ''}`, 6000);
+    : `${items.length} Baugruppe${items.length === 1 ? '' : 'n'} ${where} angeordnet.${plates > 1 ? ' Der Export ins Slicer-Projekt übernimmt die Platten.' : ''}`, 6000);
 }
 document.getElementById('arrange')!.addEventListener('click', () => void arrangeOnBed());
 
@@ -8395,7 +8488,7 @@ function renderSheet() {
     new Date().toLocaleDateString('de-DE'),
     `${shown.length} Teil${shown.length === 1 ? '' : 'e'} (${types.length} verschiedene)`,
     `≈ ${gramText(all.grams)} g ${material().label}`,
-    currentPrinter().label,
+    printerName(currentPrinter()),
   ].join(' · ');
   const steps = sheetSteps(shown, noOf);
   document.getElementById('sheetSteps')!.innerHTML = steps.length
@@ -8564,7 +8657,7 @@ function openProject(data: ProjectData, blobs: Blobs) {
   activeJointId = (data.activeJointId !== null ? jointIds.get(data.activeJointId) : undefined) ?? joints[0]?.id ?? null;
   onFloor.checked = data.settings?.onFloor ?? true;
   const printer = data.settings?.printer;
-  if (printer && BAMBU_PRINTERS.some((b) => b.id === printer)) setBambuPrinter(printer);
+  if (printer && printerById(printer)) setBambuPrinter(printer);
   ensureJoint();
   solveAll();
   plateTotal = data.settings?.plates ?? guessPlates();
@@ -8745,7 +8838,7 @@ function renderPaintBar() {
   document.getElementById('paintSizeWrap')!.hidden = paintMode !== 'brush';
   document.getElementById('paintAngleWrap')!.hidden = paintMode !== 'fill';
   document.getElementById('paintSizeVal')!.textContent = `${mmText1(Number(paintSize.value))} mm`;
-  document.getElementById('paintInfo')!.textContent = list.length > 4 ? `${list.length} Filamente – mehr als ein AMS (4 Plätze)` : `${list.length} Filament${list.length === 1 ? '' : 'e'}`;
+  document.getElementById('paintInfo')!.textContent = list.length > 4 ? `${list.length} Filamente – mehr als viele Mehrfarbsysteme fassen (meist 4 Plätze)` : `${list.length} Filament${list.length === 1 ? '' : 'e'}`;
 }
 
 function openPaint() {
@@ -9031,6 +9124,8 @@ activeBar.addEventListener('click', (e) => {
 
 // Spiel für Drucker und Material in die Felder (erst hier: braucht Drucker- und Materialauswahl)
 applyMyClearance();
+// Exportziel passend zum Drucker (erst hier: braucht die Druckerliste)
+renderExportTarget();
 
 Object.assign(window as unknown as Record<string, unknown>, {
   partjoin: {
