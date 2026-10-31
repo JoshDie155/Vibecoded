@@ -8657,7 +8657,11 @@ function openProject(data: ProjectData, blobs: Blobs) {
   activeJointId = (data.activeJointId !== null ? jointIds.get(data.activeJointId) : undefined) ?? joints[0]?.id ?? null;
   onFloor.checked = data.settings?.onFloor ?? true;
   const printer = data.settings?.printer;
-  if (printer && printerById(printer)) setBambuPrinter(printer);
+  if (printer && printerById(printer)) {
+    setBambuPrinter(printer);
+    applyMyClearance();
+    renderExportTarget();
+  }
   ensureJoint();
   solveAll();
   plateTotal = data.settings?.plates ?? guessPlates();
